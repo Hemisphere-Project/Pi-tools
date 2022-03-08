@@ -18,7 +18,7 @@ rm /etc/ssl/certs/ca-certificates.crt
 pacman -Syu --noconfirm
 pacman-db-upgrade
 pacman -Sc --noconfirm
-ln -s /etc/ca-certificates/extracted/ca-bundle.trust.crt /etc/ssl/certs/ca-certificates.crt
+ln -sf /etc/ca-certificates/extracted/ca-bundle.trust.crt /etc/ssl/certs/ca-certificates.crt
 
 
 ### Change passwords
@@ -29,7 +29,8 @@ echo "alarm:pi" | chpasswd
 
 ### Add alarm to sudoer
 ###
-echo 'alarm ALL=(ALL:ALL) ALL' | sudo EDITOR='tee -a' visudo
+pacman -S sudo --noconfirm
+echo 'alarm ALL=(ALL) NOPASSWD: ALL' | EDITOR='tee -a' visudo
 
 
 ### enable SSH root login
@@ -56,8 +57,7 @@ systemctl restart sshd
 
 ### python & tools
 ###
-pacman -S python python-pip python-setuptools python-wheel --noconfirm --needed
-pacman -S git wget imagemagick htop base-devel --noconfirm --needed
+pacman -S python python-pip python-setuptools python-wheel git wget imagemagick htop base-devel --noconfirm --needed
 
 
 ### pikaur
@@ -70,9 +70,14 @@ sudo -u alarm makepkg -fsri --noconfirm
 rm -Rf pikaur
 
 
+### Pi Kernel
+###
+pacman -S linux-rpi --noconfirm
+
 ### RPi.GPIO
 ###
-pikaur -S python-raspberry-gpio --noconfirm
+# pikaur -S python-raspberry-gpio --noconfirm
+pip install RPi.GPIO
 
 
 ### mosquitto server
@@ -107,7 +112,7 @@ rm /etc/resolv.conf
 echo "nameserver 8.8.8.8
 nameserver 1.1.1.1" > /etc/resolv.conf
 
-echo "rastaOS" > /etc/hostname
+echo "hberry" > /etc/hostname
 
 echo " [main]
 plugins=keyfile
@@ -159,40 +164,22 @@ echo "7.0  --  bootstraped from https://framagit.org/KXKM/rasta-os" > /boot/VERS
 ###
 cp /boot/config.txt /boot/config.txt.origin
 echo "
+
 ##
-## RASPBERRY PI settings
+## HBERRY settings
 ##
-gpu_mem=200
-dtparam=audio=on
-audio_pwm_mode=2
-dtparam=i2c_arm=on
-dtparam=i2c1=on
 initramfs initramfs-linux.img followkernel
 
-#dwc_otg.speed=1 #legacy USB1.1
+#
+# GPU 
+# See https://www.raspberrypi.org/documentation/configuration/config-txt/video.md
+#
+gpu_mem=200
+dtoverlay=vc4-kms-v3d
+max_framebuffers=2
 
 #
-# Display
-#
-# dtoverlay=i2c-gpio,i2c_gpio_sda=15,i2c_gpio_scl=14  ## I2C (small 35 TFT touchscreen ?)
-dtoverlay=tft35a:rotate=90  # GPIO 3.5TFT screen
-display_lcd_rotate=2        # Onboard display
-
-#
-# FastBoot
-#
-boot_delay=0
-#dtoverlay=sdtweak,overclock_50=100  # Overclock the SD Card from 50 to 100MHz / This can only be done with at least a UHS Class 1 card
-disable_splash=1    # Disable the rainbow splash screen
-
-#
-# Camera module
-#
-#start_file=start_x.elf
-#fixup_file=fixup_x.dat
-
-#
-# HDMI 
+# VIDEO 
 # See https://www.raspberrypi.org/documentation/configuration/config-txt/video.md
 #
 hdmi_force_hotplug=1    # Force HDMI (even without cable)
@@ -201,25 +188,59 @@ hdmi_group=2            # 0: autodetect / 1: CEA (TVs) / 2: DMT (PC Monitor)
 hdmi_mode=82            # 82: 1080p / 85: 720p / 16: 1024x768 / 51: 1600x1200 / 9: 800x600
 
 #
-# Pi4
+# Audio
 #
-#[pi4]
-# Enable DRM VC4 V3D driver on top of the dispmanx display stack
-#dtoverlay=vc4-fkms-v3d
-#max_framebuffers=2
+dtparam=audio=on
+audio_pwm_mode=2
+
+#
+# I2C
+#
+dtparam=i2c_arm=on
+dtparam=i2c1=on
+
+#
+# USB
+#
+#dwc_otg.speed=1 #legacy USB1.1
+
+#
+# Display
+#
+# dtoverlay=i2c-gpio,i2c_gpio_sda=15,i2c_gpio_scl=14  ## I2C (small 35 TFT touchscreen ?)
+# dtoverlay=tft35a:rotate=90  # GPIO 3.5TFT screen
+# display_lcd_rotate=2        # Onboard display
+
+#
+# FastBoot
+#
+initial_turbo=30
+boot_delay=0
+disable_splash=1                        # Disable the rainbow splash screen
+# dtoverlay=sdtweak,overclock_50=100    # Overclock the SD Card from 50 to 100MHz / This can only be done with at least a UHS Class 1 card
+
+#
+# Camera module
+#
+# start_file=start_x.elf
+# fixup_file=fixup_x.dat
+
 
 
 " > /boot/config.txt
 
 
 ## MyRepos
-cd /opt
-git clone git://myrepos.branchable.com/ myrepos
-cp /opt/myrepos/mr /usr/local/bin/
-rm -Rf myrepos
+# cd /opt
+# git clone git://myrepos.branchable.com/ myrepos
+# cp /opt/myrepos/mr /usr/local/bin/
+# rm -Rf myrepos
 
 # Deploy modules
 cd /opt
+git clone https://github.com/Hemisphere-Project/Pi-tools.git
+cd Pi-tools
+
 modules=(
     starter
     splash
@@ -237,26 +258,26 @@ modules=(
     camera-server
     3615-disco
 )
-mkdir modules
-cd modules/
+
 for i in "${modules[@]}"; do
-    git clone https://framagit.org/KXKM/rpi-modules/"$i".git
     cd "$i"
-    mr register
     ./install.sh
-    cd /opt/modules/
+    cd /opt/Pi-tools
 done
 
-# HPlayer2
-cd /opt
-git clone https://github.com/Hemisphere-Project/HPlayer2.git
-cd HPlayer2
-mr register
-./install.sh
 
 # Regie
 cd /opt
 git clone https://github.com/KomplexKapharnaum/RPi-Regie.git
 cd RPi-Regie
-mr register
+# mr register
+
+# HPlayer2
+cd /opt
+git clone https://github.com/Hemisphere-Project/HPlayer2.git
+cd HPlayer2
+# mr register
+./install.sh
+
+
 
