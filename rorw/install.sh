@@ -31,7 +31,7 @@ if (lsblk -o uuid /dev/mmcblk0p3 > /dev/null 2>&1); then
 
     echo "
     UUID=$UUID_boot                                 /boot       vfat    defaults,ro,errors=remount-ro,umask=177        0       0
-    #UUID=$UUID_root                                 /           ext4    defaults,ro,errors=remount-ro        0       0         # already done in /boot/cmdline.txt
+    UUID=$UUID_root                                 /           ext4    defaults,ro,errors=remount-ro        0       0         # already done in /boot/cmdline.txt
     UUID=$UUID_data                                 /data       ext4    defaults        0       0
 
     tmpfs                                           /tmp        tmpfs   defaults,size=128M 0 0
