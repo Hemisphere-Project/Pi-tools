@@ -1,0 +1,12 @@
+[Unit]
+Description=Bluetooth enable and attach controller
+Wants=bluetooth.service
+
+[Service]
+Type=simple
+ExecStartPre=/bin/sleep 1s
+ExecStart=/usr/bin/btattach -B /dev/ttyAMA0 -P bcm -S 3000000 
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,12 @@
+[Unit]
+Description=3615 Discovery
+           
+[Service]
+Type=simple
+ExecStartPre=/bin/sleep 10
+ExecStart=/usr/local/bin/3615-disco
+ExecStop=/bin/pkill 3615-disco
+Restart=always
+           
+[Install]
+WantedBy=default.target

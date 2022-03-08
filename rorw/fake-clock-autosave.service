@@ -1,0 +1,9 @@
+[Unit]
+Description=Periodically saves system time to file
+After=fake-clock.service
+Requires=fake-clock.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/fake-clock save
+StandardOutput=null

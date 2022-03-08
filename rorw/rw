@@ -1,0 +1,8 @@
+#!/bin/bash
+mount -o remount,rw /
+
+if (lsblk -o uuid /dev/mmcblk0p3 > /dev/null 2>&1); then
+    mount -o remount,rw /boot 
+elif (lsblk -o uuid /dev/mmcblk1p8 > /dev/null 2>&1); then
+    mount -o remount,rw /boot/efi 
+fi

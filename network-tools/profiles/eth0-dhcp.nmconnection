@@ -1,0 +1,14 @@
+[connection]
+id=eth0-dhcp
+type=ethernet
+interface-name=eth0
+permissions=
+
+[ethernet]
+mac-address-blacklist=
+
+[ipv4]
+dns-search=
+method=auto
+
+

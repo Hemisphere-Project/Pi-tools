@@ -1,0 +1,18 @@
+#!/usr/bin/env python3 -u
+import subprocess, sys
+import time
+
+iface = 'eth0'
+if len(sys.argv) > 1:
+	iface = sys.argv[1]
+
+while True:
+	flag = subprocess.check_output("ifconfig "+iface+" | grep flags |  cut -d'=' -f 2 | cut -d'<' -f 1", shell=True).strip()
+	if int(flag) == 4163:
+		try:
+			net4 = subprocess.check_output("ifconfig "+iface+" | grep netmask", shell=True).strip()
+			print ("ipv4 ok on "+iface+"")
+		except:
+			print ("ipv4 missing.. restarting "+iface+"")
+			subprocess.call("ifconfig "+iface+" down; sleep 1; systemctl restart NetworkManager; sleep 3; ifconfig "+iface+" up;", shell=True)
+	time.sleep(5)

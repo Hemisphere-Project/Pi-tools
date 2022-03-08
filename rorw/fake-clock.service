@@ -1,0 +1,12 @@
+[Unit]
+Description=Restore system time on boot and save it on shutdown
+After=sysinit.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/fake-clock load
+ExecStop=/usr/local/bin/fake-clock save
+RemainAfterExit=true
+
+[Install]
+WantedBy=sysinit.target

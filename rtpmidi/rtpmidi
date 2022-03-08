@@ -1,0 +1,7 @@
+#!/bin/bash
+DIR="$(dirname "$(readlink -f "$0")")"
+modprobe snd_virmidi
+HOST=`cat /etc/hostname`
+cp "$DIR/ravelox.conf" /tmp/
+sed -i "s/rastamidi/rastaMidi._$HOST/g" /tmp/ravelox.conf
+"$DIR/raveloxmidi" -c /tmp/ravelox.conf

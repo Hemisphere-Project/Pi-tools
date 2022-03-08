@@ -1,0 +1,1 @@
+ACTION=="change", SUBSYSTEM=="sound", PROGRAM="/bin/bash -c 'audioselect'"

@@ -1,0 +1,10 @@
+#!/usr/bin/env python3
+import os, time
+import subprocess
+
+dir = os.path.dirname(os.path.realpath(__file__))
+
+p = subprocess.Popen( ('fbi -d /dev/fb0 --noverbose -a '+os.path.join(dir, 'splash.png')).split(' ') )
+time.sleep(5)
+p.kill()
+p = subprocess.Popen( ('fbi -d /dev/fb0 --noverbose -a '+os.path.join(dir, 'black.png')).split(' ') )

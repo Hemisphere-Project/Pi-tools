@@ -1,0 +1,10 @@
+[Unit]
+Description=Enable NetworkManager profiles from /boot/wifi: %i
+After=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/setnet %i
+
+[Install]
+WantedBy=multi-user.target

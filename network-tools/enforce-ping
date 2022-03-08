@@ -1,0 +1,38 @@
+#!/usr/bin/env python3 -u
+import subprocess
+import time, sys, os
+
+if len(sys.argv) < 2:
+    print('Usage: enforce-ping <test-ip>/<interface>')
+    exit(1)
+
+gateway, iface = sys.argv[1].split('/')
+
+if not iface:
+    iface = 'eth0'
+
+print("Enforce ping to ", gateway,", restart",iface,"if failed")
+
+FNULL = open(os.devnull, 'w')
+while True:
+    
+    time.sleep(10)
+    
+    print('----- test -----')
+    ping = subprocess.call("ping -c 1 "+gateway, shell=True, stdout=FNULL)
+    
+    if int(ping) == 0:
+        print(gateway, "is reachable, checking ip validity")
+        flag = subprocess.check_output("ifconfig "+iface+" | grep flags |  cut -d'=' -f 2 | cut -d'<' -f 1", shell=True).strip()
+        if int(flag) == 4163:
+            try:
+                net4 = subprocess.check_output("ifconfig "+iface+" | grep netmask", shell=True).strip()
+                print ("ipv4 ok on "+iface)
+            except:
+                print ("ipv4 missing.. restarting "+iface)
+                subprocess.call("ifconfig "+iface+" down; sleep 4; ifconfig "+iface+" up;", shell=True)
+	    
+    else:
+        print("antenna is missing, restarting "+iface)
+        subprocess.call("ifconfig "+iface+" down; sleep 4; ifconfig "+iface+" up;", shell=True)
+    

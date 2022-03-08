@@ -1,0 +1,11 @@
+[Unit]
+Description=Camera server
+           
+[Service]
+Type=simple
+ExecStart=camera-server
+#ExecStop=fuser -k 5004/udp
+Restart=always
+           
+[Install]
+WantedBy=default.target

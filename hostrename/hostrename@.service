@@ -1,0 +1,10 @@
+[Unit]
+Description=Set hostname
+After=systemd-hostnamed.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/hostrename %i
+
+[Install]
+WantedBy=multi-user.target

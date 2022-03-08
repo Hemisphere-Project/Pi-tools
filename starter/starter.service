@@ -1,0 +1,9 @@
+[Unit]
+Description=Starter launch services based on /boot/starter.txt
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/starter
+
+[Install]
+WantedBy=multi-user.target

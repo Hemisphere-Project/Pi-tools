@@ -1,0 +1,41 @@
+{
+	"id":"pdfjs",
+	"name":"PDFjs",
+	"title":"",
+	"version":"1.28",
+	"source":{
+		"icon":"{{pluginHost}}static/app/images/icon.png",
+		"screenshoot":[
+			"{{pluginHost}}static/app/images/screenshoot1.png"
+		]
+	},
+	"category":"file",
+	"description":"pdfjs viewer",
+	"keywords":"",
+	"auther":{
+		"copyright":"kodcloud.",
+		"homePage":"http://www.kodcloud.com",
+	},
+	"configItem":{
+		"pluginAuth":{
+			"type":"userSelect",
+			"value":"all:1",
+			"display":"{{LNG.Plugin.config.auth}}",
+			"desc":"{{LNG.Plugin.config.authDesc}}",
+			"require":1
+		},
+		"sep1001":"<hr/>",
+		"fileExt":{
+			"type":"tags",
+			"display":"{{LNG.Plugin.Config.fileExt}}",
+			"desc":"{{LNG.Plugin.Config.fileExtDesc}}",
+			"value":"pdf,djvu,ofd",
+		},
+		"fileSort":{
+			"type":"number",
+			"display":"{{LNG.Plugin.Config.fileSort}}",
+			"desc":"{{LNG.Plugin.Config.fileSortDesc}}",
+			"value":500,
+		}
+	}
+}

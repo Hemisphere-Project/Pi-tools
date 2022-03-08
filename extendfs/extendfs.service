@@ -1,0 +1,9 @@
+[Unit]
+Description=Extend last partition to match FS, if drive id changed
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/extendfs
+
+[Install]
+WantedBy=multi-user.target

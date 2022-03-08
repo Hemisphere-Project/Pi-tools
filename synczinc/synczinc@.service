@@ -1,0 +1,11 @@
+[Unit]
+Description=Syncthing automated master introducer
+           
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/synczinc %i
+ExecStop=/bin/pkill synczinc 
+Restart=always
+           
+[Install]
+WantedBy=default.target

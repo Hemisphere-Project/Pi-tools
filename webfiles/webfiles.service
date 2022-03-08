@@ -1,0 +1,11 @@
+[Unit]
+Description=Web Files Manager
+           
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/webfiles
+ExecStop=/usr/bin/pkill webfiles
+Restart=always
+           
+[Install]
+WantedBy=default.target

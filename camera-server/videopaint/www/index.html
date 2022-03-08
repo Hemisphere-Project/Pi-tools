@@ -1,0 +1,179 @@
+<html>
+
+  <head>
+    <title>VideoPaint</title>
+    <style>
+      #videostream, #videorender{
+          position:absolute;
+          top:70px;
+          left:70px;
+      }
+
+      #videostream {
+        display: none;  
+      }
+
+      #canvasimg {
+          position: absolute;
+          top:70px;
+          left:750px;
+          height: 480px;
+          width: 640px;
+          background-color: black;
+      }    
+
+      .my-drawing {
+        height: 510px;  /* 480+30px */
+        width: 700px;   /* 640+60px */
+        position:fixed;
+        top: 40px;
+        left: 10px;
+        background: transparent !important;
+      }
+
+      .literally {
+        height: 100%;
+        background: transparent !important;
+      }
+    
+    </style>
+
+    <!-- literallycanvas -->
+    <link href="/literallycanvas/css/literallycanvas.css" rel="stylesheet">
+    <script src="/literallycanvas/js/react-with-addons-0.14.7.js"></script>
+    <script src="/literallycanvas/js/react-dom-0.14.7.js"></script>
+    <script src="/literallycanvas/js/literallycanvas.js"></script>
+    
+    <script src="/jquery-3.4.1.min.js"></script>
+  </head>
+</head>
+
+<body>
+  
+  <!-- <button type="button" onclick="wsavc.playStream()">Start Video</button>
+    <button type="button" onclick="wsavc.stopStream()">Stop Video</button>
+    <button type="button" onclick="wsavc.disconnect()">Disconnect</button>
+    <br/> -->
+    
+    
+    <canvas id="videostream" width=640 height=480></canvas>
+    <canvas id="videorender" width=640 height=480></canvas>
+    <div  class="my-drawing"></div>
+    <img id="canvasimg">
+    
+    
+    
+    
+    
+    <!-- provide WSAvcPlayer -->
+    <script type="text/javascript" src="http-live-player.js">;</script>
+    <script type="text/javascript">
+
+      var videocan = document.getElementById("videostream");
+      var videorender = document.getElementById("videorender");
+      
+      var ctx = videorender.getContext("2d");
+      var zoom = 2.6;
+
+      var img = new Image;
+      img.onload = function(){
+        var w = 640
+        var h = 480
+
+        ctx.drawImage(img, w/2 - w/(zoom*2), h/2 - h/(zoom*2), w/zoom, h/zoom, 0,0,640,480);
+      };
+
+      // Create h264 player
+      var uri = "ws://" + document.location.host;
+      var wsavc = new WSAvcPlayer(videocan, "webgl", 1, 35);
+      wsavc.connect(uri);
+
+      //expose instance for button callbacks
+      window.wsavc = wsavc;
+
+      
+        var lc = LC.init(
+            document.getElementsByClassName('my-drawing')[0],
+            {imageURLPrefix: '/literallycanvas/img'}
+        ); 
+
+        var litcanvas = document.getElementsByClassName('lc-drawing')[0];
+        var litcanvas_draw = litcanvas.getElementsByTagName('canvas')[1];
+        var imgData = null
+        var isSending = false
+        
+        function show() {
+            img.src = videocan.toDataURL()
+
+            imgData = litcanvas_draw.toDataURL("image/jpeg", 0.9)   // JPEG QUALITY !
+            document.getElementById("canvasimg").src = imgData;
+            sendToServer(imgData)
+        }
+
+        function makeblob(dataURL) {
+            var BASE64_MARKER = ';base64,';
+            if (dataURL.indexOf(BASE64_MARKER) == -1) {
+                var parts = dataURL.split(',');
+                var contentType = parts[0].split(':')[1];
+                var raw = decodeURIComponent(parts[1]);
+                return new Blob([raw], { type: contentType });
+            }
+            var parts = dataURL.split(BASE64_MARKER);
+            var contentType = parts[0].split(':')[1];
+            var raw = window.atob(parts[1]);
+            var rawLength = raw.length;
+
+            var uInt8Array = new Uint8Array(rawLength);
+
+            for (var i = 0; i < rawLength; ++i) {
+                uInt8Array[i] = raw.charCodeAt(i);
+            }
+
+            return new Blob([uInt8Array], { type: contentType });
+        }
+
+        function sendToServer(data) {
+            if (isSending) return
+            else isSending = true
+
+            $.ajax({
+                url: '/image',
+                type: 'POST',
+                processData: false,
+                contentType: 'application/octet-stream',
+                data: makeblob(data)
+            })
+            .done(function(data) {
+              isSending = false
+              // setTimeout(()=>{
+              //       isSending=false
+              //   }, 1000)
+              })
+            .fail(function() {
+              setTimeout(()=>{
+                    isSending=false
+                }, 1000)
+            });
+        }
+
+
+
+        lc.setColor('primary', 'white')
+        lc.setColor('secondary', 'transparent')
+        lc.setColor('background', 'transparent')
+        
+        // litcanvas.addEventListener("mouseup", function (e) {
+        //     show()
+        // }, false);
+        
+        // litcanvas.addEventListener("mousemove", function (e) {
+        //     show()
+        // }, false);
+        
+        setInterval(show, 100)
+
+      
+  
+    </script>
+  </body>
+</html>

@@ -1,0 +1,15 @@
+#!/bin/bash
+DIR="$(dirname "$(readlink -f "$0")")"
+if [ "$#" -eq  "0" ]; then
+ 	mode=peer
+else
+ 	mode=$1
+fi
+
+echo "[synczinc] starting as $mode"
+
+if [ "$mode" == "master" ]; then
+    python3 -u "$DIR/master.py"
+else
+    "$DIR/peer.sh" "$mode"
+fi

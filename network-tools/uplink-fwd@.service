@@ -1,0 +1,10 @@
+[Unit]
+Description=Forward uplink to sub-networks
+After=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/uplink-fwd %i
+
+[Install]
+WantedBy=multi-user.target

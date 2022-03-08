@@ -1,0 +1,54 @@
+#!/bin/bash
+touch /tmp/didit
+BASEPATH="$(dirname "$(readlink -f "$0")")"
+
+echo "[audioselect] internal + USB audio routing"
+
+# get current route
+current_route=$(cat /etc/asound.conf | grep pcm.\!default -m1 | awk -F ' ' '{print $2}')
+
+# get current usb device
+current_usbcard=$(cat /etc/asound.conf | awk '/pcm.usb/{getline; getline; print}' | awk -F ' ' '{print $2}')
+
+# check if USB is present
+find_usbcard=$(aplay -l | grep USB -m1)
+if [ -z "$find_usbcard" ]; then
+    target_route="internal"
+    target_usbcard="1"
+    echo "No USB audio card found using 'aplay -l'"
+else
+    target_route="both"
+    target_usbcard=$(echo $find_usbcard | awk -F ' ' '{print $2}' | rev | cut -c 2- | rev)
+    echo "USB audio card found as card $target_usbcard"
+fi
+
+# apply new route if necessary
+if [[ "$current_route" != "$target_route" ]]; then
+    rw
+    # sed -i "s/?USB?/$usb_card/g" /etc/asound.conf
+    sed -i "s/pcm.!default $current_route/pcm.!default $target_route/g" /etc/asound.conf
+    sync
+    ro
+    echo "Audio set to $target_route"
+else
+    echo "Audio already set to $target_route"
+fi
+
+# apply new usbcard
+if [[ "$current_usbcard" != "$target_usbcard" ]]; then
+    rw
+    sed -i "s/card $current_usbcard/card $target_usbcard/g" /etc/asound.conf
+    sync
+    ro
+    echo "USB card set to $target_usbcard"
+else
+    echo "USB card already set to $target_usbcard"
+fi
+
+# Volume and settings
+# amixer -D internal cset numid=3 1       # 0:auto 1:jack 2:hdmi  # handled by HPlayer2
+amixer -D internal cset numid=1 -- 95%
+if [ $target_route = "both" ]; then
+    amixer -D usb set Speaker -- 85%
+    amixer -D usb sset PCM -- 85%
+fi

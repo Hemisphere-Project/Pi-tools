@@ -1,0 +1,12 @@
+[Unit]
+Description=rtp Midi (CoreMidi) using Ravelox
+           
+[Service]
+Type=simple
+# ExecStartPre=/bin/sleep 10
+ExecStart=/usr/local/bin/rtpmidi
+ExecStop=fuser -k 5004/udp
+Restart=always
+           
+[Install]
+WantedBy=default.target

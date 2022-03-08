@@ -1,0 +1,9 @@
+[Unit]
+Description=Check if ipv4 is properly obtained on %i, restart iface if needed
+After=NetworkManager.service
+
+[Service]
+ExecStart=/usr/local/bin/enforce-ipv4 %i
+
+[Install]
+WantedBy=multi-user.target 

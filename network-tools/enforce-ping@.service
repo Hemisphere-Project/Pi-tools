@@ -1,0 +1,9 @@
+[Unit]
+Description=Ping %i, restart interface if failed
+After=NetworkManager.service
+
+[Service]
+ExecStart=/usr/local/bin/enforce-ping %i
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,2 @@
+DESC:	Should handle wifi settings from config file in /boot using nmcli -- not implemented yet
+

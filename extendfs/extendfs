@@ -1,0 +1,49 @@
+#!/bin/bash
+cd "$(dirname "$(readlink -f "$0")")"
+
+# CHECK IF SD HAS BEEN CLONED !
+DRIVE=$(findmnt -n -o SOURCE --target /)
+DRIVE_ID=$(udevadm info --name=$DRIVE | grep ID_SERIAL= | cut -d '=' -f2)
+LAST_DRIVE_ID=$(cat /data/var/drive-id)
+
+if [[ $DRIVE_ID == $LAST_DRIVE_ID ]]
+        then
+                echo "drive-id is valid"
+        else
+                echo "drive-id has changed, i am a clone !"
+                echo $DRIVE_ID > /data/var/drive-id
+
+                echo "extending FS"
+
+                # target disk
+                if (ls /dev/mmcblk0 > /dev/null 2>&1); then
+                        disk='mmcblk0'
+                elif (ls /dev/mmcblk1 > /dev/null 2>&1); then
+                        disk='mmcblk1'
+                else
+                        echo "ERROR: can't find disk mmcblk0 ok mmcblk1"
+                        exit 1
+                fi
+
+                # get last partition
+                part=$(grep  "${disk}p" /proc/partitions | tail -1 | awk '{print $4}' | xargs)
+                partN=$(echo $part | tail -c 2)    
+
+                # fdisk: delete and recreate the last partition with the largest size possible.
+                (
+                echo d # Delete partition
+                echo $partN # Last partition
+                echo n # Add a new partition
+                echo p # Primary partition
+                echo $partN # Last partition
+                echo   # First sector (Accept default: 1)
+                echo   # Last sector (Accept default: varies)
+                echo Y # confirm existing signature 
+                echo w # Write changes
+                ) | fdisk /dev/$disk 
+
+                resize2fs /dev/$part
+
+                # Put Flair to inform other modules
+                touch /tmp/new-drive
+fi

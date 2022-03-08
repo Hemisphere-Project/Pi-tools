@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+import sys
+import os
+
+print("Uplink forward to sub-networks")
+if len(sys.argv) < 2:
+    print("Usage: ./uplink-forward [uplink interface]")
+    exit(1)
+
+uplink = sys.argv[1]
+
+print(f"Setting {uplink} as uplink")
+
+os.system("echo 1 > /proc/sys/net/ipv4/ip_forward")
+os.system("iptables -F")
+os.system("iptables -t nat -F")
+os.system(f"iptables -t nat -A POSTROUTING -o {uplink} -j MASQUERADE")
+
+for iface in os.listdir('/sys/class/net/'):
+    if iface != uplink and iface != 'lo':
+        os.system(f"iptables -A FORWARD -i {uplink} -o {iface} -m state --state RELATED,ESTABLISHED -j ACCEPT")
+        os.system(f"iptables -A FORWARD -i {iface} -o {uplink} -j ACCEPT")
+        os.system(f"ip route del 0/0 dev {iface} &> /dev/null")
+        print(f"  - linked {iface}")
+
+
+
+
+# BASH version:
+# #!/bin/bash
+# echo 1 > /proc/sys/net/ipv4/ip_forward
+# iptables -F
+# iptables -t nat -F
+# iptables -t nat -A POSTROUTING -o wlan0 -j MASQUERADE
+
+# iptables -A FORWARD -i wlan0 -o eth0 -m state --state RELATED,ESTABLISHED -j ACCEPT
+# iptables -A FORWARD -i eth0 -o wlan0 -j ACCEPT
+# ip route del 0/0 dev eth0 &> /dev/null
+
+# iptables -A FORWARD -i wlan0 -o wlan1 -m state --state RELATED,ESTABLISHED -j ACCEPT
+# iptables -A FORWARD -i wlan1 -o wlan0 -j ACCEPT
+# ip route del 0/0 dev wlan1 &> /dev/null
+

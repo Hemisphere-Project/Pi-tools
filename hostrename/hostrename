@@ -1,0 +1,31 @@
+#!/bin/bash
+
+if [ "$#" -eq  "0" ]; then
+ 	name=rastapi-default
+else
+ 	name=$1
+fi
+
+echo "[hostrename] Setting name: $name"
+
+if [[ $(< /etc/hostname) != "$name" ]]; then
+	rw
+	echo "$name" > /etc/hostname
+	sed -i -E 's/^127.0.1.1.*/127.0.1.1\t'"$name"'/' /etc/hosts
+	if [ -f "/boot/wifi/wlan0-hotspot.nmconnection" ]; then
+	    sed -i -E 's/^ssid=.*/ssid='"$name"'/' /boot/wifi/wlan0-hotspot.nmconnection
+	    echo 'updated wlan0-hotspot name'
+	fi
+	if [ -f "/boot/wifi/wlan1-hotspot.nmconnection" ]; then
+	    sed -i -E 's/^ssid=.*/ssid='"$name"'/' /boot/wifi/wlan1-hotspot.nmconnection
+	    echo 'updated wlan1-hotspot name'
+	fi
+	hostnamectl set-hostname "$name"
+	sync
+	ro
+	systemctl restart avahi-daemon
+	systemctl restart NetworkManager
+	echo "[hostrename] hostname changed to $name"    
+else
+	echo "[hostrename] hostname already set as $name"    
+fi

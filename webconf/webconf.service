@@ -1,0 +1,11 @@
+[Unit]
+Description=Web configuration
+           
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/webconf
+ExecStop=/bin/pkill webconf
+Restart=always
+           
+[Install]
+WantedBy=default.target

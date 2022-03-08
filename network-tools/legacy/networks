@@ -1,0 +1,5 @@
+## EXECUTE NMCON COMMAND TO ADD NetworkManager profiles VIA NMCLI
+
+
+nmcon ethernet super -s 192.168.43.37/24 -g 192.168.43.1
+
