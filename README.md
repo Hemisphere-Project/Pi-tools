@@ -16,7 +16,14 @@ Bootstrap a fresh image for RaspberryPi with tools
 - Plug ethernet cable
 - Boot the Pi with the fresh image
 - ssh into it, or use keyboard and screen (ARCH: alarm / alarm // RASPBIAN: pi / raspberry)
+
+#### ARCH
 ```
 bash <(curl -s https://raw.githubusercontent.com/Hemisphere-Project/Pi-tools/main/bootstrap/bootstrap-arch-rpi.sh)
+```
+
+#### XBIAN
+```
+bash <(curl -s https://raw.githubusercontent.com/Hemisphere-Project/Pi-tools/main/bootstrap/bootstrap-xbian-rp64.sh)
 ```
 
