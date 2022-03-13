@@ -11,7 +11,7 @@ if [[ $(command -v apt) ]]; then
     DISTRO='xbian'
     echo "Distribution: $DISTRO"
 
-    apt install python3-liblo liblo7 cython3 python3-eventlet -y
+    apt install liblo7 cython3 python3-eventlet -y
 
     # RPi / RP64
     if [[ $(uname -m) = aarch64* || $(uname -m) = armv* ]]; then
@@ -23,7 +23,7 @@ elif [[ $(command -v pacman) ]]; then
     DISTRO='arch'
     echo "Distribution: $DISTRO"
 
-    pacman -S python-pyliblo liblo cython python-eventlet --noconfirm --needed
+    pacman -S liblo cython python-eventlet --noconfirm --needed
 
     # RPi / RP64
     if [[ $(uname -m) = armv* ]]; then
