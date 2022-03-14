@@ -14,9 +14,8 @@ systemctl disable systemd-random-seed
 # read only
 #
 
-# Select Arch / Ayufan image
+# ARCH Raspberry Pi
 if (lsblk -o uuid /dev/mmcblk0p3 > /dev/null 2>&1); then
-    # ARCH Raspberry Pi
 
     UUID_boot=`lsblk -o uuid /dev/mmcblk0p1 | tail -1`
     UUID_root=`lsblk -o uuid /dev/mmcblk0p2 | tail -1`
@@ -31,7 +30,7 @@ if (lsblk -o uuid /dev/mmcblk0p3 > /dev/null 2>&1); then
 
     echo "
     UUID=$UUID_boot                                 /boot       vfat    defaults,ro,errors=remount-ro,umask=177        0       0
-    UUID=$UUID_root                                 /           ext4    defaults,ro,errors=remount-ro        0       0         # already done in /boot/cmdline.txt
+    UUID=$UUID_root                                 /           ext4    defaults,ro,errors=remount-ro        0       0         # also RO in /boot/cmdline.txt
     UUID=$UUID_data                                 /data       ext4    defaults        0       0
 
     tmpfs                                           /tmp        tmpfs   defaults,size=128M 0 0
@@ -45,12 +44,12 @@ if (lsblk -o uuid /dev/mmcblk0p3 > /dev/null 2>&1); then
     " > /etc/fstab
 
     sed -i 's/rw/fastboot noswap ro/g' /boot/cmdline.txt
-    sed -i "s/root=\/dev\/mmcblk0p2/root=UUID=$UUID_root rootfstype=ext4/g" /boot/cmdline.txt
+    sed -i "s/root=[^ ]*/root=UUID=$UUID_root rootfstype=ext4/g" /boot/cmdline.txt
 
     echo "source $BASEPATH/rorw.bashrc" >> /etc/bash.bashrc
 
+#XBIAN ayufan RockPro64 eMMc
 elif (lsblk -o uuid /dev/mmcblk1p8 > /dev/null 2>&1); then
-    #XBIAN ayufan RockPro64 eMMc
 
     UUID_boot=`lsblk -o uuid /dev/mmcblk1p6 | tail -1`
     UUID_root=`lsblk -o uuid /dev/mmcblk1p7 | tail -1`
