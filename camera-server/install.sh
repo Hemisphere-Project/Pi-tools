@@ -9,9 +9,11 @@ ln -sf "$BASEPATH/camera-server.service" /etc/systemd/system/
 ln -sf "$BASEPATH/camera-server" /usr/local/bin/
 
 echo "
-# Camera module
-start_file=start_x.elf
-fixup_file=fixup_x.dat
+#
+# Camera module #### BROKEN ON PI4 !
+#
+# start_file=start_x.elf
+# fixup_file=fixup_x.dat
 " >> /boot/config.txt
 
 systemctl daemon-reload

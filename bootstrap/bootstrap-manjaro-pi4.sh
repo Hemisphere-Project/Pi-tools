@@ -202,12 +202,6 @@ boot_delay=0
 disable_splash=1                        # Disable the rainbow splash screen
 # dtoverlay=sdtweak,overclock_50=100    # Overclock the SD Card from 50 to 100MHz / This can only be done with at least a UHS Class 1 card
 
-#
-# Camera module
-#
-# start_file=start_x.elf
-# fixup_file=fixup_x.dat
-
 " > /boot/config.txt
 
 
