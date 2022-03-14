@@ -18,7 +18,7 @@ elif [[ $(command -v pacman) ]]; then
     DISTRO='arch'
     echo "Distribution: $DISTRO"
 
-    pacman -S alsa alsa-utils --noconfirm --needed
+    pacman -S alsa --noconfirm --needed
 
 ## Plateform not detected ...
 else
@@ -29,8 +29,13 @@ else
     exit 1
 fi
 
+if [[ $(uname -m) = armv* ]]; then
+    cp "$BASEPATH/asound.conf-pi2" /etc/asound.conf
+fi
+if [[ $(uname -m) = aarch64 ]]; then
+    cp "$BASEPATH/asound.conf-pi4" /etc/asound.conf
+fi
 
-cp "$BASEPATH/asound.conf" /etc/asound.conf
 ln -sf "$BASEPATH/audioselect.service" /etc/systemd/system/
 ln -sf "$BASEPATH/audioselect" /usr/local/bin/
 ln -sf "$BASEPATH/70-audioselect.rules" /etc/udev/rules.d/

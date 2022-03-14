@@ -173,6 +173,7 @@ hdmi_mode=82            # 82: 1080p / 85: 720p / 16: 1024x768 / 51: 1600x1200 / 
 #
 # Audio
 #
+dtoverlay=pisound
 dtparam=audio=on
 audio_pwm_mode=2
 
