@@ -18,7 +18,7 @@ elif [[ $(command -v pacman) ]]; then
     DISTRO='arch'
     echo "Distribution: $DISTRO"
 
-    pacman -S php avahi-utils --noconfirm --needed
+    pacman -S php avahi --noconfirm --needed
 
 ## Plateform not detected ...
 else
