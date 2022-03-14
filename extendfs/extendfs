@@ -35,7 +35,7 @@ if [[ $DRIVE_ID == $LAST_DRIVE_ID ]]
                 echo $partN # Last partition
                 echo n # Add a new partition
                 echo p # Primary partition
-                echo $partN # Last partition
+                ##PI4: don't ! # echo $partN # Last partition
                 echo   # First sector (Accept default: 1)
                 echo   # Last sector (Accept default: varies)
                 echo Y # confirm existing signature 
