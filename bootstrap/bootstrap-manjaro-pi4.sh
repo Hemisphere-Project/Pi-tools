@@ -22,6 +22,11 @@ pacman -Sc --noconfirm
 echo "root:rootpi" | chpasswd
 echo "pi:pi" | chpasswd
 
+### Add pi to sudoer
+###
+pacman -S sudo --noconfirm
+echo 'pi ALL=(ALL) NOPASSWD: ALL' | EDITOR='tee -a' visudo
+
 
 ### enable SSH root login
 ###
@@ -49,12 +54,12 @@ pacman -S python python-pip python-setuptools python-wheel git wget imagemagick 
 
 ### pikaur
 ###
-# cd /opt
-# git clone https://aur.archlinux.org/pikaur.git
-# chmod 777 -R pikaur/
-# cd pikaur
-# sudo -u alarm makepkg -fsri --noconfirm
-# rm -Rf pikaur
+cd /opt
+git clone https://aur.archlinux.org/pikaur.git
+chmod 777 -R pikaur/
+cd pikaur
+sudo -u alarm makepkg -fsri --noconfirm
+rm -Rf pikaur
 
 ### Pi Kernel
 ###
@@ -91,6 +96,8 @@ pacman -R dhcpcd --noconfirm
 pacman -R netctl --noconfirm
 systemctl stop systemd-resolved
 systemctl disable systemd-resolved
+systemctl stop systemd-networkd.socket
+systemctl disable systemd-networkd.socket
 systemctl stop systemd-networkd
 systemctl disable systemd-networkd
 
@@ -171,9 +178,9 @@ hdmi_group=2            # 0: autodetect / 1: CEA (TVs) / 2: DMT (PC Monitor)
 hdmi_mode=82            # 82: 1080p / 85: 720p / 16: 1024x768 / 51: 1600x1200 / 9: 800x600
 
 #
-# Audio
+# AUDIO
 #
-dtoverlay=pisound
+#dtoverlay=pisound
 dtparam=audio=on
 audio_pwm_mode=2
 
@@ -198,6 +205,7 @@ dtparam=i2c1=on
 #
 # FastBoot
 #
+avoid_warnings=1
 initial_turbo=30
 boot_delay=0
 disable_splash=1                        # Disable the rainbow splash screen
@@ -212,49 +220,6 @@ disable_splash=1                        # Disable the rainbow splash screen
 # cp /opt/myrepos/mr /usr/local/bin/
 # rm -Rf myrepos
 
-# Deploy modules
-cd /opt
-git clone https://github.com/Hemisphere-Project/Pi-tools.git
-cd Pi-tools
 
-modules=(
-    starter
-    splash
-    hostrename
-    audioselect
-    extendfs
-    network-tools
-    usbautomount
-    rorw
-    synczinc
-    webconf
-    webfiles
-    bluetooth-pi
-    rtpmidi
-    camera-server
-    3615-disco
-)
-
-for i in "${modules[@]}"; do
-    echo "\nInstall: $i ... (press to continue)"
-    read var1
-    cd "$i"
-    ./install.sh
-    cd /opt/Pi-tools
-done
-
-
-# Regie
-cd /opt
-git clone https://github.com/KomplexKapharnaum/RPi-Regie.git
-cd RPi-Regie
-# mr register
-
-# HPlayer2
-cd /opt
-git clone https://github.com/Hemisphere-Project/HPlayer2.git
-cd HPlayer2
-# mr register
-./install.sh
 
 
