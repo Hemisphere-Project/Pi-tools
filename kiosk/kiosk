@@ -1,0 +1,53 @@
+#!/bin/bash
+
+# interactive only (prevent start over ssh)
+# [[ $- != *i* ]] && return
+
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+
+export KIOSK_WIDTH=1280
+export KIOSK_HEIGHT=720
+export COG_PLATFORM_WL_VIEW_FULLSCREEN=1
+export GTK_THEME="Adwaita:dark"
+
+# if [[ -z $DISPLAY && $XDG_VTNR -eq 1 ]] && [ "$(pgrep --list-name weston)" = "" ]; then
+
+  # FIND HDMI OUTPUT
+  NAME=""
+  for OUTPUT in $(ls /sys/class/drm | grep HDMI); do
+    if [ "$OUTPUT" != "" ]; then
+      NAME=$OUTPUT
+      break
+    fi
+  done
+
+  # PREPARE WESTON CONFIG
+  MODE="${KIOSK_WIDTH}x${KIOSK_HEIGHT}"
+  echo "
+[core]
+idle-time=0
+repaint-window=15
+require-input=false
+
+[shell]
+client=${SCRIPT_DIR}/cog-launcher
+animation=none
+close-animation=none
+startup-animation=none
+locking=false
+
+[output]
+name=${NAME:6}
+mode=${MODE}     
+#transform=rotate-180
+
+[input-method]
+path=/usr/lib/<wrong-path>/weston-keyboard  # wrong path -> disable virtual keyboard
+
+
+" >  ~/.config/weston.ini
+
+  # START WESTON
+  export XDG_RUNTIME_DIR=/run/user/1000 
+  weston --tty 1
+# fi
