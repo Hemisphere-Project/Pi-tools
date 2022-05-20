@@ -1,79 +1,14 @@
-# [Unit]
-# Description=Weston Wayland Compositor (on tty7)
-# RequiresMountsFor=/run
-# Conflicts=getty@tty7.service plymouth-quit.service
-# After=systemd-user-sessions.service getty@tty7.service plymouth-quit-wait.service
-
-# [Service]
-# User=pi
-# WorkingDirectory=/home/pi
-# PermissionsStartOnly=true
-# Restart=always
-# # Log us in via PAM so we get our XDG & co. environment and
-# # are treated as logged in so we can use the tty:
-# PAMName=login
-# # Grab tty7
-# UtmpIdentifier=tty7
-# TTYPath=/dev/tty7
-# TTYReset=yes
-# TTYVHangup=yes
-# TTYVTDisallocate=yes
-# # stderr to journal so our logging doesn't get thrown into /dev/null
-# StandardOutput=tty
-# StandardInput=tty
-# StandardError=journal
-# EnvironmentFile=-/etc/default/weston
-# # Weston does not successfully change VT, nor does systemd place us on
-# # the VT it just activated for us. Switch manually:
-# ExecStartPre=/bin/chvt 7
-# ExecStart=/usr/bin/weston-launch -- --log=${XDG_RUNTIME_DIR}/weston.log
-# IgnoreSIGPIPE=no
-
-# [Install]
-# WantedBy=multi-user.target
-
-
-
 [Unit]
-Description=Kiosk-Weston
-
-# Make sure we are started after logins are permitted.
-After=systemd-user-sessions.service
-
-# if you want you can make it part of the graphical session
-#Before=graphical.target
-
-# not necessary but just in case
-#ConditionPathExists=/dev/tty7
-
+Description=Kiosk /boot/kiosk.url
+RequiresMountsFor=/run
+           
 [Service]
 Type=simple
-Environment=XDG_SESSION_TYPE=wayland
-ExecStart=/usr/bin/systemctl --wait --user start mysession.target
+User=root
 
-# The user to run the session as. Pick one!
-User=pi
-Group=pi
-
-# Set up a full user session for the user, required by Weston.
-PAMName=login
-
-# A virtual terminal is needed.
-TTYPath=/dev/tty7
-TTYReset=yes
-TTYVHangup=yes
-TTYVTDisallocate=yes
-
-# Fail to start if not controlling the tty.
-StandardInput=tty-fail
-
-# Defaults to journal, in case it doesn't adjust it accordingly
-#StandardOutput=journal
-StandardError=journal
-
-# Log this user with utmp, letting it show up with commands 'w' and 'who'.
-UtmpIdentifier=tty7
-UtmpMode=user
-
+ExecStart=/opt/Pi-tools/kiosk/kiosk
+ExecStop=/bin/pkill weston; /bin/pkill cog
+Restart=always
+           
 [Install]
-WantedBy=graphical.target
+WantedBy=multi-user.target

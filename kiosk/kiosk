@@ -4,33 +4,48 @@
 # [[ $- != *i* ]] && return
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+cd $SCRIPT_DIR
 
-export KIOSK_WIDTH=1280
-export KIOSK_HEIGHT=720
+#
+# URL
+#
+URL=$(cat /boot/kiosk.url)
+
+#
+# COG Launcher
+#
+COGLAUNCHER="/tmp/cog-launcher"
+echo "#!/usr/bin/env sh
+cog --media-playback-requires-user-gesture=0 --set-permissions=all --enable-webgl=1 --enable-webaudio=1 $URL
+" > $COGLAUNCHER
+chmod +x $COGLAUNCHER
+
+#
+# WESTON settings
+#
+export KIOSK_WIDTH="$(cat /sys/class/graphics/fb0/virtual_size | cut -d',' -f1)"
+export KIOSK_HEIGHT="$(cat /sys/class/graphics/fb0/virtual_size | cut -d',' -f2)"
 export COG_PLATFORM_WL_VIEW_FULLSCREEN=1
 export GTK_THEME="Adwaita:dark"
 
-# if [[ -z $DISPLAY && $XDG_VTNR -eq 1 ]] && [ "$(pgrep --list-name weston)" = "" ]; then
+# FIND HDMI OUTPUT
+NAME=""
+for OUTPUT in $(ls /sys/class/drm | grep HDMI); do
+  if [ "$OUTPUT" != "" ]; then
+    NAME=$OUTPUT
+    break
+  fi
+done
 
-  # FIND HDMI OUTPUT
-  NAME=""
-  for OUTPUT in $(ls /sys/class/drm | grep HDMI); do
-    if [ "$OUTPUT" != "" ]; then
-      NAME=$OUTPUT
-      break
-    fi
-  done
-
-  # PREPARE WESTON CONFIG
-  MODE="${KIOSK_WIDTH}x${KIOSK_HEIGHT}"
-  echo "
+# PREPARE WESTON CONFIG
+WESTONCONF="
 [core]
 idle-time=0
 repaint-window=15
 require-input=false
 
 [shell]
-client=${SCRIPT_DIR}/cog-launcher
+client=$COGLAUNCHER
 animation=none
 close-animation=none
 startup-animation=none
@@ -38,16 +53,39 @@ locking=false
 
 [output]
 name=${NAME:6}
-mode=${MODE}     
+mode=${KIOSK_WIDTH}x${KIOSK_HEIGHT}     
 #transform=rotate-180
 
 [input-method]
 path=/usr/lib/<wrong-path>/weston-keyboard  # wrong path -> disable virtual keyboard
+"
 
+#INFO
+echo " "
+echo ".:: HKiosk ::."
+echo " "
+echo "WESTON CONFIG"
+echo "Resolution: $KIOSK_WIDTH x $KIOSK_HEIGHT"
+echo "HDMI out: ${NAME:6}"
+echo " "
+echo "COG LAUNCHER"
+echo "$COGLAUNCHER"
+echo " "
 
-" >  ~/.config/weston.ini
+# START WESTON
+if [[ -z $DISPLAY && $XDG_VTNR -eq 1 ]] && [ "$(pgrep --list-name weston)" = "" ] 
+then
 
-  # START WESTON
-  export XDG_RUNTIME_DIR=/run/user/1000 
-  weston --tty 1
-# fi
+  echo "$WESTONCONF" > ~/.config/weston.ini
+  weston
+
+else
+  
+  echo "$WESTONCONF" >  /tmp/weston.ini
+
+  export XDG_RUNTIME_DIR=/run/user/1000
+  export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/dbus/user_bus_socket
+  /bin/mkdir -p /run/user/1000/dbus
+
+  weston --tty 1 -c /tmp/weston.ini
+fi

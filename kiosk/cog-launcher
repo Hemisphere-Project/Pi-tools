@@ -1,7 +1,0 @@
-#!/usr/bin/env sh
-cog --media-playback-requires-user-gesture=0 --set-permissions=all --enable-webgl=1 --enable-webaudio=1 http://localhost:5000/player
-# cog --media-playback-requires-user-gesture=0 --set-permissions=all --enable-webgl=1 --enable-webaudio=1 http://37m.gr/video/simple.html
-# COG_PLATFORM_FDO_VIEW_FULLSCREEN=1 cog --media-playback-requires-user-gesture=0 --set-permissions=all --enable-webgl=1 --enable-webaudio=1 --enable-fullscreen=1 https://archibold.io/demo/jellyfish/
-#cog https://html5test.com/
-#cog http://camendesign.com/code/video_for_everybody/test.html
-#cog https://developer.mozilla.org/en-US/docs/Web/API/WebGL_API/Tutorial/Animating_textures_in_WebGL

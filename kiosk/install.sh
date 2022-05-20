@@ -75,9 +75,11 @@ ln -sf "$BASEPATH/kiosk" /usr/local/bin/
 ln -sf "$BASEPATH/kiosk.service" /etc/systemd/system/
 systemctl daemon-reload
 
+echo "https://www.hemisphere-project.com/" > /boot/kiosk.url
+
 FILE=/boot/starter.txt
 if test -f "$FILE"; then
-echo "## [kiosk] WPE WebKit/Cog kiosk
+echo "## [kiosk] WPE WebKit/Cog kiosk from /boot/kiosk.url
 # kiosk
 " >> /boot/starter.txt
 fi
