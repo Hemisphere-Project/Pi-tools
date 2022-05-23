@@ -53,8 +53,7 @@ cd /opt
 git clone https://aur.archlinux.org/pikaur.git
 chmod 777 -R pikaur/
 cd pikaur
-sudo -u alarm makepkg -fsri --noconfirm
-rm -Rf pikaur
+sudo -u pi makepkg -fsri --noconfirm
 
 ### Pi Kernel
 ###
@@ -72,8 +71,8 @@ pacman -S mosquitto --noconfirm --needed
 
 ### Audio Analog
 ##
-# modprobe snd_bcm2835
-# echo 'snd_bcm2835'  >>  /etc/modules
+modprobe snd_bcm2835
+echo 'snd_bcm2835'  >>  /etc/modules
 
 
 
@@ -176,7 +175,7 @@ hdmi_mode=82            # 82: 1080p / 85: 720p / 16: 1024x768 / 51: 1600x1200 / 
 #
 # AUDIO
 #
-#dtoverlay=pisound    # necessary to get analog jack working on Pi4 ! 
+dtoverlay=pisound    # necessary to get analog jack working on Pi4 ! 
 dtparam=audio=on
 audio_pwm_mode=2
 
