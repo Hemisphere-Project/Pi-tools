@@ -3,8 +3,8 @@
 # interactive only (prevent start over ssh)
 # [[ $- != *i* ]] && return
 
-SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-cd $SCRIPT_DIR
+DIR="$(dirname "$(readlink -f "$0")")"
+
 
 #
 # URL
@@ -16,7 +16,14 @@ URL=$(cat /boot/kiosk.url)
 #
 COGLAUNCHER="/tmp/cog-launcher"
 echo "#!/usr/bin/env sh
-cog --media-playback-requires-user-gesture=0 --set-permissions=all --enable-webgl=1 --enable-webaudio=1 $URL
+cog \
+  --media-playback-requires-user-gesture=0 \
+  --set-permissions=all \
+  --enable-webgl=1 \
+  --enable-webaudio=1 \
+  --webprocess-failure=exit \
+  --allow-universal-access-from-file-urls=1 \
+  file://${DIR}/loader.html#${URL}
 " > $COGLAUNCHER
 chmod +x $COGLAUNCHER
 
@@ -83,7 +90,10 @@ else
   
   echo "$WESTONCONF" >  /tmp/weston.ini
 
+
   export XDG_RUNTIME_DIR=/run/user/1000
+  export XDG_CACHE_HOME=/tmp
+  export XDG_DATA_HOME=/tmp
   export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/dbus/user_bus_socket
   /bin/mkdir -p /run/user/1000/dbus
 

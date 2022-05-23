@@ -6,6 +6,7 @@ RequiresMountsFor=/run
 Type=simple
 User=root
 
+# ExecStartPre=/bin/sleep 3
 ExecStart=/opt/Pi-tools/kiosk/kiosk
 ExecStop=/bin/pkill weston; /bin/pkill cog
 Restart=always
