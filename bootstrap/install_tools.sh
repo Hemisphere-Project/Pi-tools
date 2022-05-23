@@ -1,8 +1,6 @@
 #!/bin/bash
 
-cd /opt
-git clone https://github.com/Hemisphere-Project/Pi-tools.git
-cd Pi-tools
+cd "$(dirname "$0")"/..
 
 modules=(
     starter
