@@ -19,9 +19,10 @@ Bootstrap a fresh image for RaspberryPi with tools
 
 #### MANJARO
 ```
-sudo pacman -Sy git
+su root
+pacman -Sy git
 cd /opt
-sudo git clone https://github.com/Hemisphere-Project/Pi-tools
+git clone https://github.com/Hemisphere-Project/Pi-tools
 cd Pi-tools/bootstrap
 ./bootstrap-manjaro-pi4.sh
 ./install_tools.sh
@@ -29,9 +30,10 @@ cd Pi-tools/bootstrap
 
 #### XBIAN
 ```
-sudo apt update && sudo apt install git
+su root
+apt update && sudo apt install git
 cd /opt
-sudo git clone https://github.com/Hemisphere-Project/Pi-tools
+git clone https://github.com/Hemisphere-Project/Pi-tools
 cd Pi-tools/bootstrap
 ./bootstrap-xbian-rp64.sh
 ./install_tools.sh
