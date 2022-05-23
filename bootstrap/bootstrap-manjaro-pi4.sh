@@ -5,11 +5,6 @@
 #
 
 
-### log in as root
-###
-su root         # =>  root
-
-
 ### Init Pacman & update
 ###
 pacman -Syu --noconfirm
