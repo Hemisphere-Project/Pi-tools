@@ -89,11 +89,7 @@ sed -i 's/use-ipv6=yes/use-ipv6=no/g' /etc/avahi/avahi-daemon.conf
 systemctl enable avahi-daemon
 systemctl start avahi-daemon
 
-### randomness
-###
-pacman -S haveged --noconfirm --needed
-systemctl enable haveged
-systemctl start haveged
+
 
 ### switch from netctl/networkd to NetworkManager
 ###
@@ -145,9 +141,8 @@ echo "i2c-dev" >> /etc/modules-load.d/raspberrypi.conf
 ### blackboot
 ###
 systemctl disable getty@tty1
-systemctl disable getty@tty3
 sed -i '$ s/tty1/tty3/' /boot/cmdline.txt
-sed -i '$ s/$/ logo.nologo vt.global_cursor_default=0 consoleblank=0 quiet loglevel=1 vga=current/' /boot/cmdline.txt
+sed -i '$ s/$/ loglevel=1/' /boot/cmdline.txt      # logo.nologo vt.global_cursor_default=0 consoleblank=0 quiet vga=current
 
 ### version
 ###
