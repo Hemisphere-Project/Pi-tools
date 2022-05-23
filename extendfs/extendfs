@@ -27,7 +27,9 @@ if [[ $DRIVE_ID == $LAST_DRIVE_ID ]]
 
                 # get last partition
                 part=$(grep  "${disk}p" /proc/partitions | tail -1 | awk '{print $4}' | xargs)
-                partN=$(echo $part | tail -c 2)    
+                partN=$(echo $part | tail -c 2)  
+                firstSec=$(parted /dev/${disk} 'unit s print' | grep "^ $partN" | awk '{print $2}')
+                firstSec=${firstSec::-1}  
 
                 # fdisk: delete and recreate the last partition with the largest size possible.
                 (
@@ -35,9 +37,9 @@ if [[ $DRIVE_ID == $LAST_DRIVE_ID ]]
                 echo $partN # Last partition
                 echo n # Add a new partition
                 echo p # Primary partition
-                ##PI4: don't ! # echo $partN # Last partition
-                echo   # First sector (Accept default: 1)
-                echo   # Last sector (Accept default: varies)
+                echo $partN # Last partition
+                echo $firstSec # First sector 
+                echo           # Last sector (Accept default: varies)
                 echo Y # confirm existing signature 
                 echo w # Write changes
                 ) | fdisk /dev/$disk 
