@@ -4,9 +4,9 @@ Tools for embedded
 ## Bootstrap
 Bootstrap a fresh image for RaspberryPi with tools
 
-### Create Arch image
-- Create image using instructions here: https://archlinuxarm.org/platforms/armv8/broadcom/raspberry-pi-4
-- IMPORTANT: add a 3rd partition (ext4) using fdisk or gparted
+### Create Manjaro image
+- Create image using ManjaroARM for Pi4 (Pi3 compatible) with Etcher 
+- IMPORTANT: Once image burned on microSD, add a 3rd partition (ext4) using fdisk or gparted on the microSD
 
 ### Create Raspbian image
 - download official RaspiOS minimal (no desktop) and burn it using etcher
@@ -15,15 +15,25 @@ Bootstrap a fresh image for RaspberryPi with tools
 ### Bootsrap the image
 - Plug ethernet cable
 - Boot the Pi with the fresh image
-- ssh into it, or use keyboard and screen (ARCH: alarm / alarm // RASPBIAN: pi / raspberry)
+- ssh into it, or use keyboard and screen (MANJARO: pi / pi // RASPBIAN: pi / raspberry)
 
-#### ARCH
+#### MANJARO
 ```
-bash <(curl -s https://raw.githubusercontent.com/Hemisphere-Project/Pi-tools/main/bootstrap/bootstrap-arch-rpi.sh)
+sudo pacman -Sy git
+cd /opt
+sudo git clone https://github.com/Hemisphere-Project/Pi-tools
+cd Pi-tools/bootstrap
+./bootstrap-manjaro-pi4.sh
+./install_tools.sh
 ```
 
 #### XBIAN
 ```
-bash <(curl -s https://raw.githubusercontent.com/Hemisphere-Project/Pi-tools/main/bootstrap/bootstrap-xbian-rp64.sh)
+sudo apt update && sudo apt install git
+cd /opt
+sudo git clone https://github.com/Hemisphere-Project/Pi-tools
+cd Pi-tools/bootstrap
+./bootstrap-xbian-rp64.sh
+./install_tools.sh
 ```
 
