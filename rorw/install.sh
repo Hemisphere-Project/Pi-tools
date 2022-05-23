@@ -8,11 +8,34 @@ cd "$BASEPATH"
 ln -sf "$BASEPATH/ro" /usr/local/bin/
 ln -sf "$BASEPATH/rw" /usr/local/bin/
 
+
+### randomness
+###
+
+## xBIAN (DEBIAN / RASPBIAN / UBUNTU)
+if [[ $(command -v apt) ]]; then
+    apt -y install haveged 
+## ARCH Linux
+elif [[ $(command -v pacman) ]]; then
+    pacman -S haveged --noconfirm --needed
+fi
 systemctl disable systemd-random-seed
+systemctl enable haveged
+systemctl start haveged
 
 #
 # read only
 #
+
+RAMSIZE=$(grep MemTotal /proc/meminfo | awk -F ' ' '{print $2}')
+if [ -z "$RAMSIZE" ]
+then
+      RAMSIZE=1024000
+fi
+TMPSIZE=$(($RAMSIZE/8000))
+if [ "$TMPSIZE" -eq "0" ]; then
+   TMPSIZE=128
+fi
 
 # ARCH Raspberry Pi
 if (lsblk -o uuid /dev/mmcblk0p3 > /dev/null 2>&1); then
@@ -23,7 +46,7 @@ if (lsblk -o uuid /dev/mmcblk0p3 > /dev/null 2>&1); then
 
     mkdir -p /data
     mount -U "$UUID_data" /data
-    #mkdir -p /data/media
+    mkdir -p /data/media
     mkdir -p /data/var/lib/NetworkManager
     mkdir -p /data/var/lib/dnsmasq
     mkdir -p /var/lib/dnsmasq
@@ -33,7 +56,7 @@ if (lsblk -o uuid /dev/mmcblk0p3 > /dev/null 2>&1); then
     UUID=$UUID_root                                 /           ext4    defaults,ro,errors=remount-ro        0       0         # also RO in /boot/cmdline.txt
     UUID=$UUID_data                                 /data       ext4    defaults        0       0
 
-    tmpfs                                           /tmp        tmpfs   defaults,size=128M 0 0
+    tmpfs                                           /tmp        tmpfs   defaults,size=${TMPSIZE}M 0 0
     /data/var/lib/dnsmasq                           /var/lib/dnsmasq none defaults,bind 0 0
     /data/var/lib/NetworkManager                    /var/lib/NetworkManager none defaults,bind 0 0
     /run                                            /var/run     none    defaults,bind 0 0
@@ -67,7 +90,7 @@ elif (lsblk -o uuid /dev/mmcblk1p8 > /dev/null 2>&1); then
     #UUID=$UUID_root                                 /           ext4    defaults,ro,errors=remount-ro        0       0         # already done in /boot/extlinux/extlinux.conf
     UUID=$UUID_data                                 /data       ext4    defaults        0       0
 
-    tmpfs                                           /tmp        tmpfs   defaults,size=256M 0 0
+    tmpfs                                           /tmp        tmpfs   defaults,size=${TMPSIZE}M 0 0
     /data/var/lib/dnsmasq                           /var/lib/dnsmasq none defaults,bind 0 0
     /data/var/lib/NetworkManager                    /var/lib/NetworkManager none defaults,bind 0 0
     /run                                            /var/run     none    defaults,bind 0 0
@@ -83,8 +106,10 @@ elif (lsblk -o uuid /dev/mmcblk1p8 > /dev/null 2>&1); then
     echo "source $BASEPATH/rorw.bashrc" >> /root/.bashrc
 
 else
+    echo ""
     echo "Can't find third partition or detect partition system..."
     echo "RORW install FAILED"
+    echo ""
     exit 1
 fi
 

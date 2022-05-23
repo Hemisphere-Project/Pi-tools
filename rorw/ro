@@ -1,4 +1,5 @@
 #!/bin/bash
+systemctl daemon-reload
 mount -o remount,ro / 
 
 if (lsblk -o uuid /dev/mmcblk0p3 > /dev/null 2>&1); then
