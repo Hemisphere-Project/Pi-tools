@@ -19,7 +19,7 @@ Bootstrap a fresh image for RaspberryPi with tools
 
 #### MANJARO
 ```
-su root
+sudo su root
 pacman -Sy git
 cd /opt
 git clone https://github.com/Hemisphere-Project/Pi-tools
@@ -30,8 +30,8 @@ cd Pi-tools/bootstrap
 
 #### XBIAN
 ```
-su root
-apt update && sudo apt install git
+sudo su root
+apt update && apt install git
 cd /opt
 git clone https://github.com/Hemisphere-Project/Pi-tools
 cd Pi-tools/bootstrap
