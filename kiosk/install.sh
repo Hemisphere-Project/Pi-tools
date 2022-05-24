@@ -25,7 +25,7 @@ elif [[ $(command -v pacman) ]]; then
 
     pacman -S --needed --noconfirm unzip npm
     pacman -S --needed --noconfirm djvulibre ghostscript libheif libjpeg libavif libjxl libraw librsvg libwebp libwmf libxml2 ocl-icd openexr openjpeg2 pango
-    pacman -S --needed --noconfirm geoclue gst-libav gst-plugins-base gst-plugins-bad gst-plugins-good gst-plugins-ugly gst-plugin-wp
+    pacman -S --needed --noconfirm geoclue gst-libav gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-good gst-plugins-ugly gst-plugin-wpe
     pacman -S --needed --noconfirm alsa-utils
     pacman -S --needed --noconfirm wpewebkit
 
