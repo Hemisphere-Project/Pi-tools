@@ -34,7 +34,7 @@ elif [[ $(command -v pacman) ]]; then
     groupadd weston-launch
     usermod -a -G wheel,games,power,optical,storage,scanner,lp,audio,video,render,weston,weston-launch pi
     
-    pikaur -S cog
+    pikaur -S cog --noconfirm
 
     mkdir -p ~/.config
 echo "[core]
