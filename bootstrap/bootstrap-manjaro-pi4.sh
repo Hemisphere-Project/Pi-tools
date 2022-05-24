@@ -58,8 +58,7 @@ cd /opt
 git clone https://aur.archlinux.org/pikaur.git
 chmod 777 -R pikaur/
 cd pikaur
-sudo -u alarm makepkg -fsri --noconfirm
-rm -Rf pikaur
+sudo -u pi makepkg -fsri --noconfirm
 
 ### Pi Kernel
 ###
