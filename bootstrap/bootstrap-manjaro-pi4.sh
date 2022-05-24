@@ -76,8 +76,8 @@ pacman -S mosquitto --noconfirm --needed
 
 ### Audio Analog
 ##
-# modprobe snd_bcm2835
-# echo 'snd_bcm2835'  >>  /etc/modules
+modprobe snd_bcm2835
+echo 'snd_bcm2835'  >>  /etc/modules
 
 
 
