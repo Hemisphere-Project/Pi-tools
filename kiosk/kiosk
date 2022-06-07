@@ -9,7 +9,8 @@ DIR="$(dirname "$(readlink -f "$0")")"
 #
 # URL
 #
-URL=$(cat /boot/kiosk.url)
+source /boot/kiosk.conf
+
 
 #
 # COG Launcher
@@ -61,7 +62,7 @@ locking=false
 [output]
 name=${NAME:6}
 mode=${KIOSK_WIDTH}x${KIOSK_HEIGHT}     
-#transform=rotate-180
+transform=${ROTATE}
 
 [input-method]
 path=/usr/lib/<wrong-path>/weston-keyboard  # wrong path -> disable virtual keyboard

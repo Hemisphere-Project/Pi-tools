@@ -75,7 +75,10 @@ ln -sf "$BASEPATH/kiosk" /usr/local/bin/
 ln -sf "$BASEPATH/kiosk.service" /etc/systemd/system/
 systemctl daemon-reload
 
-echo "https://www.hemisphere-project.com/" > /boot/kiosk.url
+echo "
+URL=https://www.hemisphere-project.com/
+ROTATE=normal
+" > /boot/kiosk.conf
 
 FILE=/boot/starter.txt
 if test -f "$FILE"; then
