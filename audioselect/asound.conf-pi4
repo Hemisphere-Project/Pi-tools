@@ -1,20 +1,23 @@
 # copy this file to /etc/asound.conf
 
 
-# define internal
+# define jack
 #
 
-pcm.internal { 
+pcm.jack { 
     type hw
     card 0
 }
 
-ctl.internal {
+ctl.jack {
     type hw
     card 0
 }
 
-pcm.digital { 
+# define hdmi0
+#
+
+pcm.hdmi0 { 
    type iec958
    slave {
       format IEC958_SUBFRAME_LE
@@ -25,7 +28,7 @@ pcm.digital {
    }
 }
 
-ctl.digital {
+ctl.hdmi0 {
    type plug
 	slave.pcm {
 		type softvol
@@ -40,9 +43,36 @@ ctl.digital {
 	}
 }
 
+# define hdmi1
+#
 
+pcm.hdmi1 { 
+   type iec958
+   slave {
+      format IEC958_SUBFRAME_LE
+      pcm {
+         type hw
+         card 2
+      }
+   }
+}
 
-# define usb
+ctl.hdmi1 {
+   type plug
+	slave.pcm {
+		type softvol
+		slave.pcm {
+			type hw
+         card 2
+		}
+		control {
+			name "HDMI Playback Volume"
+			card 2
+		}
+	}
+}
+
+# define usb TODO !!
 #
 
 # pcm.usb {
@@ -55,9 +85,12 @@ ctl.digital {
 #     card 1
 # }
 
-# sets the default output device to the "pcm.both" device 
-pcm.!default internal 
-ctl.!default internal
+
+#
+# SELECT OUTPUT ( jack / hdmi0 / hdmi1 / usb (broken) / both (broken) )
+#
+pcm.!default jack
+ctl.!default jack
 
 # the fun begins... 
 pcm.both { 
