@@ -22,9 +22,9 @@ if [[ $(< /etc/hostname) != "$name" ]]; then
 	fi
 	hostnamectl set-hostname "$name"
 	sync
-	ro
 	systemctl restart avahi-daemon
-	systemctl restart NetworkManager
+	setnet
+	ro
 	echo "[hostrename] hostname changed to $name"    
 else
 	echo "[hostrename] hostname already set as $name"    

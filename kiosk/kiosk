@@ -7,9 +7,49 @@ DIR="$(dirname "$(readlink -f "$0")")"
 
 
 #
-# URL
+# DEFAULT CONFIG
 #
-source /boot/kiosk.conf
+URL="https://hemisphere-project.com"
+ROTATE="normal"
+
+#
+# CONFIG FILE
+#
+CONFFILE="/boot/kiosk.conf"
+source $CONFFILE
+
+
+#
+# CMD LINE OVERWRITE
+#
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    -u|--url)
+      URL="$2"
+      shift # past argument
+      shift # past value
+      ;;
+    -r|--rotate)
+      ROTATE="$2"
+      shift # past argument
+      shift # past value
+      ;;
+    -c|--conf)
+      CONFFILE="$2"
+      source $CONFFILE
+      shift # past argument
+      shift # past value
+      ;;
+    *)
+      echo "Unknown argument $1"
+      exit 1
+      ;;
+  esac
+done
+# echo $CONFFILE
+# echo $URL
+# echo $ROTATE
+# exit 0
 
 
 #
@@ -36,14 +76,16 @@ export KIOSK_HEIGHT="$(cat /sys/class/graphics/fb0/virtual_size | cut -d',' -f2)
 export COG_PLATFORM_WL_VIEW_FULLSCREEN=1
 export GTK_THEME="Adwaita:dark"
 
-# FIND HDMI OUTPUT
-NAME=""
+# FIND FIRST ENABLED HDMI OUTPUT (default to first one)
+NAME=$(ls /sys/class/drm | grep HDMI -m1)
 for OUTPUT in $(ls /sys/class/drm | grep HDMI); do
-  if [ "$OUTPUT" != "" ]; then
+  echo $(cat /sys/devices/platform/gpu/drm/${OUTPUT:0:5}/$OUTPUT/enabled) $OUTPUT 
+  if [ "$(cat /sys/devices/platform/gpu/drm/${OUTPUT:0:5}/$OUTPUT/enabled)" == "enabled" ]; then
     NAME=$OUTPUT
     break
   fi
 done
+
 
 # PREPARE WESTON CONFIG
 WESTONCONF="
