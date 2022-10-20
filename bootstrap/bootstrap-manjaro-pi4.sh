@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #
-#   :: Rasta 7 :: aarch64 :: manjaro :: 13/03/2022
+#   :: HBerry 1 :: aarch64 :: manjaro :: 13/03/2022
 #
 
 
@@ -136,7 +136,10 @@ echo "i2c-dev" >> /etc/modules-load.d/raspberrypi.conf
 ###
 systemctl disable getty@tty1
 sed -i '$ s/tty1/tty3/' /boot/cmdline.txt
-sed -i '$ s/$/ loglevel=1/' /boot/cmdline.txt      # logo.nologo vt.global_cursor_default=0 consoleblank=0 quiet vga=current
+sed -i '$ s/$/ loglevel=1 vt.global_cursor_default=0/' /boot/cmdline.txt      # logo.nologo vt.global_cursor_default=0 consoleblank=0 quiet vga=current
+
+### spinner splash
+plymouth-set-default-theme -R spinner
 
 ### version
 ###
