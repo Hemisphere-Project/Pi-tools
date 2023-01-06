@@ -1,0 +1,60 @@
+# Disable any form of screen saver / screen blanking / power management
+xset s off
+xset s noblank
+xset -dpms
+
+POINTER_XID=$(xinput -list | grep "pointer" | grep -v vc4 | grep -v "Virtual" | cut -f 2 | cut -d "=" -f 2)
+echo "POINTER_XID: $POINTER_XID"
+
+# Rotate
+KIOSK_ROTATE=${KIOSK_ROTATE:-"0"}
+
+xrandr
+
+if [ "$KIOSK_ROTATE" = "90" ]; then
+    xrandr -o right
+    xinput set-prop $POINTER_XID 'Coordinate Transformation Matrix' 0 1 0 -1 0 1 0 0 1
+elif [ "$KIOSK_ROTATE" = "180" ]; then
+    xrandr | grep ' connected' | cut -f 1 -d ' ' | while read display; do xrandr --output $display --set TearFree on; done
+    xrandr -o inverted
+    xinput set-prop $POINTER_XID 'Coordinate Transformation Matrix' -1 0 1 0 -1 1 0 0 1
+elif [ "$KIOSK_ROTATE" = "270" ]; then
+    xrandr -o left
+    xinput set-prop $POINTER_XID 'Coordinate Transformation Matrix' 0 -1 1 1 0 0 0 0 1
+else # 0
+    xrandr -o normal
+    xinput set-prop $POINTER_XID 'Coordinate Transformation Matrix' 1 0 0 0 1 0 0 0 1
+fi
+
+# Flip
+KIOSK_REFLECT=${KIOSK_REFLECT:-"n"}
+if [ "$KIOSK_REFLECT" = "x" ]; then
+    xrandr -x
+    xinput set-prop $POINTER_XID 'Coordinate Transformation Matrix' -1 0 1 0 1 0 0 0 1
+elif [ "$KIOSK_REFLECT" = "y" ]; then
+    xrandr -y
+    xinput set-prop $POINTER_XID 'Coordinate Transformation Matrix' 1 0 0 0 -1 1 0 0 1
+elif [ "$KIOSK_REFLECT" = "xy" ]; then
+    xrandr -x -y
+    xinput set-prop $POINTER_XID 'Coordinate Transformation Matrix' -1 0 1 0 -1 1 0 0 1
+fi
+
+# xrandr -o inverted
+# xinput set-prop 'ELAN Touchscreen' 'Coordinate Transformation Matrix' -1 0 1 0 -1 1 0 0 1
+# https://gist.github.com/mildmojo/48e9025070a2ba40795c
+
+# Allow quitting the X server with CTRL-ATL-Backspace
+setxkbmap -option terminate:ctrl_alt_bksp
+
+# Start Chromium in kiosk mode
+sed -i 's/\"exited_cleanly\":false/\"exited_cleanly\":true/' ~/.config/chromium/'Local State'
+sed -i 's/\"exited_cleanly\":false/\"exited_cleanly\":true/; s/\"exit_type\":\"[^\"]\+\"/\"exit_type\":\"Normal\"/' ~/.config/chromium/Default/Preferences
+
+KIOSK_URL=${KIOSK_URL:-"http://hemisphere-project.com"}
+
+chromium \
+        --enable-accelerated-video-decode --enable-gpu-rasterization --enable-unsafe-webgpu --ignore-gpu-blocklist --enable-zero-copy \
+        --no-sandbox --enable-features=CanvasOopRasterization,EnableDrDc \
+        --disable-infobars --disable-web-security --disable-site-isolation-trials --user-data-dir="/tmp" --kiosk "$KIOSK_URL"
+
+

@@ -1,0 +1,58 @@
+#!/bin/bash
+
+# interactive only (prevent start over ssh)
+# [[ $- != *i* ]] && return
+
+DIR="$(dirname "$(readlink -f "$0")")"
+
+
+#
+# DEFAULT CONFIG
+#
+URL="https://hemisphere-project.com"
+ROTATE="0"      # 0, 90, 180, 270
+REFLECT="n"     # n, x, y, xy
+
+#
+# CMD LINE OVERWRITE
+#
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    -u|--url)
+      URL="$2"
+      shift # past argument
+      shift # past value
+      ;;
+    -r|--rotate)
+      ROTATE="$2"
+      shift # past argument
+      shift # past value
+      ;;
+    -m|--reflect)
+      REFLECT="$2"
+      shift # past argument
+      shift # past value
+      ;;
+    *)
+      echo "Unknown argument $1"
+      exit 1
+      ;;
+  esac
+done
+
+echo $URL
+echo $ROTATE
+echo $REFLECT
+
+LOADER_URL=file://${DIR}/loader.html#${URL}
+echo $LOADER_URL
+# exit 0
+
+
+#INFO
+echo " "
+echo ".:: HKiosk ::."
+echo " "
+
+XAUTHORITY=/tmp/.Xauthority KIOSK_URL=$LOADER_URL KIOSK_ROTATE=$ROTATE KIOSK_REFLECT=$REFLECT startx -- -nocursor
+logout

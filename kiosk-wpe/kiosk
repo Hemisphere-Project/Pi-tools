@@ -10,13 +10,8 @@ DIR="$(dirname "$(readlink -f "$0")")"
 # DEFAULT CONFIG
 #
 URL="https://hemisphere-project.com"
-ROTATE="normal"
-
-#
-# CONFIG FILE
-#
-CONFFILE="/boot/kiosk.conf"
-source $CONFFILE
+ROTATE="0"      # 0, 90, 180, 270
+REFLECT="n"     # n, x   (y, xy not supported)
 
 
 #
@@ -34,9 +29,8 @@ while [[ $# -gt 0 ]]; do
       shift # past argument
       shift # past value
       ;;
-    -c|--conf)
-      CONFFILE="$2"
-      source $CONFFILE
+    -m|--reflect)
+      REFLECT="$2"
       shift # past argument
       shift # past value
       ;;
@@ -46,11 +40,26 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
-# echo $CONFFILE
 # echo $URL
 # echo $ROTATE
 # exit 0
 
+TRANSFORM="normal"
+if [ "$ROTATE" == "90" ]; then
+  TRANSFORM="rotate-90"
+elif [ "$ROTATE" == "180" ]; then
+  TRANSFORM="rotate-180"
+elif [ "$ROTATE" == "270" ]; then
+  TRANSFORM="rotate-270"
+fi
+
+if [ "$REFLECT" == "x" ]; then
+  if [ "$TRANSFORM" == "normal" ]; then
+    TRANSFORM="flipped"
+  else 
+    TRANSFORM="flipped-$TRANSFORM"
+  fi
+fi
 
 #
 # COG Launcher

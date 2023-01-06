@@ -1,0 +1,15 @@
+[Unit]
+Description=Kiosk /boot/kiosk.url
+RequiresMountsFor=/run
+           
+[Service]
+Type=simple
+User=root
+
+# ExecStartPre=/bin/sleep 3
+ExecStart=/usr/local/bin/kiosk
+ExecStop=/bin/pkill Xorg
+Restart=always
+           
+[Install]
+WantedBy=multi-user.target
