@@ -138,6 +138,9 @@ systemctl disable getty@tty1
 sed -i '$ s/tty1/tty3/' /boot/cmdline.txt
 sed -i '$ s/$/ loglevel=1 vt.global_cursor_default=0/' /boot/cmdline.txt      # logo.nologo vt.global_cursor_default=0 consoleblank=0 quiet vga=current
 
+### touch fix (iiyama)
+sed -i '$ s/$/ usbhid.mousepoll=0/' /boot/cmdline.txt
+
 ### spinner splash
 plymouth-set-default-theme -R spinner
 
