@@ -39,6 +39,9 @@ elif [ "$KIOSK_REFLECT" = "xy" ]; then
     xinput set-prop $POINTER_XID 'Coordinate Transformation Matrix' -1 0 1 0 -1 1 0 0 1
 fi
 
+# FORCE 1080p
+xrandr -s 1920x1080
+
 # xrandr -o inverted
 # xinput set-prop 'ELAN Touchscreen' 'Coordinate Transformation Matrix' -1 0 1 0 -1 1 0 0 1
 # https://gist.github.com/mildmojo/48e9025070a2ba40795c
