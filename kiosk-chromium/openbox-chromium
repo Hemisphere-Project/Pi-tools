@@ -56,8 +56,9 @@ sed -i 's/\"exited_cleanly\":false/\"exited_cleanly\":true/; s/\"exit_type\":\"[
 KIOSK_URL=${KIOSK_URL:-"http://hemisphere-project.com"}
 
 chromium \
-        --enable-accelerated-video-decode --enable-gpu-rasterization --enable-unsafe-webgpu --ignore-gpu-blocklist --enable-zero-copy \
-        --no-sandbox --enable-features=CanvasOopRasterization,EnableDrDc \
-        --disable-infobars --disable-web-security --disable-site-isolation-trials --user-data-dir="/tmp" --kiosk "$KIOSK_URL"
+        --enable-accelerated-video-decode --enable-gpu-rasterization --enable-unsafe-webgpu --ignore-gpu-blocklist --enable-zero-copy --enable-features=CanvasOopRasterization,EnableDrDc \
+        --incognito --no-sandbox --test-type --disable-infobars --disable-web-security --disable-site-isolation-trials \
+        --user-data-dir="/tmp" --autoplay-policy=no-user-gesture-required \
+        --kiosk "$KIOSK_URL"
 
 
