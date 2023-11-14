@@ -12,6 +12,8 @@ DIR="$(dirname "$(readlink -f "$0")")"
 URL="https://hemisphere-project.com"
 ROTATE="0"      # 0, 90, 180, 270
 REFLECT="n"     # n, x, y, xy
+WINDOW=0        # 0, 1  
+NOCURSOR=""     # "", -nocursor
 
 #
 # CMD LINE OVERWRITE
@@ -33,6 +35,14 @@ while [[ $# -gt 0 ]]; do
       shift # past argument
       shift # past value
       ;;
+    -d|--devtools)
+      DEV=1
+      shift # past argument
+      ;;
+    -c|--nocursor)
+      NOCURSOR="-nocursor"
+      shift # past argument
+      ;;
     *)
       echo "Unknown argument $1"
       exit 1
@@ -43,6 +53,8 @@ done
 echo $URL
 echo $ROTATE
 echo $REFLECT
+echo $WINDOW
+echo $NOCURSOR
 
 LOADER_URL=file://${DIR}/loader.html#${URL}
 echo $LOADER_URL
@@ -54,5 +66,5 @@ echo " "
 echo ".:: HKiosk ::."
 echo " "
 
-XAUTHORITY=/tmp/.Xauthority KIOSK_URL=$LOADER_URL KIOSK_ROTATE=$ROTATE KIOSK_REFLECT=$REFLECT startx -- -nocursor
+XAUTHORITY=/tmp/.Xauthority KIOSK_URL=$LOADER_URL KIOSK_ROTATE=$ROTATE KIOSK_REFLECT=$REFLECT KIOSK_DEV=$DEV startx -- $NOCURSOR
 logout

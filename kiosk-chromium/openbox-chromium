@@ -55,10 +55,20 @@ sed -i 's/\"exited_cleanly\":false/\"exited_cleanly\":true/; s/\"exit_type\":\"[
 
 KIOSK_URL=${KIOSK_URL:-"http://hemisphere-project.com"}
 
+# Toggle fullscreen kiosk or windowed mode with devtools
+KIOKS_ARG=""
+if [ "$KIOSK_DEV" = "1" ]; then
+    KIOSK_ARG="--auto-open-devtools-for-tabs"
+else
+    KIOSK_ARG="--kiosk"
+fi
+
+
 chromium \
         --enable-accelerated-video-decode --enable-gpu-rasterization --enable-unsafe-webgpu --ignore-gpu-blocklist --enable-zero-copy --enable-features=CanvasOopRasterization,EnableDrDc \
         --incognito --no-sandbox --test-type --disable-infobars --disable-web-security --disable-site-isolation-trials \
-        --user-data-dir="/tmp" --autoplay-policy=no-user-gesture-required \
-        --kiosk "$KIOSK_URL"
+        --user-data-dir="/tmp" --autoplay-policy=no-user-gesture-required  --start-maximized \
+        "$KIOSK_ARG" \
+        "$KIOSK_URL"
 
 
