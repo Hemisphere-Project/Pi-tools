@@ -65,10 +65,40 @@ fi
 
 
 chromium \
-        --enable-accelerated-video-decode --enable-gpu-rasterization --enable-unsafe-webgpu --ignore-gpu-blocklist --enable-zero-copy --enable-features=CanvasOopRasterization,EnableDrDc \
-        --incognito --no-sandbox --test-type --disable-infobars --disable-web-security --disable-site-isolation-trials \
-        --user-data-dir="/tmp" --autoplay-policy=no-user-gesture-required  --start-maximized \
+        --no-first-run \
+        --start-maximized \
+        --window-position=0,0 \
+        --window-size=1920,1080 \
+        --disable \
+        --disable-translate \
+        --disable-infobars \
+        --disable-suggestions-service \
+        --disable-save-password-bubble \
+        --disable-session-crashed-bubble \
+        --disable-features=OptimizationGuideModelDownloading,OptimizationHintsFetching,OptimizationTargetPrediction,OptimizationHints \
+        --deny-permission-prompts \
+        --disable-search-geolocation-disclosure \
+        --disable-web-security \
+        --disable-site-isolation-trials \
+        --simulate-outdated-no-au='Tue, 31 Dec 2099 23:59:59 GMT' \
+        --disable-component-update \
+        --noerrdialogs \
+        --allow-browser-signin=false \
+        --enable-offline-auto-reload \
+        --enable-accelerated-video-decode \
+        --enable-gpu-rasterization \
+        --enable-unsafe-webgpu \
+        --ignore-gpu-blocklist \
+        --enable-zero-copy \
+        --enable-features=CanvasOopRasterization,EnableDrDc \
+        --incognito \
+        --no-sandbox \
+        --test-type \
+        --user-data-dir="/tmp" \
+        --autoplay-policy=no-user-gesture-required  \
+        --enable-logging=stderr --v=1 --log-level=0 \
         "$KIOSK_ARG" \
-        "$KIOSK_URL"
+        "$KIOSK_URL" \
+        > /data/var/chromium/log.txt 2>&1
 
 
