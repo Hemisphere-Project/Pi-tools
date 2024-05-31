@@ -149,74 +149,68 @@ echo "i2c-dev" >> /etc/modules-load.d/raspberrypi.conf
 
 ### version
 ###
-# echo "7.0  --  bootstraped from https://framagit.org/KXKM/rasta-os" > /boot/VERSION
+echo "7.1  --  bootstraped from https://github.com/Hemisphere-Project/Pi-tools/blob/main/bootstrap/bootstrap-raspbian-pi4.sh" > /boot/VERSION
 
-### write config.txt
-### (check if there is no new config.txt settings that you should keep)
-###
-# cp /boot/config.txt /boot/config.txt.origin
-# echo "
-# ##
-# ## RASPBERRY PI settings
-# ##
-# gpu_mem=200
-# dtparam=audio=on
-# audio_pwm_mode=2
-# dtparam=i2c_arm=on
-# dtparam=i2c1=on
-# initramfs initramfs-linux.img followkernel
+## write config.txt
+## (check if there is no new config.txt settings that you should keep)
+##
+cp /boot/firmware/config.txt /boot/firmware/config.txt.origin
+echo "
+#
+# Hardware ovelrays
+#
+dtparam=audio=on        
+dtparam=i2c_arm=on
+#dtparam=i2s=on
+#dtparam=spi=on
 
-# #dwc_otg.speed=1 #legacy USB1.1
+#
+# Global settings
+#
+arm_64bit=1
+arm_boost=1
+force_turbo=1
+camera_auto_detect=1
+display_auto_detect=1
+auto_initramfs=1
 
-# #
-# # Display
-# #
-# # dtoverlay=i2c-gpio,i2c_gpio_sda=15,i2c_gpio_scl=14  ## I2C (small 35 TFT touchscreen ?)
-# dtoverlay=tft35a:rotate=90  # GPIO 3.5TFT screen
-# display_lcd_rotate=2        # Onboard display
+#
+# FastBoot
+#
+boot_delay=0
+#dtoverlay=sdtweak,overclock_50=100  # Overclock the SD Card from 50 to 100MHz / This can only be done with at least a UHS Class 1 card, might be unstable
+disable_splash=1
 
-# #
-# # FastBoot
-# #
-# boot_delay=0
-# #dtoverlay=sdtweak,overclock_50=100  # Overclock the SD Card from 50 to 100MHz / This can only be done with at least a UHS Class 1 card
-# disable_splash=1    # Disable the rainbow splash screen
+#
+# GPU
+#
+# Enable DRM VC4 V3D driver
+dtoverlay=vc4-kms-v3d
+max_framebuffers=2
+disable_fw_kms_setup=1
+disable_overscan=1
 
-# #
-# # Camera module
-# #
-# #start_file=start_x.elf
-# #fixup_file=fixup_x.dat
+# Resolution
+video=HDMI-A-1:1920x1080M@30
 
-# #
-# # HDMI 
-# # See https://www.raspberrypi.org/documentation/configuration/config-txt/video.md
-# #
-# hdmi_force_hotplug=1    # Force HDMI (even without cable)
-# hdmi_drive=2            # 1: DVI mode / 2: HDMI mode
-# hdmi_group=2            # 0: autodetect / 1: CEA (TVs) / 2: DMT (PC Monitor)
-# hdmi_mode=82            # 82: 1080p / 85: 720p / 16: 1024x768 / 51: 1600x1200 / 9: 800x600
+[pi3]
+gpu_mem=200
 
-# #
-# # Pi4
-# #
-# #[pi4]
-# # Enable DRM VC4 V3D driver on top of the dispmanx display stack
-# #dtoverlay=vc4-fkms-v3d
-# #max_framebuffers=2
+[pi4]
+gpu_mem=400
 
+[all]
+#dwc_otg.speed=1 #legacy USB1.1
 
-# " > /boot/config.txt
+" > /boot/firmware/config.txt
 
 
-## MyRepos
+## Pi-tools
 cd /opt
-git clone git://myrepos.branchable.com/ myrepos
-cp /opt/myrepos/mr /usr/local/bin/
-rm -Rf myrepos
+git clone https://github.com/Hemisphere-Project/Pi-tools.git
 
 # Deploy modules
-cd /opt
+cd /opt/Pi-tools
 modules=(
     starter
     splash
@@ -228,30 +222,26 @@ modules=(
     extendfs
     synczinc
     webconf
-    webfiles
-    # bluetooth-pi
+    # webfiles
+    bluetooth-pi
     rtpmidi
     # camera-server
     3615-disco
 )
 for i in "${modules[@]}"; do
-    git clone https://framagit.org/KXKM/rpi-modules/"$i".git
     cd "$i"
-    mr register
     ./install.sh
-    cd /opt/
+    cd /opt/Pi-tools
 done
 
 # HPlayer2
 cd /opt
 git clone https://github.com/Hemisphere-Project/HPlayer2.git
 cd HPlayer2
-mr register
 ./install.sh
 
 # Regie
-# cd /opt
-# git clone https://github.com/KomplexKapharnaum/RPi-Regie.git
-# cd RPi-Regie
-# mr register
+cd /opt
+git clone https://github.com/KomplexKapharnaum/RPi-Regie.git
+cd RPi-Regie
 
