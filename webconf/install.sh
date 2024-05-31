@@ -11,14 +11,14 @@ if [[ $(command -v apt) ]]; then
     DISTRO='xbian'
     echo "Distribution: $DISTRO"
 
-    # apt install python3-liblo liblo7 cython3 python3-eventlet python3-markupsafe -y
+    apt install python3-netifaces python3-flask-socketio python3-eventlet -y
 
 ## ARCH Linux
 elif [[ $(command -v pacman) ]]; then
     DISTRO='arch'
     echo "Distribution: $DISTRO"
 
-    # pacman -S python-pyliblo liblo cython python-eventlet python-markupsafe --noconfirm --needed
+    pacman -S python-netifaces python-flask-socketio python-eventlet --noconfirm --needed
 
 ## Plateform not detected ...
 else
@@ -29,7 +29,7 @@ else
     exit 1
 fi
 
-pip3 install -r requirements.txt
+pip3 install -r requirements.txt --break-system-packages
 ln -sf "$BASEPATH/webconf.service" /etc/systemd/system/
 ln -sf "$BASEPATH/webconf" /usr/local/bin/
 
