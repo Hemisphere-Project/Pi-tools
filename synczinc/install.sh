@@ -32,8 +32,7 @@ else
     exit 1
 fi
 
-
-pip3 install -r "$BASEPATH/requirements.txt"
+pip3 install -r "$BASEPATH/requirements.txt" --break-system-packages
 
 ln -sf "$BASEPATH/synczinc@.service" /etc/systemd/system/
 ln -sf "$BASEPATH/synczinc" /usr/local/bin/

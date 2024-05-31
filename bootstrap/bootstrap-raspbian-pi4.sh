@@ -146,6 +146,9 @@ echo "loadkeys fr" >> /etc/bash.bashrc
 ###
 echo "i2c-dev" >> /etc/modules-load.d/raspberrypi.conf
 
+### oh-my-bash
+###
+bash -c "$(wget https://raw.githubusercontent.com/ohmybash/oh-my-bash/master/tools/install.sh -O -)"
 
 ### version
 ###
