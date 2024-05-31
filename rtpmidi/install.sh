@@ -11,7 +11,7 @@ if [[ $(command -v apt) ]]; then
     DISTRO='xbian'
     echo "Distribution: $DISTRO"
 
-    apt install alsa alsa-utils -y
+    apt install alsa-utils -y
 
 ## ARCH Linux
 elif [[ $(command -v pacman) ]]; then
