@@ -6,7 +6,7 @@ if [[ $(command -v apt) ]]; then
     DISTRO='xbian'
     echo "Distribution: $DISTRO"
 
-    apt install fbida -y
+    apt install fbi -y
 
 ## ARCH Linux
 elif [[ $(command -v pacman) ]]; then
