@@ -11,24 +11,14 @@ if [[ $(command -v apt) ]]; then
     DISTRO='xbian'
     echo "Distribution: $DISTRO"
 
-    apt install python3-eventlet -y
-
-    # RPi / RP64
-    if [[ $(uname -m) = aarch64* || $(uname -m) = armv* ]]; then
-        echo "ARM platform"
-    fi
+    apt install python3-netifaces python3-flask-socketio python3-eventlet -y
 
 ## ARCH Linux
 elif [[ $(command -v pacman) ]]; then
     DISTRO='arch'
     echo "Distribution: $DISTRO"
 
-    pacman -S python-eventlet --noconfirm --needed
-
-    # RPi / RP64
-    if [[ $(uname -m) = armv* ]]; then
-      echo "ARM platform"
-    fi
+    pacman -S python-netifaces python-flask-socketio python-eventlet --noconfirm --needed
 
 ## Plateform not detected ...
 else
@@ -40,7 +30,7 @@ else
 fi
 
 
-pip3 install -r requirements.txt
+pip3 install -r requirements.txt --break-system-packages
 ln -sf "$BASEPATH/3615-disco" /usr/local/bin/
 ln -sf "$BASEPATH/3615-disco.service" /etc/systemd/system/
 systemctl daemon-reload

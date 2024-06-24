@@ -138,10 +138,6 @@ echo "setterm -cursor on" >> /root/.bashrc
 ### touch fix (iiyama)
 sed -i '$ s/rootwait/rootwait usbhid.mousepoll=0/' /boot/firmware/cmdline.txt
 
-### french keyboard
-###
-echo "loadkeys fr" >> /etc/bash.bashrc
-
 ### i2c
 ###
 echo "i2c-dev" >> /etc/modules-load.d/raspberrypi.conf
@@ -244,7 +240,7 @@ cd HPlayer2
 ./install.sh
 
 # Regie
-cd /opt
-git clone https://github.com/KomplexKapharnaum/RPi-Regie.git
-cd RPi-Regie
+# cd /opt
+# git clone https://github.com/KomplexKapharnaum/RPi-Regie.git
+# cd RPi-Regie
 

@@ -37,7 +37,7 @@ if [ "$TMPSIZE" -eq "0" ]; then
    TMPSIZE=128
 fi
 
-# ARCH Raspberry Pi
+# ARCH/RASPBIAN Raspberry Pi
 if (lsblk -o uuid /dev/mmcblk0p3 > /dev/null 2>&1); then
 
     UUID_boot=`lsblk -o uuid /dev/mmcblk0p1 | tail -1`
@@ -66,8 +66,9 @@ if (lsblk -o uuid /dev/mmcblk0p3 > /dev/null 2>&1); then
     /tmp                                            /var/tmp    none    defaults,bind 0 0
     " > /etc/fstab
 
-    sed -i 's/rw/fastboot noswap ro/g' /boot/cmdline.txt
-    sed -i "s/root=[^ ]*/root=UUID=$UUID_root rootfstype=ext4/g" /boot/cmdline.txt
+    sed -i 's/rootwait/rootwait fastboot noswap ro/g' /boot/firmware/cmdline.txt
+    sed -i "s/root=[^ ]*/root=UUID=$UUID_root/g" /boot/firmware/cmdline.txt
+    # sed -i "s/root=[^ ]*/root=UUID=$UUID_root rootfstype=ext4/g" /boot/firmware/cmdline.txt
 
     echo "source $BASEPATH/rorw.bashrc" >> /etc/bash.bashrc
 
