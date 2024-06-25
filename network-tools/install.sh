@@ -30,10 +30,10 @@ FILE=/boot/starter.txt
 if test -f "$FILE"; then
 echo "## [network-tools] various network utilities
 # setnet                        # set NetworkManager profile from /boot/wifi
-# uplink-fwd@wlan1              # set interface as uplink and forward to other interfaces
-# enforce-ping@2.0.0.1/wlan0    # ping <test-ip>, restart <iface> if failed
+# uplink-fwd@wlan0              # set interface as uplink and forward to other interfaces
+# enforce-ping@2.0.0.1/wint     # ping <test-ip>, restart <iface> if failed
 # enforce-ipv4@eth0             # check that ipv4 has been properly set (usefull with late-join antenna)
-# wlan0-off@60                  # turn-off wlan0 after <min> minutes
+# wint-off@60                   # turn-off wint after <min> minutes
 " >> /boot/starter.txt
 fi
 

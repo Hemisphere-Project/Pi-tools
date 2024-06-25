@@ -18,7 +18,7 @@ elif [[ $(command -v pacman) ]]; then
     DISTRO='arch'
     echo "Distribution: $DISTRO"
 
-    pacman -S alsa --noconfirm --needed
+    pacman -S alsa-utils --noconfirm --needed
 
 ## Plateform not detected ...
 else

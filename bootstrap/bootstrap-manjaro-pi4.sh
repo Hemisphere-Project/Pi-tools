@@ -1,9 +1,10 @@
 #!/bin/bash
 
 #
-#   :: HBerry 1 :: aarch64 :: manjaro :: 13/03/2022
+#   :: HBerry 2 :: aarch64 :: manjaro :: 24/06/2024
 #
 
+sudo su root         # =>  root
 
 ### Init Pacman & update
 ###
@@ -16,11 +17,6 @@ pacman -Sc --noconfirm
 ###
 echo "root:rootpi" | chpasswd
 echo "pi:pi" | chpasswd
-
-### Add pi to sudoer
-###
-pacman -S sudo --noconfirm
-echo 'pi ALL=(ALL) NOPASSWD: ALL' | EDITOR='tee -a' visudo
 
 
 ### enable SSH root login
@@ -49,11 +45,11 @@ pacman -S python python-pip python-setuptools python-wheel git wget imagemagick 
 
 ### pikaur
 ###
-cd /opt
-git clone https://aur.archlinux.org/pikaur.git
-chmod 777 -R pikaur/
-cd pikaur
-sudo -u pi makepkg -fsri --noconfirm
+# cd /opt
+# git clone https://aur.archlinux.org/pikaur.git
+# chmod 777 -R pikaur/
+# cd pikaur
+# sudo -u pi makepkg -fsri --noconfirm
 
 ### Pi Kernel
 ###
@@ -62,7 +58,7 @@ sudo -u pi makepkg -fsri --noconfirm
 ### RPi.GPIO
 ###
 # pikaur -S python-raspberry-gpio --noconfirm
-pip install RPi.GPIO
+pip install RPi.GPIO --break-system-packages
 
 
 ### mosquitto server
@@ -71,8 +67,8 @@ pacman -S mosquitto --noconfirm --needed
 
 ### Audio Analog
 ##
-modprobe snd_bcm2835
-echo 'snd_bcm2835'  >>  /etc/modules
+# modprobe snd_bcm2835
+# echo 'snd_bcm2835'  >>  /etc/modules
 
 
 
@@ -101,7 +97,7 @@ rm /etc/resolv.conf
 echo "nameserver 8.8.8.8
 nameserver 1.1.1.1" > /etc/resolv.conf
 
-echo "hberry" > /etc/hostname
+echo "hberry-000" > /etc/hostname
 
 echo " [main]
 plugins=keyfile
@@ -121,12 +117,14 @@ echo '# Disable IPv6
 net.ipv6.conf.all.disable_ipv6 = 1
 net.ipv6.conf.lo.disable_ipv6 = 1
 net.ipv6.conf.eth0.disable_ipv6 = 1
+net.ipv6.conf.wint.disable_ipv6 = 1
 net.ipv6.conf.wlan0.disable_ipv6 = 1
 net.ipv6.conf.wlan1.disable_ipv6 = 1' > /etc/sysctl.d/40-ipv6.conf
 
-### network interface name persistence
+### network interface name persistence (internal will be wint, external will be wlan0, wlan1...)
 ### 
 sed -i '$ s/$/ net.ifnames=0/' /boot/cmdline.txt
+echo 'ACTION=="add", SUBSYSTEM=="net", DRIVERS=="brcmfmac", NAME="wint"' > /etc/udev/rules.d/72-static-name.rules
 
 ### i2c
 ###
@@ -146,24 +144,26 @@ plymouth-set-default-theme -R spinner
 
 ### version
 ###
-echo "7.0  --  bootstraped with https://github.com/Hemisphere-Project/Pi-tools" > /boot/VERSION
+echo "8.0  --  bootstraped with https://github.com/Hemisphere-Project/Pi-tools" > /boot/VERSION
 
 ### write config.txt
 ### (check if there is no new config.txt settings that you should keep)
 ###
 cp /boot/config.txt /boot/config.txt.origin
 echo "
-##
-## HBERRY settings
-##
-initramfs initramfs-linux.img followkernel
+#
+# See /boot/overlays/README for all available options
+#
+
+auto_initramfs=1
 kernel=kernel8.img
-arm_boost=1
 arm_64bit=1
+arm_boost=1
 disable_overscan=1
+dtparam=krnbt=on
 
 #
-# GPU 
+# GPU
 # See https://www.raspberrypi.org/documentation/configuration/config-txt/video.md
 #
 gpu_mem=200
@@ -171,7 +171,7 @@ dtoverlay=vc4-kms-v3d
 max_framebuffers=2
 
 #
-# VIDEO 
+# VIDEO
 # See https://www.raspberrypi.org/documentation/configuration/config-txt/video.md
 #
 hdmi_force_hotplug=1    # Force HDMI (even without cable)
@@ -182,7 +182,7 @@ hdmi_mode=82            # 82: 1080p / 85: 720p / 16: 1024x768 / 51: 1600x1200 / 
 #
 # AUDIO
 #
-dtoverlay=pisound    # necessary to get analog jack working on Pi4 ! 
+dtoverlay=pisound    # necessary to get analog jack working on Pi4 !
 dtparam=audio=on
 audio_pwm_mode=2
 
@@ -216,13 +216,44 @@ disable_poe_fan=1                       # Disable the POE fan
 
 " > /boot/config.txt
 
+## Pi-tools
+cd /opt
+git clone https://github.com/Hemisphere-Project/Pi-tools.git
 
-## MyRepos
+# Deploy modules
+cd /opt/Pi-tools
+modules=(
+    starter
+    #splash
+    hostrename
+    network-tools
+    audioselect
+    usbautomount
+    rorw
+    extendfs
+    synczinc
+    webconf
+    # webfiles
+    bluetooth-pi
+    rtpmidi
+    # camera-server
+    3615-disco
+)
+for i in "${modules[@]}"; do
+    cd "$i"
+    ./install.sh
+    cd /opt/Pi-tools
+done
+
+# HPlayer2
+cd /opt
+git clone https://github.com/Hemisphere-Project/HPlayer2.git
+cd HPlayer2
+./install.sh
+
+# Regie
 # cd /opt
-# git clone git://myrepos.branchable.com/ myrepos
-# cp /opt/myrepos/mr /usr/local/bin/
-# rm -Rf myrepos
-
-
+# git clone https://github.com/KomplexKapharnaum/RPi-Regie.git
+# cd RPi-Regie
 
 
