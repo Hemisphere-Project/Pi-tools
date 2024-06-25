@@ -1,0 +1,8 @@
+[Unit]
+Description=Turn off wlan0 after %i minutes
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/sleep $(/bin/echo "%i" | /bin/cut -d/ -f 1)
+ExecStart=/bin/ip link set $(/bin/echo "%i" | /bin/cut -d/ -f 2) down
+

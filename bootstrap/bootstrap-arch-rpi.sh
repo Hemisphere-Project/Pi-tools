@@ -14,11 +14,11 @@ su root         # =>  root
 ###
 pacman-key --init
 pacman-key --populate archlinuxarm
-rm /etc/ssl/certs/ca-certificates.crt 
+# rm /etc/ssl/certs/ca-certificates.crt 
 pacman -Syu --noconfirm
 pacman-db-upgrade
 pacman -Sc --noconfirm
-ln -sf /etc/ca-certificates/extracted/ca-bundle.trust.crt /etc/ssl/certs/ca-certificates.crt
+# ln -sf /etc/ca-certificates/extracted/ca-bundle.trust.crt /etc/ssl/certs/ca-certificates.crt
 
 
 ### Change passwords
@@ -74,11 +74,6 @@ rm -Rf pikaur
 ###
 pacman -S linux-rpi --noconfirm
 
-### RPi.GPIO
-###
-# pikaur -S python-raspberry-gpio --noconfirm
-pip install RPi.GPIO
-
 
 ### mosquitto server
 ###
@@ -132,12 +127,14 @@ echo '# Disable IPv6
 net.ipv6.conf.all.disable_ipv6 = 1
 net.ipv6.conf.lo.disable_ipv6 = 1
 net.ipv6.conf.eth0.disable_ipv6 = 1
+net.ipv6.conf.wint.disable_ipv6 = 1
 net.ipv6.conf.wlan0.disable_ipv6 = 1
 net.ipv6.conf.wlan1.disable_ipv6 = 1' > /etc/sysctl.d/40-ipv6.conf
 
 ### network interface name persistence
 ### 
 sed -i '$ s/$/ net.ifnames=0/' /boot/cmdline.txt
+echo 'ACTION=="add", SUBSYSTEM=="net", DRIVERS=="brcmfmac", NAME="wint"' > /etc/udev/rules.d/72-static-name.rules
 
 ### french keyboard
 ###
