@@ -26,7 +26,6 @@ ln -sf "$BASEPATH/uplink-fwd" /usr/local/bin/
 ln -sf "$BASEPATH/enforce-ping@.service" /etc/systemd/system/
 ln -sf "$BASEPATH/enforce-ping" /usr/local/bin/
 
-ln -sf "$BASEPATH/wlan0-off@.service" /etc/systemd/system/
 ln -sf "$BASEPATH/iface-off@.service" /etc/systemd/system/
 
 systemctl daemon-reload
