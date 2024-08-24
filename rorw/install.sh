@@ -109,9 +109,9 @@ elif (lsblk -o uuid /dev/mmcblk1p8 > /dev/null 2>&1); then
 #XBIAN x86
 elif (lsblk -o uuid /dev/sda3 > /dev/null 2>&1); then
 
-    UUID_boot=`lsblk -o uuid /dev/sda1 | tail
-    UUID_root=`lsblk -o uuid /dev/sda2 | tail
-    UUID_data=`lsblk -o uuid /dev/sda3 | tail
+    UUID_boot=`lsblk -o uuid /dev/sda1 | tail -1`
+    UUID_root=`lsblk -o uuid /dev/sda2 | tail -1`
+    UUID_data=`lsblk -o uuid /dev/sda3 | tail -1`
 
     mkdir -p /data
     mount -U "$UUID_data" /data
