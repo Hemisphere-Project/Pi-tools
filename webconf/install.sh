@@ -29,7 +29,7 @@ else
     exit 1
 fi
 
-pip3 install -r requirements.txt --break-system-packages
+pipenv install -r requirements.txt
 ln -sf "$BASEPATH/webconf.service" /etc/systemd/system/
 ln -sf "$BASEPATH/webconf" /usr/local/bin/
 

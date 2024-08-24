@@ -1,3 +1,9 @@
 #!/bin/bash
 DIR="$(dirname "$(readlink -f "$0")")"
-python3 -u "$DIR/main.py"
+
+# if pipenv is installed, use it
+if command -v pipenv &> /dev/null; then
+    pipenv run python -u "$DIR/main.py"
+else
+    python3 -u "$DIR/main.py"
+fi

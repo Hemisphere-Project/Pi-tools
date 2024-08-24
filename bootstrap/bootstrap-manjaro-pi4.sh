@@ -26,6 +26,7 @@ sed -i "s/#PermitRootLogin/PermitRootLogin/g" /etc/ssh/sshd_config
 sed -i "s/UsePAM yes/UsePAM no/g" /etc/ssh/sshd_config
 echo "IPQoS 0x00" >> /etc/ssh/ssh_config
 echo "IPQoS 0x00" >> /etc/ssh/sshd_config
+echo "IPQoS cs0 cs0" >> /etc/ssh/sshd_config
 
 ### generate root ssh keys
 ###
@@ -40,7 +41,7 @@ systemctl restart sshd
 
 ### python & tools
 ###
-pacman -S python python-pip python-setuptools python-wheel git wget imagemagick htop base-devel --noconfirm --needed
+pacman -S python python-pip python-setuptools python-wheel git wget imagemagick htop base-devel atop python-pipenv tmux --noconfirm --needed
 
 
 ### pikaur
@@ -58,7 +59,7 @@ pacman -S python python-pip python-setuptools python-wheel git wget imagemagick 
 ### RPi.GPIO
 ###
 # pikaur -S python-raspberry-gpio --noconfirm
-pip install RPi.GPIO --break-system-packages
+# pip install RPi.GPIO --break-system-packages
 
 
 ### mosquitto server
@@ -223,21 +224,21 @@ git clone https://github.com/Hemisphere-Project/Pi-tools.git
 # Deploy modules
 cd /opt/Pi-tools
 modules=(
-    starter
-    #splash
-    hostrename
-    network-tools
-    audioselect
-    usbautomount
-    rorw
-    extendfs
-    synczinc
-    webconf
-    # webfiles
-    bluetooth-pi
-    rtpmidi
+    starter         # ok
+    #splash         # not needed on Manjaro (plymouth splash is already installed)
+    hostrename      # ok
+    network-tools  ## todo
+    audioselect    ## todo
+    usbautomount    # ok
+    rorw           ## todo
+    extendfs        # ok
+    synczinc       ## todo  
+    webconf         ## flask broken.. 
+    # webfiles      ## todo  
+    bluetooth-pi    # todo  
+    rtpmidi         ## todo
     # camera-server
-    3615-disco
+    3615-disco      ## flask broken.. 
 )
 for i in "${modules[@]}"; do
     cd "$i"

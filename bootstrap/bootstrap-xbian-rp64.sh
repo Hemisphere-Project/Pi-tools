@@ -96,6 +96,7 @@ mkdir -p /etc/dnsmasq.d/
 systemctl enable dnsmasq
 systemctl start dnsmasq
 nmcli con add type ethernet con-name eth0-dhcp ifname eth0
+nmcli con add type ethernet con-name enp1s0-dhcp ifname enp1s0
 
 mv /etc/netplan/eth0.yaml /etc/netplan/eth0.yaml.BAK
 cat << EOF > /etc/netplan/01-netcfg.yaml
@@ -112,6 +113,7 @@ systemctl enable NetworkManager.service
 systemctl restart NetworkManager.service
 
 nmcli connection delete eth0
+nmcli connection delete enp1s0
 
 ########## WARNING might need a re-connect to a different IP !
 
