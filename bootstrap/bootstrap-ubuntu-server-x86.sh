@@ -94,13 +94,13 @@ nmcli connection delete enp1s0
 
 # Disable IPv6
 echo '# Disable IPv6
-net.ipv6.conf.all.disable_ipv6 = 1
-net.ipv6.conf.lo.disable_ipv6 = 1
-net.ipv6.conf.enp1s0.disable_ipv6 = 1
-net.ipv6.conf.eth0.disable_ipv6 = 1
-net.ipv6.conf.wint.disable_ipv6 = 1
-net.ipv6.conf.wlan0.disable_ipv6 = 1
-net.ipv6.conf.wlan1.disable_ipv6 = 1' > /etc/sysctl.d/40-ipv6.conf
+net.ipv6.conf.all.disable_ipv6=1
+net.ipv6.conf.lo.disable_ipv6=1
+net.ipv6.conf.enp1s0.disable_ipv6=1
+net.ipv6.conf.eth0.disable_ipv6=1
+net.ipv6.conf.wint.disable_ipv6=1
+net.ipv6.conf.wlan0.disable_ipv6=1
+net.ipv6.conf.wlan1.disable_ipv6=1' > /etc/sysctl.d/40-ipv6.conf
 
 # Network intrface name
 sed -i 's/GRUB_CMDLINE_LINUX=""/GRUB_CMDLINE_LINUX="net.ifnames=0 biosdevname=0"/g' /etc/default/grub
