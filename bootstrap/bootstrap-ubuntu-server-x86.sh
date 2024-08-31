@@ -112,6 +112,7 @@ echo 'ACTION=="add", SUBSYSTEM=="net", DRIVERS=="iwlwifi", NAME="wint"' > /etc/u
 # Plymouth spinner
 apt -y install plymouth-theme-spinner
 sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT=""/GRUB_CMDLINE_LINUX_DEFAULT="quiet splash"/g' /etc/default/grub
+sed -i 's/GRUB_TIMEOUT=0/GRUB_TIMEOUT=0\nGRUB_RECORDFAIL_TIMEOUT=$GRUB_TIMEOUT/g' /etc/default/grub   # prevent grub from displaying once read-only system
 update-grub
 sed -i 's/UseFirmwareBackground=true/UseFirmwareBackground=false/g' /usr/share/plymouth/themes/default.plymouth
 mv /usr/share/plymouth/themes/spinner/watermark.png /usr/share/plymouth/themes/spinner/watermark.png.bak
@@ -128,26 +129,25 @@ git clone https://github.com/Hemisphere-Project/Pi-tools.git
 cd /opt/Pi-tools
 modules=(
     starter         # ok
-    #splash         # not needed on Manjaro (plymouth splash is already installed)
     hostrename      # ok
-    network-tools  ## todo
-    # audioselect    ## not needed -> HPlayer2 will handle it ?
+    network-tools   ## todo
     usbautomount    # ok
-    rorw           ## todo
+    rorw            # ok
     extendfs        # ok
-    synczinc       ## todo  
+    synczinc        ## todo  
     webconf         ## flask broken.. 
     # webfiles      ## todo  
-    # bluetooth-pi    # todo  
     rtpmidi         ## todo
-    # camera-server
-    # 3615-disco      ## flask broken.. 
+    # 3615-disco    ## flask broken.. 
 )
 for i in "${modules[@]}"; do
     cd "$i"
     ./install.sh
     cd /opt/Pi-tools
 done
+
+# MPV
+apt -y install mpv ffmpeg intel-gpu-tools libvdpau-va-gl1 intel-media-va-driver-non-free
 
 # HPlayer2
 cd /opt
