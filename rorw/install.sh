@@ -137,6 +137,9 @@ elif (lsblk -o uuid /dev/sda3 > /dev/null 2>&1); then
     /tmp                                            /var/tmp        none    defaults,bind                                  0 0
     " > /etc/fstab    
 
+    echo "source $BASEPATH/rorw.bashrc" >> /root/.bashrc
+    chmod 777 /tmp
+
 else
     echo ""
     echo "Can't find third partition or detect partition system..."
