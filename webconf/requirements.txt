@@ -1,2 +1,5 @@
 zeroconf==0.31.0
-
+flask
+flask-socketio
+netifaces
+eventlet
