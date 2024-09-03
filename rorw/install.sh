@@ -49,6 +49,7 @@ if (lsblk -o uuid /dev/mmcblk0p3 > /dev/null 2>&1); then
     mkdir -p /data/media
     mkdir -p /data/var/lib/NetworkManager
     mkdir -p /data/var/lib/dnsmasq
+    mkdir -p /data/var/tmp
     mkdir -p /var/lib/dnsmasq
 
     echo "
@@ -84,6 +85,7 @@ elif (lsblk -o uuid /dev/mmcblk1p8 > /dev/null 2>&1); then
     #mkdir -p /data/media
     mkdir -p /data/var/lib/NetworkManager
     mkdir -p /data/var/lib/dnsmasq
+    mkdir -p /data/var/tmp
     mkdir -p /var/lib/dnsmasq
 
     echo "
@@ -118,6 +120,7 @@ elif (lsblk -o uuid /dev/sda3 > /dev/null 2>&1); then
     mkdir -p /data/media
     mkdir -p /data/var/lib/NetworkManager
     mkdir -p /data/var/lib/dnsmasq
+    mkdir -p /data/var/tmp
     mkdir -p /var/lib/dnsmasq
 
     echo "

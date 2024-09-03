@@ -110,11 +110,20 @@ update-grub
 echo 'ACTION=="add", SUBSYSTEM=="net", DRIVERS=="iwlwifi", NAME="wint"' > /etc/udev/rules.d/72-static-name.rules
 
 # Plymouth spinner
-apt -y install plymouth-theme-spinner
-sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT=""/GRUB_CMDLINE_LINUX_DEFAULT="quiet splash"/g' /etc/default/grub
+sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT=""/GRUB_CMDLINE_LINUX_DEFAULT="quiet splash consoleblank=0 loglevel=0 fbcon=nodefer vt.global_cursor_default=0 consoleblank=0 rd.systemd.show_status=auto rd.udev.log-priority=3"/g' /etc/default/grub
 update-grub
+apt -y install plymouth-theme-spinner
 sed -i 's/UseFirmwareBackground=true/UseFirmwareBackground=false/g' /usr/share/plymouth/themes/default.plymouth
 mv /usr/share/plymouth/themes/spinner/watermark.png /usr/share/plymouth/themes/spinner/watermark.png.bak
+
+# Note: putting console=ttyS0 in GRUB_CMDLINE_LINUX= removes all messages but also hides Plymouth spinner
+
+# Black getty
+mkdir -p /etc/systemd/system/getty@tty1.service.d/
+echo '[Service]
+ExecStart=
+ExecStart=-/usr/bin/agetty --skip-login --nonewline --noissue --autologin root --noclear %I $TERM' > /etc/systemd/system/getty@tty1.service.d/skip-prompt.conf
+systemctl daemon-reload
 
 ### version
 ###

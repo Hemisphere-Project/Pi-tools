@@ -11,14 +11,14 @@ if [[ $(command -v apt) ]]; then
     DISTRO='xbian'
     echo "Distribution: $DISTRO"
 
-    apt install lockfile-progs -y
+    apt install lockfile-progs exfatprogs -y
 
 ## ARCH Linux
 elif [[ $(command -v pacman) ]]; then
     DISTRO='arch'
     echo "Distribution: $DISTRO"
 
-    pacman -S lockfile-progs --noconfirm --needed
+    pacman -S lockfile-progs exfatprogs --noconfirm --needed
 
 ## Plateform not detected ...
 else

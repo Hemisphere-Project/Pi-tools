@@ -48,7 +48,7 @@ in_list()
 ENABLED=1
 MOUNTPOINTS="/mnt/usb0 /mnt/usb1 /mnt/usb2 /mnt/usb3 /mnt/usb4 /mnt/usb5 /mnt/usb6 /mnt/usb7"
 MOUNTLAST="/data/usb"
-FILESYSTEMS="vfat ext2 ext3 ext4 hfsplus"
+FILESYSTEMS="vfat ext2 ext3 ext4 hfsplus exfat ntfs"
 MOUNTOPTIONS="sync,noexec,nodev,noatime,nodiratime"
 FS_MOUNTOPTIONS=""
 VERBOSE=no
@@ -86,6 +86,7 @@ if [ "$1" = add ]; then
 
     # Query udev for the expected device information (as we are now running in
     # a service's context and the env variables have been lost)
+	log debug "querying udev for device information of $DEVNAME"
     eval $(udevadm info --query=env --export "$DEVNAME" | grep -v '^[^=]*\..*=')
 
     # Grab device information from device and "divide it"
