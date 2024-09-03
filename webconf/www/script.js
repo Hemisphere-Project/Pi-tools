@@ -36,9 +36,22 @@ $(document).ready(function() {
             $('<div class="col-3 text-right">').html(s[k]['label']).appendTo(r)
 
             var i = null
+            // text
             if (s[k]['field'].startsWith('text')) {
                 i = $('<input type="text" size="' + s[k]['field'].split('|')[1] + '" name="' + k + '" value="' + s[k]['value'] + '">')
-
+            }
+            // select
+            if (s[k]['field'].startsWith('select')) {
+                i = $('<select name="' + k + '">')
+                $.each(s[k]['field'].split('|')[1].split(','), function(k, v) {
+                    // text[value]
+                    let t = v.split('[')
+                    let text = t[0]
+                    let value = t[1].replace(']', '')
+                    console.log(value, text)
+                    let d = $('<option value="' + value + '">').html(text).appendTo(i)
+                })
+                i.val(s[k]['value'])
             }
 
             $('<div class="col-2">').append(i).appendTo(r)
@@ -67,5 +80,10 @@ $(document).ready(function() {
     $('#savereboot_btn').on('click', () => {
         send_update({ 'reboot': true })
     })
+
+    // IFRAME STYLE
+    if (window.location !== window.parent.location) {
+        // $('.navbar').hide()
+    }
 
 });

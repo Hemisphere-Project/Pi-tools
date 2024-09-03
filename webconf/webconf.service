@@ -3,6 +3,7 @@ Description=Web configuration
            
 [Service]
 Type=simple
+WorkingDirectory=/opt/Pi-tools/webconf
 ExecStart=/usr/local/bin/webconf
 ExecStop=/bin/pkill webconf
 Restart=always

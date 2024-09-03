@@ -1,0 +1,8 @@
+[Unit]
+Description=Turn off wint after %i minutes
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/sleep %i
+ExecStart=/bin/ip link set wint down
+

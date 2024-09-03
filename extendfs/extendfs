@@ -20,13 +20,25 @@ if [[ $DRIVE_ID == $LAST_DRIVE_ID ]]
                         disk='mmcblk0'
                 elif (ls /dev/mmcblk1 > /dev/null 2>&1); then
                         disk='mmcblk1'
+		elif (ls /dev/sda > /dev/null 2>&1); then
+			disk='sda'
                 else
-                        echo "ERROR: can't find disk mmcblk0 ok mmcblk1"
+                        echo "ERROR: can't find disk mmcblk0 ok mmcblk1 or sda"
                         exit 1
                 fi
 
                 # get last partition
                 part=$(grep  "${disk}p" /proc/partitions | tail -1 | awk '{print $4}' | xargs)
+		# if no part found retry without p
+                if [ -z "$part" ]; then
+                        part=$(grep  "${disk}" /proc/partitions | tail -1 | awk '{print $4}' | xargs)
+                fi
+		# if still no part found exit
+                if [ -z "$part" ]; then
+                        echo "ERROR: can't find partition"
+                        exit 1
+                fi
+
                 partN=$(echo $part | tail -c 2)  
                 firstSec=$(parted /dev/${disk} 'unit s print' | grep "^ $partN" | awk '{print $2}')
                 firstSec=${firstSec::-1}  
