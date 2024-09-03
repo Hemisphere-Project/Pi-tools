@@ -20,7 +20,7 @@ def get_allip():
     ip = []
     ifaces = ni.interfaces()
     for iface in ifaces:
-        if iface.startswith("e") or iface.startswith("w"):
+        if socket.AF_INET in ni.ifaddresses(iface) and (iface.startswith("e") or iface.startswith("w")):
             ip.append(ni.ifaddresses(iface)[socket.AF_INET][0]['addr'])
     return ip
 
