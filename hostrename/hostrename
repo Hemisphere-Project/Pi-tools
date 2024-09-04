@@ -20,6 +20,10 @@ if [[ $(< /etc/hostname) != "$name" ]]; then
 	    sed -i -E 's/^ssid=.*/ssid='"$name"'/' /boot/wifi/wlan1-hotspot.nmconnection
 	    echo 'updated wlan1-hotspot name'
 	fi
+	if [ -f "/boot/wifi/wint-hotspot.nmconnection" ]; then
+	    sed -i -E 's/^ssid=.*/ssid='"$name"'/' /boot/wifi/wint-hotspot.nmconnection
+	    echo 'updated wint-hotspot name'
+	fi
 	hostnamectl set-hostname "$name"
 	sync
 	systemctl restart avahi-daemon
