@@ -7,34 +7,122 @@
 # cat /proc/asound/pcm
 # cat /proc/asound/cards
 
-touch /tmp/didit
 BASEPATH="$(dirname "$(readlink -f "$0")")"
 
-echo "[audioselect] internal + USB audio routing"
+echo "[audioselect] auto-selecting audio output device or specify: hdmi0/jack/usb/both"
+
+###
+### RENAMING CARDS
+###
+
+#
+# check JACK card device name
+#
+find_jackcard=$(aplay -l | grep bcm2835 -m1)
+if [ "$find_jackcard" ]; then
+    target_jackcard=$(echo $find_jackcard | awk -F ' ' '{print $3}')
+    current_jackcard=$(cat /etc/asound.conf | awk '/pcm.jack/{getline; getline; print}' | awk -F ' ' '{print $2}')
+    if [[ "$current_jackcard" != "$target_jackcard" ]]; then
+        rw
+        sed -i "s/card $current_jackcard/card $target_jackcard/g" /etc/asound.conf
+        sync
+        ro
+        echo "JACK card set to $target_jackcard"
+    fi
+else
+    echo "No JACK audio card found using 'aplay -l'"
+fi
+
+#
+# check HDMI0 card device name
+#
+find_hdmi0card=$(aplay -l | grep hdmi -m1)
+if [ "$find_hdmi0card" ]; then
+    target_hdmi0card=$(echo $find_hdmi0card | awk -F ' ' '{print $3}')
+    current_hdmi0card=$(cat /etc/asound.conf | awk '/pcm.hdmi0/{getline; getline; print}' | awk -F ' ' '{print $2}')
+    if [[ "$current_hdmi0card" != "$target_hdmi0card" ]]; then
+        rw
+        sed -i "s/card $current_hdmi0card/card $target_hdmi0card/g" /etc/asound.conf
+        sync
+        ro
+        echo "HDMI0 card set to $target_hdmi0card"
+    fi
+else
+    echo "No HDMI0 audio card found using 'aplay -l'"
+fi
+
+#
+# check USB card device name
+#
+find_usbcard=$(aplay -l | grep USB -m1)
+if [ "$find_usbcard" ]; then
+    target_usbcard=$(echo $find_usbcard | awk -F ' ' '{print $3}')
+    current_usbcard=$(cat /etc/asound.conf | awk '/pcm.usb/{getline; getline; print}' | awk -F ' ' '{print $2}')
+    if [[ "$current_usbcard" != "$target_usbcard" ]]; then
+        rw
+        sed -i "s/card $current_usbcard/card $target_usbcard/g" /etc/asound.conf
+        sync
+        ro
+        echo "USB card set to $target_usbcard"
+    fi
+else
+    echo "No USB audio card found using 'aplay -l'"
+fi
+
+###
+### CHECKING ROUTE
+###
+
+echo "-----"
 
 # get current route
 current_route=$(cat /etc/asound.conf | grep pcm.\!default -m1 | awk -F ' ' '{print $2}')
 
-# get current usb device
-current_usbcard=$(cat /etc/asound.conf | awk '/pcm.usb/{getline; getline; print}' | awk -F ' ' '{print $2}')
-
-# check if USB is present
-find_usbcard=$(aplay -l | grep USB -m1)
-if [ -z "$find_usbcard" ]; then
-    target_route="internal"
-    target_usbcard="1"
-    echo "No USB audio card found using 'aplay -l'"
-else
-    target_route="both"
-    target_usbcard=$(echo $find_usbcard | awk -F ' ' '{print $2}' | rev | cut -c 2- | rev)
-    echo "USB audio card found as card $target_usbcard"
+# target route is from argument if present or current route otherwise
+target_route=$1
+if [ -z "$target_route" ]; then
+    target_route=$current_route
 fi
+
+# if target route is jack, try both
+if [ "$target_route" = "jack" ]; then
+    target_route="both"
+fi 
+
+# if target route is hdmi0, check if hdmi0 card is available
+if [ "$target_route" = "hdmi0" ]; then
+    if [ -z "$find_hdmi0card" ]; then
+        target_route="both"
+        echo "=> No HDMI0 audio card found, falling back to JACK/USB"
+    else
+        target_route="hdmi0"
+        echo "=> using HDMI0 audio card found as card $target_hdmi0card"
+    fi
+fi
+
+# if target route is usb or both, check if usb card is available
+if [ "$target_route" = "usb" ] || [ "$target_route" = "both" ]; then
+    if [ -z "$find_usbcard" ]; then
+        target_route="jack"
+        echo "=> No USB audio card found, falling back to JACK"
+    elif [ "$target_route" = "both" ]; then
+        echo "=> using BOTH usb and jack audio cards"
+    else
+        echo "=> using USB audio card found as card $target_usbcard"
+    fi
+fi
+
+echo "-----"
+
+# get current route
+current_route=$(cat /etc/asound.conf | grep pcm.\!default -m1 | awk -F ' ' '{print $2}')
 
 # apply new route if necessary
 if [[ "$current_route" != "$target_route" ]]; then
     rw
     # sed -i "s/?USB?/$usb_card/g" /etc/asound.conf
     sed -i "s/pcm.!default $current_route/pcm.!default $target_route/g" /etc/asound.conf
+    sed -i "s/ctl.!default $current_route/ctl.!default $target_route/g" /etc/asound.conf
     sync
     ro
     echo "Audio set to $target_route"
@@ -42,21 +130,12 @@ else
     echo "Audio already set to $target_route"
 fi
 
-# apply new usbcard
-if [[ "$current_usbcard" != "$target_usbcard" ]]; then
-    rw
-    sed -i "s/card $current_usbcard/card $target_usbcard/g" /etc/asound.conf
-    sync
-    ro
-    echo "USB card set to $target_usbcard"
-else
-    echo "USB card already set to $target_usbcard"
-fi
+
+
 
 # Volume and settings
-# amixer -D internal cset numid=3 1       # 0:auto 1:jack 2:hdmi  # handled by HPlayer2
-amixer -D internal cset numid=1 -- 99%
+amixer -D jack cset numid=1 -- 99%
 if [ $target_route = "both" ]; then
-    amixer -D usb set Speaker -- 85%
-    amixer -D usb sset PCM -- 85%
+    amixer -D usb set Speaker -- 95%
+    amixer -D usb sset PCM -- 95%
 fi

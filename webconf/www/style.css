@@ -102,6 +102,7 @@ body {
 
 input[type=text] {
     padding: 0px 3px;
+    margin: -3px 0px 10px 0px;
     width: 100%;
 }
 
@@ -136,4 +137,11 @@ a {
 
 li.active {
     background-color: #DDD;
+}
+
+.title {
+    margin-top: 10px;
+    margin-bottom: 5px;
+    padding: 2px 10px;
+    background-color: #444;
 }

@@ -1,0 +1,16 @@
+[connection]
+id=sync-sta-wlan0
+type=wifi
+autoconnect=true
+autoconnect-priority=0
+
+[wifi]
+hidden=true
+mode=infrastructure
+ssid=synclink-1
+
+[ipv4]
+method=auto
+
+[ipv6]
+method=disabled

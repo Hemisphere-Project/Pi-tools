@@ -1,9 +1,0 @@
-[Unit]
-Description=Route audio to internal and USB if available
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/audioselect
-
-[Install]
-WantedBy=multi-user.target

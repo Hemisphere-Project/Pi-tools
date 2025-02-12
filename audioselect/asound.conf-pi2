@@ -1,35 +1,51 @@
-# copy this file to /etc/asound.conf
-
-
-# define internal
+# Raspberry Pi 2/3
 #
 
-pcm.internal { 
+pcm.jack { 
     type hw
-    card 0
+    card Headphones
 }
 
-ctl.internal {
+ctl.jack {
     type hw
-    card 0
+    card Headphones
 }
 
-# define usb
-#
+pcm.hdmi0 { 
+   type iec958
+   slave {
+      format IEC958_SUBFRAME_LE
+      pcm {
+         type hw
+         card vc4hdmi
+      }
+   }
+}
 
-pcm.usb {
+ctl.hdmi0 {
+   type plug
+	slave.pcm {
+		type softvol
+		slave.pcm {
+			type hw
+         card vc4hdmi
+		}
+		control {
+			name "HDMI Playback Volume"
+			card vc4hdmi
+		}
+	}
+}
+
+pcm.usb { 
     type hw
-    card 1
+    card Device
 }
 
 ctl.usb {
     type hw
-    card 1
+    card Device
 }
-
-# sets the default output device to the "pcm.both" device 
-pcm.!default internal 
-ctl.!default internal
 
 # the fun begins... 
 pcm.both { 
@@ -47,7 +63,7 @@ pcm.both {
                   pcm { 
                      # add the multi plugin - used to merge the 2 sound cards together 
                      type multi; 
-                     slaves.a.pcm "internal" 
+                     slaves.a.pcm "jack" 
                      slaves.b.pcm "usb"
 
                      # this creates a 4 channel stream using 2 inputs from each card 
@@ -78,22 +94,10 @@ pcm.both {
       name Master 
       # the card used to add the software control to - used for accessing the control does not affect the output of that card directly ( ie it changes the output of both devices just shows up in the one selected ) 
       # you also will need to change the device set in the first block (ctl.!default) to the same card to ensure it is chosen as the default 
-      card 1 
+      card Headphones 
    } 
 } 
 
-
-
-
-#
-# LEGACY !
-
-# pcm.!default {
-# 	type hw
-# 	card 1
-# }
-
-# ctl.!default {
-# 	type hw
-# 	card 1
-# }
+# sets the default output device 
+pcm.!default jack
+ctl.!default jack

@@ -1,9 +1,5 @@
 #!/bin/bash
 DIR="$(dirname "$(readlink -f "$0")")"
 
-# if pipenv is installed, use it
-if command -v pipenv &> /dev/null; then
-    pipenv run python -u "$DIR/main.py"
-else
-    python3 -u "$DIR/main.py"
-fi
+# run node server with lite flag
+node --lite-mode $DIR/webconf.js 

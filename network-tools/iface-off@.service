@@ -1,5 +1,5 @@
 [Unit]
-Description=Turn off wlan0 after %i minutes
+Description=Turn off network interface after %i minutes: i.e. 30/wlan0
 
 [Service]
 Type=oneshot

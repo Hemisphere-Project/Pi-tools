@@ -1,12 +1,12 @@
 [connection]
-id=router-eth0
+id=sync-sta-eth0
 type=ethernet
+autoconnect=true
 interface-name=eth0
 
 [ipv4]
-address1=10.0.0.1/16
-address2=2.0.0.1/8
-method=manual
+method=auto
 
 [ipv6]
 method=disabled
+

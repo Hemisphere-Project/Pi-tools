@@ -71,9 +71,22 @@ systemctl restart sshd
 
 ### python & tools
 ###
-apt -y install git wget imagemagick htop python3 pipx libsensors5 build-essential  
+apt -y install git wget imagemagick htop python3 pipx pipenv libsensors5 build-essential  
 pipx install poetry
+pipx ensurepath
+source ~/.bashrc
+poetry completions bash >> ~/.bash_completion
+poetry config virtualenvs.in-project true
 # apt -y install python3 python3-pip python3-setuptools python3-wheel python3-rpi.gpio
+
+## nodejs 
+apt install nodejs npm -y
+npm i -g n
+n lts
+hash -r
+npm install -g npm
+npm install -g pm2 nodemon
+npm update -g
 
 
 ### mosquitto server
@@ -111,15 +124,15 @@ mkdir -p /etc/dnsmasq.d/
 systemctl enable dnsmasq
 systemctl start dnsmasq
 
+### rename internal wifi interface to wint
+echo 'SUBSYSTEM=="net", ACTION=="add", ENV{ID_NET_DRIVER}=="brcmfmac", NAME="wint"' > /etc/udev/rules.d/81-persistent-net.rules
+udevadm control --reload
+udevadm trigger
 
 ### disable ipv6
 ###
 echo '# Disable IPv6
-net.ipv6.conf.all.disable_ipv6 = 1
-net.ipv6.conf.lo.disable_ipv6 = 1
-net.ipv6.conf.eth0.disable_ipv6 = 1
-net.ipv6.conf.wlan0.disable_ipv6 = 1
-net.ipv6.conf.wlan1.disable_ipv6 = 1' > /etc/sysctl.d/40-ipv6.conf
+net.ipv6.conf.all.disable_ipv6 = 1' > /etc/sysctl.d/40-ipv6.conf
 
 ### network interface name persistence
 ### 
@@ -211,6 +224,15 @@ video=HDMI-A-1:1920x1080M@30
 
 " > /boot/firmware/config.txt
 
+# Clean up
+rm /var/lib/man-db/auto-update
+systemctl mask apt-daily-upgrade
+systemctl mask apt-daily
+systemctl disable apt-daily-upgrade.timer
+systemctl disable apt-daily.timer
+apt remove --purge modemmanager -y
+apt autoremove --purge -y
+
 
 ## Pi-tools
 cd /opt
@@ -222,18 +244,18 @@ modules=(
     starter
     splash
     hostrename
-    network-tools
+    network-tools 
     audioselect
-    usbautomount
+    bluetooth-pi
+    webconf
+    webfiles
+    3615-disco
     rorw
+    usbautomount
     extendfs
     synczinc
-    webconf
-    # webfiles
-    bluetooth-pi
-    rtpmidi
+    # rtpmidi
     # camera-server
-    3615-disco
 )
 for i in "${modules[@]}"; do
     cd "$i"

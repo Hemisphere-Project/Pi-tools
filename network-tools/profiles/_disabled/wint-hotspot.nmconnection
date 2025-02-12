@@ -1,8 +1,8 @@
 [connection]
-id=hotspot-wlan0
+id=hotspot-wint
 type=wifi
 autoconnect=true
-interface-name=wlan0
+interface-name=wint
 
 [wifi]
 hidden=false

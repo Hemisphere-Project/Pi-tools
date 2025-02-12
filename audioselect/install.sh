@@ -37,6 +37,7 @@ if [[ $(uname -m) = aarch64 ]]; then
 fi
 
 ln -sf "$BASEPATH/audioselect.service" /etc/systemd/system/
+ln -sf "$BASEPATH/audioselect@.service" /etc/systemd/system/
 ln -sf "$BASEPATH/audioselect" /usr/local/bin/
 ln -sf "$BASEPATH/70-audioselect.rules" /etc/udev/rules.d/
 
@@ -45,8 +46,9 @@ systemctl daemon-reload
 #systemctl enable audioselect
 FILE=/boot/starter.txt
 if test -f "$FILE"; then
-echo "## [audioselect] automated audio output on analog + usb (hotplug)
-# audioselect
+echo "## [audioselect] specify audio output device (hdmi0, jack, usb, both)
+## if interface missing, falls back to jack. If jack, try both JACK/USB (hotplug support)
+# audioselect@both
 " >> /boot/starter.txt
 fi
 

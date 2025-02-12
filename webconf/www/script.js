@@ -32,30 +32,41 @@ $(document).ready(function() {
         $('#settings').empty()
 
         for (var k in s) {
-            let r = $('<div class="row">').appendTo('#settings')
-            $('<div class="col-3 text-right">').html(s[k]['label']).appendTo(r)
 
-            var i = null
-            // text
-            if (s[k]['field'].startsWith('text')) {
-                i = $('<input type="text" size="' + s[k]['field'].split('|')[1] + '" name="' + k + '" value="' + s[k]['value'] + '">')
-            }
-            // select
-            if (s[k]['field'].startsWith('select')) {
-                i = $('<select name="' + k + '">')
-                $.each(s[k]['field'].split('|')[1].split(','), function(k, v) {
-                    // text[value]
-                    let t = v.split('[')
-                    let text = t[0]
-                    let value = t[1].replace(']', '')
-                    console.log(value, text)
-                    let d = $('<option value="' + value + '">').html(text).appendTo(i)
-                })
-                i.val(s[k]['value'])
-            }
+            // title section
+            let r = $('<div class="row section">').appendTo('#settings')
+            $('<div class="col-3">').appendTo(r)
+            $('<div class="col-6">').html('<div class="title">' + s[k]['title'] + '</div>').appendTo(r)
 
-            $('<div class="col-2">').append(i).appendTo(r)
-            $('<div class="col">').html(s[k]['legend']).appendTo(r)
+            // elements
+            for (var j in s[k]['elements']) {
+                var e = s[k]['elements'][j]
+
+                let r = $('<div class="row">').appendTo('#settings').append('<div class="col-3">')
+                $('<div class="col-2 text-right">').html(e['label']).appendTo(r)
+
+                var i = null
+                // text
+                if (e['field'].startsWith('text')) {
+                    i = $('<input type="text" size="' + e['field'].split('|')[1] + '" name="' + k+'.'+j + '" value="' + e['value'] + '">')
+                }
+                // select
+                if (e['field'].startsWith('select')) {
+                    i = $('<select name="' + k+'.'+j + '">')
+                    $.each(e['field'].split('|')[1].split(','), function(k, v) {
+                        // text[value]
+                        let t = v.split('[')
+                        let text = t[0]
+                        let value = t[1].replace(']', '')
+                        // console.log(value, text)
+                        $('<option value="' + value + '">').html(text).appendTo(i)
+                    })
+                    i.val(e['value'])
+                }
+
+                $('<div class="col-2">').append(i).appendTo(r)
+                $('<div class="col">').html(e['legend']).appendTo(r)
+            }
         }
     })
 
@@ -66,6 +77,7 @@ $(document).ready(function() {
     function send_update(values) {
         if (values === undefined) values = {}
         $.each($('#settings').serializeArray(), function(i, field) {
+            console.log(field)
             values[field.name] = field.value;
         });
         socket.emit('update', values);

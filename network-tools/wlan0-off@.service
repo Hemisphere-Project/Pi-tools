@@ -1,8 +1,0 @@
-[Unit]
-Description=Turn off wlan0 after %i minutes
-
-[Service]
-Type=oneshot
-ExecStartPre=/bin/sleep %i
-ExecStart=/bin/ip link set wlan0 down
-

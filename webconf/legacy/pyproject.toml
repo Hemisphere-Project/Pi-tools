@@ -1,0 +1,22 @@
+[project]
+name = "webconf"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "Your Name",email = "you@example.com"}
+]
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "zeroconf (==0.31.0)",
+    "flask (>=3.1.0,<4.0.0)",
+    "flask-socketio (>=5.5.1,<6.0.0)",
+    "netifaces (>=0.11.0,<0.12.0)",
+    "eventlet (>=0.39.0,<0.40.0)",
+    "psutil (>=6.1.1,<7.0.0)"
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"

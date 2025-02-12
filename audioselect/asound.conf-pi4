@@ -6,16 +6,13 @@
 
 pcm.jack { 
     type hw
-    card 0
+    card Headphones
 }
 
 ctl.jack {
     type hw
-    card 0
+    card Headphones
 }
-
-# define hdmi0
-#
 
 pcm.hdmi0 { 
    type iec958
@@ -43,9 +40,6 @@ ctl.hdmi0 {
 	}
 }
 
-# define hdmi1
-#
-
 pcm.hdmi1 { 
    type iec958
    slave {
@@ -72,25 +66,15 @@ ctl.hdmi1 {
 	}
 }
 
-# define usb TODO !!
-#
+pcm.usb { 
+    type hw
+    card Device
+}
 
-# pcm.usb {
-#     type hw
-#     card 1
-# }
-
-# ctl.usb {
-#     type hw
-#     card 1
-# }
-
-
-#
-# SELECT OUTPUT ( jack / hdmi0 / hdmi1 / usb (broken) / both (broken) )
-#
-pcm.!default jack
-ctl.!default jack
+ctl.usb {
+    type hw
+    card Device
+}
 
 # the fun begins... 
 pcm.both { 
@@ -108,7 +92,7 @@ pcm.both {
                   pcm { 
                      # add the multi plugin - used to merge the 2 sound cards together 
                      type multi; 
-                     slaves.a.pcm "internal" 
+                     slaves.a.pcm "jack" 
                      slaves.b.pcm "usb"
 
                      # this creates a 4 channel stream using 2 inputs from each card 
@@ -139,6 +123,10 @@ pcm.both {
       name Master 
       # the card used to add the software control to - used for accessing the control does not affect the output of that card directly ( ie it changes the output of both devices just shows up in the one selected ) 
       # you also will need to change the device set in the first block (ctl.!default) to the same card to ensure it is chosen as the default 
-      card 1 
+      card Headphones 
    } 
 } 
+
+# sets the default output device 
+pcm.!default jack
+ctl.!default jack
