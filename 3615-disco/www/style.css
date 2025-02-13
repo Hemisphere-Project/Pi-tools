@@ -9,22 +9,27 @@ body {
     color: #DDD;
 }
 
+.navbar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    z-index: 100;
+    /* border-bottom: 3px solid green; */
+}
+
 .main {
-    height: calc(100% - 140px);
-    height: -o-calc(100% - 140px);
-    /* opera */
-    height: -webkit-calc(100% - 140px);
-    /* google, safari */
-    height: -moz-calc(100% - 140px);
-    /* firefox */
+    margin-top: 71px;
+    min-height: calc(100% - 71px - 40px);
 }
 
 .footer {
-    position: absolute;
-    bottom: 0;
+    /* position: absolute; */
+    /* bottom: 0; */
+    margin-top: 10px;
     width: 100%;
-    height: 50px;
-    line-height: 50px;
+    height: 30px;
+    line-height: 30px;
     background-color: rgb(41, 41, 41);
 }
 
@@ -123,6 +128,36 @@ a {
     color: #222;
 }
 
-li.active {
+/* li.active {
     background-color: #DDD;
+} */
+
+.badge {
+    cursor: pointer;
 }
+
+.ip {
+    cursor: pointer;
+    background-color: #222;
+    color: #DDD;
+    padding: 2px;
+    margin: 2px;
+}
+
+.title {
+    cursor: pointer;
+    color: #DDD;
+}
+
+.title:hover {
+    text-decoration: underline;
+}
+
+#devices .list-group-item {
+    background-color: #444;
+}
+
+#devices .list-group-item.not-interesting {
+    display: none;
+}
+

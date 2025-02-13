@@ -26,26 +26,29 @@
 
 <body>
     <nav class="navbar navbar-dark bg-dark mb-3">
-        <span class="navbar-brand mb-0 mr-0 h1">3615 Discovery</span>
+        <span class="navbar-brand mb-0 mr-0 h1">
+            3615 Discovery &nbsp;
+            <button id="allBtn" class="btn btn-outline-light" type="button">See All Devices</button>
+        </span>
         <span id="deviceName"></span>
         <span id="link-connected">connected</span>
         <span id="link-disconnected">disconnected</span>
     </nav>
 
     <div class="row panel main">
-        <div class="col-3">
+        <div class="col-2">
             <!-- <h5>Devices</h5> -->
             <ul class="list-group" id="devices">
             </ul>
         </div>
-        <div class="col-9">
+        <div class="col-10">
             <iframe id="mainframe" name="mainframe" style="width:100%;height:100%;"></iframe>
         </div>
     </div>
 
     <footer class="footer">
         <div class="container">
-            <a href="https://github.com/Hemisphere-Project/WebDir" target="_blank">sources</a><br />
+            <a href="https://github.com/Hemisphere-Project/Pi-tools" target="_blank">sources</a><br />
         </div>
         </div>
 </body>

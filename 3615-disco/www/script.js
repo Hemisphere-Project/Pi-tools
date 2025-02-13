@@ -1,20 +1,30 @@
 $(document).ready(function() {
 
+    const interestingType = ['http', 'https', 'osc', 'mqtt', 'mqttc', 'smb', 'http-api', 'apple-midi']
+    var showNotInteresting = false
+
+    const unsecuredCopyToClipboard = (text) => { const textArea = document.createElement("textarea"); textArea.value=text; document.body.appendChild(textArea); textArea.focus();textArea.select(); try{document.execCommand('copy')}catch(err){console.error('Unable to copy to clipboard',err)}document.body.removeChild(textArea)};
+
     var me = ""
 
     function Service(info, parent) {
         this.info = info
         this.parent = parent
 
-        serviceShort = info.service_name.split(' ').slice(0, 2).join(' ')
+        if (this.info.type.startsWith("http") || this.info.protocol.startsWith("http")) {
+            serviceShort = info.name
+            if (serviceShort == this.info.host.split('.')[0]) 
+                serviceShort = "WebUI ("+this.info.port+")"
+        }
+        else serviceShort = this.info.type+'://'
 
         target = ""
-        hosturl = info.host.toLowerCase() + ".local"
+        hosturl = info.host.toLowerCase()
 
         console.log(hosturl, window.location.hostname)
 
         // HTTP service
-        if (info.type.startsWith("_http")) {
+        if (info.type.startsWith("http") || this.info.protocol.startsWith("http")) {
             if (serviceShort == "3615") target = "_self" // 3615 : go to own page
             else if (serviceShort == "Regie") target = "_blank" // Regie: easier in own page
             else if (serviceShort == "SyncZinc") target = "_blank" // Syncthing do not accept CORS
@@ -40,48 +50,60 @@ $(document).ready(function() {
             else this.badge.addClass("badge-success");
         }
 
-        // not clickable
+        // copy on click
         else {
             this.badge = $('<span/>', {
                 text: serviceShort,
                 class: "badge badge-secondary badge-pill mr-1"
-            });
-            this.badge.appendTo(parent)
+            }).appendTo(parent)
+            this.badge.on('click', () => {
+                let link = this.info.type+'://' + this.info.host
+                if (this.info.port && this.info.port != 80 && this.info.port != 443) link += ':' + this.info.port
+                unsecuredCopyToClipboard(link)
+                return false
+            })
         }
     }
 
-    function Device(name, info) {
-        var that = this;
-        this.name = name
-        this.host = name.toLowerCase() + ".local"
+    function Device(info) {
+        console.log("new device", info)
+        this.info = info
+        this.name = info.host.split('.')[0]
+        this.ip = []
         this.services = []
+        this.interesting = false
 
         this.button = $('<li/>', { class: "list-group-item list-group-item-action py-2 px-2 mb-1" });
-        this.button.append('<h5 class="mb-1">' + name + '</h5>')
+        $('<h5 class="title mb-1">' + this.name + '</h5>').appendTo(this.button)
+                        .on('click', () => {
+                            location.assign('http://' + this.info.host);
+                            console.log(this.info.host)
+                        })
 
         this.badges = $('<p/>', { class: "mb-1" });
         this.badges.appendTo(this.button)
 
-        this.button.append('<small>' + info.ip.join(' - ') + '</small>')
         this.button.appendTo('#devices')
-
-        this.button.on('click', () => {
-            location.assign('http://' + that.host);
-        })
 
         console.log(this.name, me)
 
-        if (this.name == me)
-            this.button.addClass('active')
+        if (this.name == me) this.button.addClass('active')
 
-        var isMaster = false
-        for (const i of info.ip)
-            if (i == window.location.hostname) isMaster = true;
-        if (!isMaster) this.button.addClass("list-group-item-secondary")
+        // var isMaster = false
+        // for (const i in info.ip)
+        //     if (i == window.location.hostname) isMaster = true;
+        // if (!isMaster) this.button.addClass("list-group-item-secondary")
 
-        this.addService = function(service) {
+        this.addService = function(service) {  
+            for (var s of this.services)
+                if (s.info.fqdn == service.fqdn) return
             this.services.push(new Service(service, this.badges))
-            console.log("add service", service)
+            // console.log("add service", service) 
+            if (interestingType.includes(service.type)) this.interesting = true
+            if (interestingType.includes(service.protocol)) this.interesting = true
+            
+            if (this.interesting) this.button.addClass("interesting")
+            else this.button.addClass("not-interesting")
         }
 
         this.removeService = function(name) {
@@ -89,28 +111,35 @@ $(document).ready(function() {
                 if (this.services[i].info.fullname == name) {
                     this.services[i].badge.remove()
                     this.services.splice(i, 1);
-                    console.log("remove service", name)
+                    // console.log("remove service", name)
                 }
         }
 
-        // Add badges
-        Object.keys(info.services).sort().forEach(function(servname) {
-            that.addService(info.services[servname])
-        });
+        this.addIP = function(ip) {
+            if (!Array.isArray(ip)) ip = [ip]
+            for (var i in ip) {
+                if (this.ip.includes(ip[i])) return
+                this.ip.push(ip[i])
+                $('<small class="ip">' + ip[i] + '</small>').appendTo(this.button)
+                    .on('click', (e) => {
+                        // e.stopPropagation()
+                        unsecuredCopyToClipboard(e.target.innerText)
+                    })
+            }
+        }
+
     }
 
     var devices = []
-
-    function getDevice(hostname) {
+ 
+    function getDevice(info) {
         for (var d of devices)
-            if (d.name == hostname) return d;
-        return Device("dummy")
+            if (d.info.host.toLowerCase() == info.host.toLowerCase()) return d;
+        return null
     }
 
 
     var socket = io.connect(location.protocol + '//' + document.domain + ':' + location.port);
-    var last_status;
-    var last_status_str;
 
     function setBtnClass(sel, style, active) {
         if (active) {
@@ -127,6 +156,7 @@ $(document).ready(function() {
     */
 
     socket.on('connect', function() {
+        $('#devices').html('')
         console.log('SocketIO connected :)')
         $('#link-connected').show();
         $('#link-disconnected').hide();
@@ -142,41 +172,57 @@ $(document).ready(function() {
         console.log('Device name:', name)
         $('#deviceName').html(name);
         me = name
+
+        // set button class
+        for (var d of devices) {
+            if (d.name == me) d.button.addClass('active')
+            else d.button.removeClass('active')
+        } 
     });
 
-    socket.on('init', (state) => {
+    socket.on('device-update', (state) => {
         state = JSON.parse(state)
-        console.log('init:', state)
+        // console.log('device-update:', state)
+        var dev = getDevice(state)
 
-        $("#devices").empty()
-        for (var host in state) {
-            var dev = new Device(host, state[host])
+        // create device if not exists
+        if (!dev) {
+            dev = new Device(state)
             devices.push(dev)
+
+            // reorganize devices by alphabetical order
+            devices.sort((a, b) => { return a.name.localeCompare(b.name) })
+            $('#devices').html('')
+            for (var d of devices) d.button.appendTo('#devices')
+
+            // show / hide interesting devices
+            if (showNotInteresting && !dev.interesting) dev.button.show()
         }
-    })
 
-    socket.on('device-new', (state) => {
-        state = JSON.parse(state)
-        console.log('device-new:', state)
+        // add IP
+        dev.addIP(state.ip)
 
-        var dev = new Device(state['host'], state)
-        devices.push(dev)
-    })
-
-    socket.on('service-add', (state) => {
-        state = JSON.parse(state)
-        console.log('service-add:', state)
-        getDevice(state['host']).addService(state['service'])
-    })
-
-    socket.on('service-remove', (state) => {
-        state = JSON.parse(state)
-        console.log('service-remove:', state)
-        getDevice(state['host']).removeService(state['service'])
+        // add services
+        for (var s in state.services)
+            dev.addService(state.services[s])
+                
     })
 
     socket.on('status', function(msg) {
         console.log('status:', msg)
     });
+
+
+    $('#allBtn').on('click', () => {
+        if (showNotInteresting) {
+            $('#allBtn').removeClass('active')
+            showNotInteresting = false
+            $('#devices').find('.not-interesting').hide()
+        } else {
+            $('#allBtn').addClass('active')
+            showNotInteresting = true
+            $('#devices').find('.not-interesting').show()
+        }
+    })
 
 });

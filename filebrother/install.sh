@@ -13,7 +13,7 @@ ln -sf "$BASEPATH/filebrowser" /usr/local/bin/
 
 systemctl daemon-reload
 
-# mkdir -p /data/var/webfiles
+mkdir -p /data/var/filebrother
 # cp -r "$BASEPATH/www" /data/var/webfiles
 
 FILE=/boot/starter.txt

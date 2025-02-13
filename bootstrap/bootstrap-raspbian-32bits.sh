@@ -248,10 +248,10 @@ modules=(
     audioselect
     bluetooth-pi
     webconf
-    webfiles
     3615-disco
     rorw
     usbautomount
+    filebrother
     extendfs
     synczinc
     # rtpmidi

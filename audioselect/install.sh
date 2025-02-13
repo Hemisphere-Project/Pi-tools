@@ -36,7 +36,6 @@ if [[ $(uname -m) = aarch64 ]]; then
     cp "$BASEPATH/asound.conf-pi4" /etc/asound.conf
 fi
 
-ln -sf "$BASEPATH/audioselect.service" /etc/systemd/system/
 ln -sf "$BASEPATH/audioselect@.service" /etc/systemd/system/
 ln -sf "$BASEPATH/audioselect" /usr/local/bin/
 ln -sf "$BASEPATH/70-audioselect.rules" /etc/udev/rules.d/

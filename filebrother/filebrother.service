@@ -3,8 +3,8 @@ Description=Web Files Manager
            
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/webfiles
-ExecStop=/usr/bin/pkill webfiles
+ExecStart=/usr/local/bin/filebrother
+ExecStop=/usr/bin/pkill filebrother
 Restart=always
            
 [Install]
