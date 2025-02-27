@@ -11,35 +11,33 @@ systemd = bus.get(".systemd1")
 # for unit in systemd.ListUnits():
 #     print(unit)
 
-engageRW = False
+# engageRW = False
 
-# Sync from /data/sync
-SRCFILE = "/data/sync/starter.txt"
-DESTFILE = "/boot/starter.txt"
-if os.path.exists(SRCFILE) and not filecmp.cmp(SRCFILE, DESTFILE, shallow=False):
-    if not engageRW:
-        engageRW = True
-        os.system('rw')
-    copyfile(SRCFILE, DESTFILE)
-    print("[starter] Syncing from "+SRCFILE)
+# # Sync from /data/sync
+# SRCFILE = "/data/sync/starter.txt"
+# DESTFILE = "/boot/starter.txt"
+# if os.path.exists(SRCFILE) and not filecmp.cmp(SRCFILE, DESTFILE, shallow=False):
+#     if not engageRW:
+#         engageRW = True
+#         os.system('rw')
+#     copyfile(SRCFILE, DESTFILE)
+#     print("[starter] Syncing from "+SRCFILE)
 
-# Sync from USB
-SRCFILE = "/data/usb/starter.txt"
-DESTFILE = "/boot/starter.txt"
-if os.path.exists(SRCFILE) and not filecmp.cmp(SRCFILE, DESTFILE, shallow=False):
-    if not engageRW:
-        engageRW = True
-        os.system('rw')
-    copyfile(SRCFILE, DESTFILE)
-    print("[starter] Syncing from "+SRCFILE)
+# # Sync from USB
+# SRCFILE = "/data/usb/starter.txt"
+# DESTFILE = "/boot/starter.txt"
+# if os.path.exists(SRCFILE) and not filecmp.cmp(SRCFILE, DESTFILE, shallow=False):
+#     if not engageRW:
+#         engageRW = True
+#         os.system('rw')
+#     copyfile(SRCFILE, DESTFILE)
+#     print("[starter] Syncing from "+SRCFILE)
 
-# Dirty
-if engageRW:
-    # RO
-    os.system('ro')
-    engageRW = False
-
-
+# # Dirty
+# if engageRW:
+#     # RO
+#     os.system('ro')
+#     engageRW = False
 
 services = []
 with open("/boot/starter.txt") as f:
@@ -56,5 +54,8 @@ if len(services) == 0:
 for s in services:
     s = s.rstrip()
     print ("Starting service "+s)
+    # monitor start time
+    t0 = os.times()[4]
     systemd.StartUnit(s+".service", "fail")
-
+    t1 = os.times()[4]
+    print ("Service "+s+" started in "+str(t1-t0)+" seconds")

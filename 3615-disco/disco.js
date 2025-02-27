@@ -5,6 +5,12 @@ import { Bonjour } from 'bonjour-service';
 import os from 'os';
 import { execSync } from 'child_process';
 
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
 const bonjour = new Bonjour();
 
 const config = { port: 80 };
@@ -118,10 +124,12 @@ class ZeroDisco {
 
 const zero = new ZeroDisco();
 
-app.use(express.static('www'));
+app.use(express.static(__dirname + '/www'));
 app.get('/', (req, res) => {
     res.sendFile(__dirname + '/www/index.html');
 });
+
+// serve static files from /res
 
 io.on('connection', (socket) => {
     socket.emit('name', os.hostname());

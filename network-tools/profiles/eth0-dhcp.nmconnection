@@ -1,5 +1,5 @@
 [connection]
-id=dhcp-eth0
+id=eth0-dhcp
 type=ethernet
 interface-name=eth0
 
