@@ -21,18 +21,10 @@ const io = new SocketIoServer(server);
 
 
 function getAllIP() {
-    const ip = [];
-    const ifaces = os.networkInterfaces();
-    for (const iface in ifaces) {
-        if (iface.startsWith('e') || iface.startsWith('w')) {
-            for (const alias of ifaces[iface]) {
-                if (alias.family === 'IPv4' && !alias.internal) {
-                    ip.push(alias.address);
-                }
-            }
-        }
-    }
-    return ip;
+    return Object.values(os.networkInterfaces())
+        .flat()
+        .filter(iface => iface.family === 'IPv4' && !iface.internal && (iface.address.startsWith('e') || iface.address.startsWith('w')))
+        .map(iface => iface.address);
 }
 
 

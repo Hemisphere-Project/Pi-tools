@@ -27,6 +27,7 @@ systemctl start haveged
 # read only
 #
 
+# Detect RAM size to set tmpfs size
 RAMSIZE=$(grep MemTotal /proc/meminfo | awk -F ' ' '{print $2}')
 if [ -z "$RAMSIZE" ]
 then
@@ -46,6 +47,7 @@ if (lsblk -o uuid /dev/mmcblk0p3 > /dev/null 2>&1); then
 
     mkdir -p /data
     mount -U "$UUID_data" /data
+    rm -Rf /data/lost+found
     mkdir -p /data/media
     mkdir -p /data/var/lib/NetworkManager
     mkdir -p /data/var/lib/dnsmasq
@@ -82,6 +84,7 @@ elif (lsblk -o uuid /dev/mmcblk1p8 > /dev/null 2>&1); then
 
     mkdir -p /data
     mount -U "$UUID_data" /data
+    rm -Rf /data/lost+found
     #mkdir -p /data/media
     mkdir -p /data/var/lib/NetworkManager
     mkdir -p /data/var/lib/dnsmasq
@@ -117,6 +120,7 @@ elif (lsblk -o uuid /dev/sda3 > /dev/null 2>&1); then
 
     mkdir -p /data
     mount -U "$UUID_data" /data
+    rm -Rf /data/lost+found
     mkdir -p /data/media
     mkdir -p /data/var/lib/NetworkManager
     mkdir -p /data/var/lib/dnsmasq
@@ -150,7 +154,6 @@ else
     echo ""
     exit 1
 fi
-
 
 #
 # fake-hwclock

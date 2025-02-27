@@ -8,13 +8,12 @@ cd "$BASEPATH"
 # install filebrowser
 curl -fsSL https://raw.githubusercontent.com/filebrowser/get/master/get.sh | bash
 
-ln -sf "$BASEPATH/filebrowser.service" /etc/systemd/system/
-ln -sf "$BASEPATH/filebrowser" /usr/local/bin/
+ln -sf "$BASEPATH/filebrother.service" /etc/systemd/system/
+ln -sf "$BASEPATH/filebrother" /usr/local/bin/
 
 systemctl daemon-reload
 
 mkdir -p /data/var/filebrother
-# cp -r "$BASEPATH/www" /data/var/webfiles
 
 FILE=/boot/starter.txt
 if test -f "$FILE"; then
