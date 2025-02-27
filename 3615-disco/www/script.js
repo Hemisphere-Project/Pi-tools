@@ -3,7 +3,7 @@ $(document).ready(function() {
     const interestingType = ['http', 'https', 'osc', 'mqtt', 'mqttc', 'smb', 'http-api', 'apple-midi']
     var showNotInteresting = false
 
-    const unsecuredCopyToClipboard = (text) => { const textArea = document.createElement("textarea"); textArea.value=text; document.body.appendChild(textArea); textArea.focus();textArea.select(); try{document.execCommand('copy')}catch(err){console.error('Unable to copy to clipboard',err)}document.body.removeChild(textArea)};
+    const unsecuredCopyToClipboard = (text) => { const textArea = document.createElement("textarea"); textArea.value=text; document.body.appendChild(textArea); textArea.focus();textArea.select(); try{document.execCommand('copy'); console.log('copied')}catch(err){console.error('Unable to copy to clipboard',err)}document.body.removeChild(textArea)};
 
     var me = ""
 
@@ -42,9 +42,10 @@ $(document).ready(function() {
                     class: "badge badge-pill mr-1",
                     target: target
                 }).appendTo(parent)
-                .on('click', (e) => {
-                    e.stopPropagation()
-                })
+                // .on('click', (e) => {
+                //     console.log("click", e)
+                //     // e.stopPropagation()
+                // })
 
             if (target == "_blank") this.badge.addClass("badge-warning");
             else this.badge.addClass("badge-success");
@@ -56,12 +57,13 @@ $(document).ready(function() {
                 text: serviceShort,
                 class: "badge badge-secondary badge-pill mr-1"
             }).appendTo(parent)
-            this.badge.on('click', () => {
-                let link = this.info.type+'://' + this.info.host
-                if (this.info.port && this.info.port != 80 && this.info.port != 443) link += ':' + this.info.port
-                unsecuredCopyToClipboard(link)
-                return false
-            })
+            // this.badge.on('click', () => {
+            //     let link = this.info.type+'://' + this.info.host
+            //     if (this.info.port && this.info.port != 80 && this.info.port != 443) link += ':' + this.info.port
+            //     console.log("copy", link)
+            //     // unsecuredCopyToClipboard(link)
+            //     return false
+            // })
         }
     }
 
@@ -74,11 +76,12 @@ $(document).ready(function() {
         this.interesting = false
 
         this.button = $('<li/>', { class: "list-group-item list-group-item-action py-2 px-2 mb-1" });
-        $('<h5 class="title mb-1">' + this.name + '</h5>').appendTo(this.button)
-                        .on('click', () => {
-                            location.assign('http://' + this.info.host);
-                            console.log(this.info.host)
-                        })
+        $('<h5 class="title mb-1">' + this.name + '</h5>')
+                        // .on('click', () => {
+                        //     location.assign('http://' + this.info.host);
+                        //     console.log(this.info.host)
+                        // })
+                        .appendTo(this.button)
 
         this.badges = $('<p/>', { class: "mb-1" });
         this.badges.appendTo(this.button)
@@ -121,10 +124,11 @@ $(document).ready(function() {
                 if (this.ip.includes(ip[i])) return
                 this.ip.push(ip[i])
                 $('<small class="ip">' + ip[i] + '</small>').appendTo(this.button)
-                    .on('click', (e) => {
-                        // e.stopPropagation()
-                        unsecuredCopyToClipboard(e.target.innerText)
-                    })
+                    // .on('click', (e) => {
+                    //     // e.stopPropagation()
+                    //     console.log('copy ip:', e.target.innerText)
+                    //     // unsecuredCopyToClipboard(e.target.innerText)
+                    // })
             }
         }
 

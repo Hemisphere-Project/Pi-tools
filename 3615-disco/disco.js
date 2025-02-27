@@ -24,7 +24,8 @@ function getAllIP() {
     return Object.values(os.networkInterfaces())
         .flat()
         .filter(iface => iface.family === 'IPv4' && !iface.internal && (iface.address.startsWith('e') || iface.address.startsWith('w')))
-        .map(iface => iface.address);
+        .map(iface => iface.address)
+        .filter(ip => ip !== '127.0.0.1');
 }
 
 
@@ -153,8 +154,8 @@ var service = bonjour.publish({
 });
 
 // restart avahi
-execSync('sudo systemctl restart avahi-daemon');
-console.log("Avahi restarted");
+// execSync('sudo systemctl restart avahi-daemon');
+// console.log("Avahi restarted");
 
 process.on('SIGINT', () => {
     zero.stop();

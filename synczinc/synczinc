@@ -9,7 +9,7 @@ fi
 echo "[synczinc] starting as $mode"
 
 if [ "$mode" == "master" ]; then
-    python3 -u "$DIR/master.py"
+    poetry run python -u "$DIR/master.py"
 else
     "$DIR/peer.sh" "$mode"
 fi

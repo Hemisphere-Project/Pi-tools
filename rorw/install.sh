@@ -55,25 +55,27 @@ if (lsblk -o uuid /dev/mmcblk0p3 > /dev/null 2>&1); then
     mkdir -p /var/lib/dnsmasq
 
     echo "
-    UUID=$UUID_boot                                 /boot       vfat    defaults,ro,errors=remount-ro,umask=177        0       0
-    UUID=$UUID_root                                 /           ext4    defaults,ro,errors=remount-ro        0       0         # also RO in /boot/cmdline.txt
-    UUID=$UUID_data                                 /data       ext4    defaults        0       0
+    proc                                   /proc                proc    defaults          0       0
+    UUID=$UUID_boot                        /boot/firmware       vfat    defaults,ro,errors=remount-ro,umask=177        0       0
+    UUID=$UUID_root                        /                    ext4    defaults,ro,errors=remount-ro        0       0         # also RO in /boot/cmdline.txt
+    UUID=$UUID_data                        /data                ext4    defaults        0       0
 
-    tmpfs                                           /tmp        tmpfs   defaults,size=${TMPSIZE}M 0 0
-    /data/var/lib/dnsmasq                           /var/lib/dnsmasq none defaults,bind 0 0
-    /data/var/lib/NetworkManager                    /var/lib/NetworkManager none defaults,bind 0 0
-    /run                                            /var/run     none    defaults,bind 0 0
-    /tmp                                            /var/lock   none    defaults,bind 0 0    
-    /tmp                                            /var/spool  none    defaults,bind 0 0
-    /tmp                                            /var/log    none    defaults,bind 0 0
-    /tmp                                            /var/tmp    none    defaults,bind 0 0
+    tmpfs                                  /tmp        tmpfs   defaults,size=${TMPSIZE}M 0 0
+    /data/var/lib/dnsmasq                  /var/lib/dnsmasq none defaults,bind 0 0
+    /data/var/lib/NetworkManager           /var/lib/NetworkManager none defaults,bind 0 0
+    /run                                   /var/run     none    defaults,bind 0 0
+    /tmp                                   /var/lock   none    defaults,bind 0 0    
+    /tmp                                   /var/spool  none    defaults,bind 0 0
+    /tmp                                   /var/log    none    defaults,bind 0 0
+    /tmp                                   /var/tmp    none    defaults,bind 0 0
     " > /etc/fstab
 
     sed -i 's/rootwait/rootwait fastboot noswap ro/g' /boot/firmware/cmdline.txt
     sed -i "s/root=[^ ]*/root=UUID=$UUID_root/g" /boot/firmware/cmdline.txt
     # sed -i "s/root=[^ ]*/root=UUID=$UUID_root rootfstype=ext4/g" /boot/firmware/cmdline.txt
 
-    echo "source $BASEPATH/rorw.bashrc" >> /etc/bash.bashrc
+    echo "source $BASEPATH/rorw.bashrc" >> /root/.bashrc
+    echo "OSH_THEME="rorw/rorw" >> /root/.bashrc
 
 #XBIAN ayufan RockPro64 eMMc
 elif (lsblk -o uuid /dev/mmcblk1p8 > /dev/null 2>&1); then
