@@ -75,7 +75,7 @@ if (lsblk -o uuid /dev/mmcblk0p3 > /dev/null 2>&1); then
     # sed -i "s/root=[^ ]*/root=UUID=$UUID_root rootfstype=ext4/g" /boot/firmware/cmdline.txt
 
     echo "source $BASEPATH/rorw.bashrc" >> /root/.bashrc
-    echo "OSH_THEME="rorw/rorw" >> /root/.bashrc
+    echo "OSH_THEME=\"rorw/rorw\"" >> /root/.bashrc
 
 #XBIAN ayufan RockPro64 eMMc
 elif (lsblk -o uuid /dev/mmcblk1p8 > /dev/null 2>&1); then
@@ -147,6 +147,7 @@ elif (lsblk -o uuid /dev/sda3 > /dev/null 2>&1); then
     " > /etc/fstab    
 
     echo "source $BASEPATH/rorw.bashrc" >> /root/.bashrc
+    echo "OSH_THEME=\"rorw/rorw\"" >> /root/.bashrc
     chmod 777 /tmp
 
 else

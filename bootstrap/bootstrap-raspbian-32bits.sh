@@ -71,7 +71,7 @@ systemctl restart sshd
 
 ### python & tools
 ###
-apt -y install git wget imagemagick htop python3 pipx pipenv libsensors5 build-essential  
+apt -y install git wget tmux imagemagick htop python3 pipx pipenv libsensors5 build-essential  
 pipx install poetry
 pipx ensurepath
 source ~/.bashrc
@@ -87,7 +87,6 @@ hash -r
 npm install -g npm
 npm install -g pm2 nodemon
 npm update -g
-
 
 ### mosquitto server
 ###
@@ -236,7 +235,7 @@ apt autoremove --purge -y
 
 ## Pi-tools
 cd /opt
-# git clone https://github.com/Hemisphere-Project/Pi-tools.git
+git clone https://github.com/Hemisphere-Project/Pi-tools.git
 
 # Deploy modules
 cd /opt/Pi-tools
@@ -244,15 +243,15 @@ modules=(
     starter
     splash
     hostrename
+    rorw
+    extendfs
+    3615-disco
     network-tools 
     audioselect
     bluetooth-pi
     webconf
-    3615-disco
-    rorw
     usbautomount
     filebrother
-    extendfs
     synczinc
     # rtpmidi
     # camera-server
@@ -270,7 +269,13 @@ cd HPlayer2
 ./install.sh
 
 # Regie
-# cd /opt
-# git clone https://github.com/KomplexKapharnaum/RPi-Regie.git
-# cd RPi-Regie
+cd /opt
+git clone https://github.com/KomplexKapharnaum/RPi-Regie.git
+cd RPi-Regie
+
+# Hartnet
+cd /opt
+git clone https://github.com/Hemisphere-Project/hartnet.js
+cd hartnet.js
+./install.sh
 
