@@ -71,7 +71,7 @@ systemctl restart sshd
 
 ### python & tools
 ###
-apt -y install git wget tmux imagemagick htop python3 pipx pipenv libsensors5 build-essential  
+apt -y install git wget tmux imagemagick htop python3 pipx pipenv libsensors5 build-essential lsof
 pipx install poetry
 pipx ensurepath
 source ~/.bashrc
@@ -115,9 +115,16 @@ systemctl disable NetworkManager-wait-online.service
 
 hostnamectl hostname rasta-00
 
-echo " [main]
+echo "[main]
 plugins=keyfile
-dns=none" > /etc/NetworkManager/NetworkManager.conf
+dns=none
+
+[connection]
+wifi.powersave = 2
+
+[keyfile]
+unmanaged-devices=interface-name:p2p-dev-*
+" > /etc/NetworkManager/NetworkManager.conf
 
 mkdir -p /etc/dnsmasq.d/
 systemctl enable dnsmasq
