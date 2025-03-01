@@ -8,21 +8,40 @@ fi
 
 echo "[hostrename] Setting name: $name"
 
-if [[ $(hostnamectl hostname) != "$name" ]]; then
-	rw
-	sed -i -E 's/^127.0.1.1.*/127.0.1.1\t'"$name"'/' /etc/hosts
-	for file in /boot/wifi/*-hotspot.nmconnection; do
-		if [ -f "$file" ]; then
-			sed -i -E 's/^ssid=.*/ssid='"$name"'/' "$file"
-			echo "updated $(basename "$file") name"
-		fi
-	done
-	hostnamectl hostname "$name"
-	sync
-	systemctl restart avahi-daemon
-	setnet
-	ro
-	echo "[hostrename] hostname changed to $name"    
-else
-	echo "[hostrename] hostname already set as $name"    
+$current=$(cat /etc/hostname)
+if [[ $current == $name ]]; then
+	echo "[hostrename] hostname already set as $name"
+	exit 0
 fi
+	
+# try rw 10 times and touch /boot/VERSION to confirm rw
+for i in {1..10}; do
+	echo "Attempt $i:"
+	rw  # Run the 'rw' function to enable read-write
+	if touch testfile 2>/dev/null; then
+		echo "Success! rw function worked, file touched successfully."
+		break
+	else
+		echo "Failed. Unable to touch file, trying again..."
+		sleep 1  # Wait a second before the next attempt
+	fi
+done
+
+systemctl restart systemd-hostnamed
+sed -i -E 's/^127.0.1.1.*/127.0.1.1\t'"$name"'/' /etc/hosts
+for file in /boot/wifi/*-hotspot.nmconnection /boot/wifi/_disabled/*-hotspot.nmconnection; do
+	if [ -f "$file" ]; then
+		sed -i -E 's/^ssid=.*/ssid='"$name"'/' "$file"
+		echo "updated $(basename "$file") name"
+	fi
+done
+
+# try hostnamectl set-hostname first, if it fails, fallback to manual edit
+
+hostnamectl set-hostname "$name"
+sync
+systemctl restart avahi-daemon
+setnet
+sync
+/usr/local/bin/ro
+echo "[hostrename] hostname changed to $name"    

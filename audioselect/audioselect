@@ -23,6 +23,7 @@ if [ "$find_jackcard" ]; then
     target_jackcard=$(echo $find_jackcard | awk -F ' ' '{print $3}')
     current_jackcard=$(cat /etc/asound.conf | awk '/pcm.jack/{getline; getline; print}' | awk -F ' ' '{print $2}')
     if [[ "$current_jackcard" != "$target_jackcard" ]]; then
+        echo "JACK card found as card $target_jackcard instead of $current_jackcard, renaming..."
         rw
         sed -i "s/card $current_jackcard/card $target_jackcard/g" /etc/asound.conf
         sync
@@ -39,8 +40,9 @@ fi
 find_hdmi0card=$(aplay -l | grep hdmi -m1)
 if [ "$find_hdmi0card" ]; then
     target_hdmi0card=$(echo $find_hdmi0card | awk -F ' ' '{print $3}')
-    current_hdmi0card=$(cat /etc/asound.conf | awk '/pcm.hdmi0/{getline; getline; print}' | awk -F ' ' '{print $2}')
+    current_hdmi0card=$(cat /etc/asound.conf | awk '/pcm.hdmi0/{getline; getline; getline; getline; getline; getline; print}' | awk -F ' ' '{print $2}')
     if [[ "$current_hdmi0card" != "$target_hdmi0card" ]]; then
+        echo "HDMI0 card found as card $target_hdmi0card instead of $current_hdmi0card, renaming..."
         rw
         sed -i "s/card $current_hdmi0card/card $target_hdmi0card/g" /etc/asound.conf
         sync
@@ -59,6 +61,7 @@ if [ "$find_usbcard" ]; then
     target_usbcard=$(echo $find_usbcard | awk -F ' ' '{print $3}')
     current_usbcard=$(cat /etc/asound.conf | awk '/pcm.usb/{getline; getline; print}' | awk -F ' ' '{print $2}')
     if [[ "$current_usbcard" != "$target_usbcard" ]]; then
+        echo "USB card found as card $target_usbcard instead of $current_usbcard, renaming..."
         rw
         sed -i "s/card $current_usbcard/card $target_usbcard/g" /etc/asound.conf
         sync
@@ -119,6 +122,7 @@ current_route=$(cat /etc/asound.conf | grep pcm.\!default -m1 | awk -F ' ' '{pri
 
 # apply new route if necessary
 if [[ "$current_route" != "$target_route" ]]; then
+    echo "Audio route found as $current_route instead of $target_route, updating..."
     rw
     # sed -i "s/?USB?/$usb_card/g" /etc/asound.conf
     sed -i "s/pcm.!default $current_route/pcm.!default $target_route/g" /etc/asound.conf

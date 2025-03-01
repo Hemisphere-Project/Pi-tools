@@ -47,7 +47,6 @@ if (lsblk -o uuid /dev/mmcblk0p3 > /dev/null 2>&1); then
 
     mkdir -p /data
     mount -U "$UUID_data" /data
-    rm -Rf /data/lost+found
     mkdir -p /data/media
     mkdir -p /data/var/lib/NetworkManager
     mkdir -p /data/var/lib/dnsmasq
@@ -86,7 +85,6 @@ elif (lsblk -o uuid /dev/mmcblk1p8 > /dev/null 2>&1); then
 
     mkdir -p /data
     mount -U "$UUID_data" /data
-    rm -Rf /data/lost+found
     #mkdir -p /data/media
     mkdir -p /data/var/lib/NetworkManager
     mkdir -p /data/var/lib/dnsmasq
@@ -122,7 +120,6 @@ elif (lsblk -o uuid /dev/sda3 > /dev/null 2>&1); then
 
     mkdir -p /data
     mount -U "$UUID_data" /data
-    rm -Rf /data/lost+found
     mkdir -p /data/media
     mkdir -p /data/var/lib/NetworkManager
     mkdir -p /data/var/lib/dnsmasq
@@ -157,6 +154,21 @@ else
     echo ""
     exit 1
 fi
+
+#
+# symlink
+#
+
+# Oh-my-bash
+mkdir -p /data/var/ohmybash
+mv /root/.oh-my-bash/log /data/var/ohmybash/log
+ln -sf /data/var/ohmybash/log /root/.oh-my-bash/log
+
+# Tailscale
+mkdir -p /data/var/lib/tailscale
+mv /var/lib/tailscale /data/var/lib/tailscale
+ln -sf /data/var/lib/tailscale /var/lib/tailscale
+
 
 #
 # fake-hwclock
