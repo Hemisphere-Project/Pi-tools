@@ -31,15 +31,13 @@
 
 ### SSH from remote
 # ssh pi@<ip>
-# sudo su root 
+sudo su root 
 # cd /opt && apt update && apt install -y git && git clone https://github.com/Hemisphere-Project/Pi-tools.git && cd Pi-tools/boostrap && ./bootstrap-raspbian-32bits.sh
-
 
 ### Update
 ###
 apt update
 apt upgrade -y
-
 
 ### Change passwords
 ###
@@ -167,6 +165,15 @@ bash -c "$(wget https://raw.githubusercontent.com/ohmybash/oh-my-bash/master/too
 ###
 echo "8.0  --  bootstraped from https://github.com/Hemisphere-Project/Pi-tools/blob/main/bootstrap/bootstrap-raspbian-32bits.sh" > /boot/VERSION
 
+# Clean up
+rm /var/lib/man-db/auto-update
+systemctl mask apt-daily-upgrade
+systemctl mask apt-daily
+systemctl disable apt-daily-upgrade.timer
+systemctl disable apt-daily.timer
+apt remove --purge modemmanager -y
+apt autoremove --purge -y
+
 ## write config.txt
 ## (check if there is no new config.txt settings that you should keep)
 ##
@@ -230,16 +237,6 @@ video=HDMI-A-1:1920x1080M@30
 
 " > /boot/firmware/config.txt
 
-# Clean up
-rm /var/lib/man-db/auto-update
-systemctl mask apt-daily-upgrade
-systemctl mask apt-daily
-systemctl disable apt-daily-upgrade.timer
-systemctl disable apt-daily.timer
-apt remove --purge modemmanager -y
-apt autoremove --purge -y
-
-
 ## Pi-tools
 cd /opt
 git clone https://github.com/Hemisphere-Project/Pi-tools.git
@@ -252,8 +249,8 @@ modules=(
     hostrename
     rorw
     extendfs
-    3615-disco
     network-tools 
+    3615-disco
     audioselect
     bluetooth-pi
     webconf
@@ -284,5 +281,5 @@ cd RPi-Regie
 cd /opt
 git clone https://github.com/Hemisphere-Project/hartnet.js
 cd hartnet.js
-./install.sh
+npm install
 

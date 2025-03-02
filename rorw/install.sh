@@ -160,15 +160,19 @@ fi
 #
 
 # Oh-my-bash
-mkdir -p /data/var/ohmybash
-mv /root/.oh-my-bash/log /data/var/ohmybash/log
-ln -sf /data/var/ohmybash/log /root/.oh-my-bash/log
+if [ -d /root/.oh-my-bash ]; then
+    mkdir -p /data/var/ohmybash
+    mv /root/.oh-my-bash/log /data/var/ohmybash/log
+    ln -sf /data/var/ohmybash/log /root/.oh-my-bash/log
+fi
 
-# Tailscale
-mkdir -p /data/var/lib/tailscale
-mv /var/lib/tailscale /data/var/lib/tailscale
-ln -sf /data/var/lib/tailscale /var/lib/tailscale
-
+# Tailscale (if /var/lib/tailscale exists)
+# if [ -d /var/lib/tailscale ]; then
+#     mkdir -p /data/var/lib/tailscale
+#     mv /var/lib/tailscale /data/var/lib/tailscale
+#     ln -sf /data/var/lib/tailscale /var/lib/tailscale
+# fi
+# TODO: mount with fstab !
 
 #
 # fake-hwclock
