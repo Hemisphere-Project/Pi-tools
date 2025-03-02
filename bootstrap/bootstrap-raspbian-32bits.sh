@@ -249,8 +249,8 @@ modules=(
     hostrename
     rorw
     extendfs
-    3615-disco
     network-tools 
+    3615-disco
     audioselect
     bluetooth-pi
     webconf
@@ -281,5 +281,5 @@ cd RPi-Regie
 cd /opt
 git clone https://github.com/Hemisphere-Project/hartnet.js
 cd hartnet.js
-./install.sh
+npm install
 
