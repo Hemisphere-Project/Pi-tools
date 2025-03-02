@@ -59,7 +59,7 @@ if (lsblk -o uuid /dev/mmcblk0p3 > /dev/null 2>&1); then
     UUID=$UUID_root                        /                    ext4    defaults,ro,errors=remount-ro        0       0         # also RO in /boot/cmdline.txt
     UUID=$UUID_data                        /data                ext4    defaults        0       0
 
-    tmpfs                                  /tmp        tmpfs   defaults,size=${TMPSIZE}M 0 0
+    tmpfs                                  /tmp        tmpfs   defaults,size=${TMPSIZE}M,mode=1777 0 0
     /data/var/lib/dnsmasq                  /var/lib/dnsmasq none defaults,bind 0 0
     /data/var/lib/NetworkManager           /var/lib/NetworkManager none defaults,bind 0 0
     /run                                   /var/run     none    defaults,bind 0 0
@@ -96,7 +96,7 @@ elif (lsblk -o uuid /dev/mmcblk1p8 > /dev/null 2>&1); then
     #UUID=$UUID_root                                 /           ext4    defaults,ro,errors=remount-ro        0       0         # already done in /boot/extlinux/extlinux.conf
     UUID=$UUID_data                                 /data       ext4    defaults        0       0
 
-    tmpfs                                           /tmp        tmpfs   defaults,size=${TMPSIZE}M 0 0
+    tmpfs                                           /tmp        tmpfs   defaults,size=${TMPSIZE}M,mode=1777 0 0
     /data/var/lib/dnsmasq                           /var/lib/dnsmasq none defaults,bind 0 0
     /data/var/lib/NetworkManager                    /var/lib/NetworkManager none defaults,bind 0 0
     /run                                            /var/run     none    defaults,bind 0 0
@@ -133,7 +133,7 @@ elif (lsblk -o uuid /dev/sda3 > /dev/null 2>&1); then
 
     /swap.img	                                    none	        swap	sw	0	0
 
-    tmpfs                                           /tmp            tmpfs   defaults,size=${TMPSIZE}M 0 0
+    tmpfs                                           /tmp            tmpfs   defaults,size=${TMPSIZE}M,mode=1777 0 0
     /data/var/lib/dnsmasq                           /var/lib/dnsmasq none    defaults,bind                                  0 0
     /data/var/lib/NetworkManager                    /var/lib/NetworkManager none defaults,bind                               0 0
     /run                                            /var/run        none    defaults,bind                                  0 0
@@ -167,11 +167,12 @@ if [ -d /root/.oh-my-bash ]; then
 fi
 
 # Tailscale (if /var/lib/tailscale exists)
-if [ -d /var/lib/tailscale ]; then
-    mkdir -p /data/var/lib/tailscale
-    mv /var/lib/tailscale /data/var/lib/tailscale
-    ln -sf /data/var/lib/tailscale /var/lib/tailscale
-fi
+# if [ -d /var/lib/tailscale ]; then
+#     mkdir -p /data/var/lib/tailscale
+#     mv /var/lib/tailscale /data/var/lib/tailscale
+#     ln -sf /data/var/lib/tailscale /var/lib/tailscale
+# fi
+# TODO: mount with fstab !
 
 #
 # fake-hwclock
