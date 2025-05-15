@@ -6,9 +6,9 @@ sync
 for i in {1..10}; do
     echo "Attempt $i:"
     mount -o remount,ro /
-    if touch testfile 2>/dev/null; then
-        echo "Failed.. stil able to touch file, trying again...\n\tthose files might be blocking it:"
-        lsof / | grep -E '(w|u)'
+    if touch /root/testfile 2>/dev/null; then
+        echo "Failed.. still able to touch file, trying again..."
+        # lsof / | grep -E '(w|u)'
         sleep 1  # Wait a second before the next attempt
     else
         echo "Success! system is now read-only."
