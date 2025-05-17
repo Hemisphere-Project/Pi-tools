@@ -59,7 +59,7 @@ fi
 find_usbcard=$(aplay -l | grep USB -m1)
 if [ "$find_usbcard" ]; then
     target_usbcard=$(echo $find_usbcard | awk -F ' ' '{print $3}')
-    current_usbcard=$(cat /etc/asound.conf | awk '/pcm.usb/{getline; getline; print}' | awk -F ' ' '{print $2}')
+    current_usbcard=$(cat /etc/asound.conf | awk '/ctl.usb/{getline; getline; print}' | awk -F ' ' '{print $2}')
     if [[ "$current_usbcard" != "$target_usbcard" ]]; then
         echo "USB card found as card $target_usbcard instead of $current_usbcard, renaming..."
         rw
