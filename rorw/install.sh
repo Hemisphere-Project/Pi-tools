@@ -104,8 +104,8 @@ mount -U "$UUID_data" /data
 mkdir -p /data/media
 mkdir -p /data/var/NetworkManager
 mkdir -p /data/var/dnsmasq
-mkdir -p /data/var/tmp
 mkdir -p /var/lib/dnsmasq
+mkdir -p /data/var/tmp
 
 echo "
 UUID=$UUID_boot                                 ${TARGET_boot}  vfat    defaults,ro,errors=remount-ro,umask=177        0       0
@@ -113,15 +113,22 @@ UUID=$UUID_root                                 /               ext4    defaults
 UUID=$UUID_data                                 /data           ext4    defaults                                       0       0
 
 tmpfs                                           /tmp            tmpfs   defaults,size=${TMPSIZE}M,mode=1777 0 0
-/data/var/dnsmasq                               /var/lib/dnsmasq none   defaults,bind                                 0 0
-/data/var/NetworkManager                        /var/lib/NetworkManager none defaults,bind                             0 0
 /run                                            /var/run        none    defaults,bind                                  0 0
 /tmp                                            /var/lock       none    defaults,bind                                  0 0
 /tmp                                            /var/spool      none    defaults,bind                                  0 0
 /tmp                                            /var/log        none    defaults,bind                                  0 0
 /tmp                                            /var/tmp        none    defaults,bind                                  0 0
 
+/data/var/dnsmasq                               /var/lib/dnsmasq none   defaults,bind                                 0 0
+/data/var/NetworkManager                        /var/lib/NetworkManager none defaults,bind                             0 0
 " > /etc/fstab
+
+# If snapd is installed, add snap mounts
+if [ -d /var/lib/snapd ]; then
+    mkdir -p /data/var/snapd
+    echo "/data/var/snapd /var/lib/snapd none defaults,bind 0 0" >> /etc/fstab
+fi
+
 
 # add EXTRA_fstab to fstab
 if [ -n "$EXTRA_fstab" ]; then
@@ -129,8 +136,11 @@ if [ -n "$EXTRA_fstab" ]; then
 fi
 
 # apply new fstab
+systemctl daemon-reload
 mount -a
 chmod -R 777 /tmp
+
+exit 0
 
 # bash prompt color
 #
