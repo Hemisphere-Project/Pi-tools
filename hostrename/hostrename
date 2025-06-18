@@ -14,8 +14,8 @@ if [[ $current == $name ]]; then
 	exit 0
 fi
 	
-# try rw 10 times and touch /boot/VERSION to confirm rw
 rw
+
 systemctl restart systemd-hostnamed
 sed -i -E 's/^127.0.1.1.*/127.0.1.1\t'"$name"'/' /etc/hosts
 for file in /boot/wifi/*-hotspot.nmconnection /boot/wifi/_disabled/*-hotspot.nmconnection; do
@@ -29,8 +29,23 @@ done
 
 hostnamectl set-hostname "$name"
 sync
+
+current=$(cat /etc/hostname)
+if [[ $current != $name ]]; then
+	echo "[hostrename] hostnamectl failed, trying manual edit"
+	echo "$name" > /etc/hostname
+fi
+sync
+
 systemctl restart avahi-daemon
 setnet
-sync
 ro
+
+current=$(cat /etc/hostname)
+if [[ $current != $name ]]; then
+	echo "[hostrename] hostname change failed, current: $current, expected: $name"
+	exit 1
+fi
+
 echo "[hostrename] hostname changed to $name"    
+exit 0

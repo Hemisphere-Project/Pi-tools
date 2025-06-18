@@ -169,7 +169,7 @@ git clone https://github.com/Hemisphere-Project/Pi-tools.git
 # Deploy modules
 cd /opt/Pi-tools
 modules=(
-    starter         # ok
+    starter         #+ ok 
     hostrename      # ok
     network-tools   ## todo
     usbautomount    # ok
