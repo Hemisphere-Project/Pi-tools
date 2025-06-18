@@ -1,8 +1,8 @@
 [Unit]
-Description=Turn off network interface after %i minutes: i.e. 30/wlan0
+Description=Turn off network interface after %i minutes: i.e. wlan0/30
 
 [Service]
 Type=oneshot
-ExecStartPre=/bin/sleep $(/bin/echo "%i" | /bin/cut -d/ -f 1)
-ExecStart=/bin/ip link set $(/bin/echo "%i" | /bin/cut -d/ -f 2) down
+ExecStartPre=/bin/sleep $(/bin/echo "%i" | /bin/cut -d/ -f 2)
+ExecStart=/bin/ip link set $(/bin/echo "%i" | /bin/cut -d/ -f 1) down
 

@@ -170,7 +170,7 @@ git clone https://github.com/Hemisphere-Project/Pi-tools.git
 cd /opt/Pi-tools
 modules=(
     starter         #+ ok 
-    hostrename      # ok
+    hostrename      #+ ok
     network-tools   ## todo
     usbautomount    # ok
     rorw            # ok
