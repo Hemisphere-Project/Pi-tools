@@ -171,9 +171,9 @@ cd /opt/Pi-tools
 modules=(
     starter         #+ ok 
     hostrename      #+ ok
-    network-tools   ## todo
-    usbautomount    # ok
+    network-tools   #+ ok
     rorw            # ok
+    usbautomount    #+ ok
     extendfs        # ok
     synczinc        ## todo  
     webconf         ## flask broken.. 
