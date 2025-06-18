@@ -38,8 +38,12 @@ ctl.hdmi0 {
 }
 
 pcm.usb { 
-    type hw
-    card Device
+    type dmix
+    ipc_key 1025
+    slave.pcm {
+			type hw
+         card Device
+		}
 }
 
 ctl.usb {

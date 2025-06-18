@@ -8,7 +8,7 @@ fi
 
 echo "[hostrename] Setting name: $name"
 
-$current=$(cat /etc/hostname)
+current=$(cat /etc/hostname)
 if [[ $current == $name ]]; then
 	echo "[hostrename] hostname already set as $name"
 	exit 0
