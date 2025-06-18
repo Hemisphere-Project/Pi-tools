@@ -1,25 +1,33 @@
 #!/bin/bash
-# systemctl daemon-reload
+
+TESTFILE="/root/.readonly"
+
 sync
 
-# Remount root filesystem as read-only, retry 10 times
-for i in {1..10}; do
+# Remount root filesystem as read-only, retry 5 times
+for i in {1..5}; do
     echo "Attempt $i:"
+
+    # Try to remount the root filesystem as read-only
     mount -o remount,ro /
-    if touch /root/testfile 2>/dev/null; then
-        echo "Failed.. still able to touch file, trying again..."
+
+    # Try to remount the boot partition as read-only
+    if (lsblk -o uuid /dev/mmcblk0p3 > /dev/null 2>&1); then
+        mount -o remount,ro /boot/firmware 
+    elif (lsblk -o uuid /dev/mmcblk1p8 > /dev/null 2>&1); then
+        mount -o remount,ro /boot/efi 
+    fi
+    
+    if touch "$TESTFILE" 2>/dev/null; then
+        echo "RO Failed.. still able to touch file, trying again..."
         # lsof / | grep -E '(w|u)'
         sleep 1  # Wait a second before the next attempt
     else
-        echo "Success! system is now read-only."
-        break
+        echo "=> RO ok!"
+        exit 0
     fi
 done
+echo "=> RO Failed after 5 attempts. Exiting."
+exit 1
 
-if (lsblk -o uuid /dev/mmcblk0p3 > /dev/null 2>&1); then
-    mount -o remount,ro /boot/firmware 
-elif (lsblk -o uuid /dev/mmcblk1p8 > /dev/null 2>&1); then
-    mount -o remount,ro /boot/efi 
-fi
-sync
-echo "=> RO"
+

@@ -15,18 +15,7 @@ if [[ $current == $name ]]; then
 fi
 	
 # try rw 10 times and touch /boot/VERSION to confirm rw
-for i in {1..10}; do
-	echo "Attempt $i:"
-	rw  # Run the 'rw' function to enable read-write
-	if touch testfile 2>/dev/null; then
-		echo "Success! rw function worked, file touched successfully."
-		break
-	else
-		echo "Failed. Unable to touch file, trying again..."
-		sleep 1  # Wait a second before the next attempt
-	fi
-done
-
+rw
 systemctl restart systemd-hostnamed
 sed -i -E 's/^127.0.1.1.*/127.0.1.1\t'"$name"'/' /etc/hosts
 for file in /boot/wifi/*-hotspot.nmconnection /boot/wifi/_disabled/*-hotspot.nmconnection; do

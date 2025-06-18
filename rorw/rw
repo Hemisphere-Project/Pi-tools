@@ -1,11 +1,29 @@
 #!/bin/bash
+
+TESTFILE="/root/.readonly"
+
 sync
-mount -o remount,rw /
-if (lsblk -o uuid /dev/mmcblk0p3 > /dev/null 2>&1); then
-    mount -o remount,rw /boot/firmware 
-elif (lsblk -o uuid /dev/mmcblk1p8 > /dev/null 2>&1); then
-    mount -o remount,rw /boot/efi 
-fi
-sync
-systemctl daemon-reload
-echo "=> RW"
+for i in {1..5}; do
+	echo "RW - Attempt $i:"
+	
+    # Try to remount the root filesystem as read-write
+    mount -o remount,rw /
+
+    # Try to remount the boot partition as read-write
+    if (lsblk -o uuid /dev/mmcblk0p3 > /dev/null 2>&1); then
+        mount -o remount,rw /boot/firmware 
+    elif (lsblk -o uuid /dev/mmcblk1p8 > /dev/null 2>&1); then
+        mount -o remount,rw /boot/efi 
+    fi
+
+	if touch "$TESTFILE" 2>/dev/null; then
+		echo "=> RW ok!"
+        sync
+        exit 0
+	else
+		echo "RW Failed. Unable to touch file /boot/VERSION, trying again..."
+		sleep 1  # Wait a second before the next attempt
+	fi
+done
+echo "=> RW Failed after 5 attempts. Exiting."
+exit 1
