@@ -43,5 +43,5 @@ sync
 systemctl restart avahi-daemon
 setnet
 sync
-/usr/local/bin/ro
+ro
 echo "[hostrename] hostname changed to $name"    

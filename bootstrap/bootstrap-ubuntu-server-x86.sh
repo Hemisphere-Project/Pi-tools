@@ -20,6 +20,11 @@ echo "IPQoS 0x00" >> /etc/ssh/ssh_config
 echo "IPQoS 0x00" >> /etc/ssh/sshd_config
 echo "IPQoS cs0 cs0" >> /etc/ssh/sshd_config
 
+# Allow PasswordAuthentication
+sed -i "s/PasswordAuthentication.*/PasswordAuthentication yes/g" /etc/ssh/sshd_config
+sed -i "s/#PasswordAuthentication yes/PasswordAuthentication yes/g" /etc/ssh/sshd_config
+rm /etc/ssh/sshd_config.d/50-cloud-init.conf
+
 # Generate root ssh keys
 cd /root
 cat /dev/zero | ssh-keygen -q -N ""      # => no password
@@ -28,15 +33,27 @@ cat /dev/zero | ssh-keygen -q -N ""      # => no password
 systemctl restart ssh
 # [from remote machine] ssh-copy-id root@<IP-ADDRESS>
 
+### oh-my-bash
+###
+grep -qxF 'DISABLE_UPDATE_PROMPT=true' ~/.bashrc || echo 'DISABLE_UPDATE_PROMPT=true' >> ~/.bashrc
+grep -qxF 'DISABLE_AUTO_UPDATE=true' ~/.bashrc || echo 'DISABLE_AUTO_UPDATE=true' >> ~/.bashrc
+bash -c "$(wget https://raw.githubusercontent.com/ohmybash/oh-my-bash/master/tools/install.sh -O -)"
+
 # Disable wait for network
-systemctl disable systemd-networkd-wait-online.service
-systemctl disable unattended-upgrades.service
+systemctl stop iscsid.socket
+systemctl disable iscsid.socket
+systemctl disable --now iscsid.service
+systemctl disable --now open-iscsi.service
+systemctl disable --now systemd-networkd-wait-online.service
+systemctl disable --now unattended-upgrades.service
 
 # Python & tools
-apt -y install python3 python3-pip python3-setuptools python3-wheel git wget imagemagick htop build-essential pipenv tmux 
+apt -y install git wget tmux imagemagick htop libsensors5 build-essential lsof nano
+apt -y install python3 python3-pip python3-setuptools python3-wheel pipx pipenv
 
 # Mosquitto server
 apt -y install mosquitto
+systemctl disable mosquitto
 
 # Avahi / mdns
 apt -y install avahi-daemon avahi-utils libnss-mdns
@@ -64,15 +81,20 @@ rm /etc/resolv.conf
 echo "nameserver 1.1.1.1
 nameserver 1.0.0.1" > /etc/resolv.conf
 
-echo " [main]
+echo "[main]
 plugins=keyfile
-dns=none" > /etc/NetworkManager/NetworkManager.conf
+dns=none
+
+[connection]
+wifi.powersave = 2
+
+[keyfile]
+unmanaged-devices=interface-name:p2p-dev-*
+" > /etc/NetworkManager/NetworkManager.conf
 
 mkdir -p /etc/dnsmasq.d/
 systemctl enable dnsmasq
 systemctl start dnsmasq
-nmcli con add type ethernet con-name eth0-dhcp ifname eth0
-nmcli con add type ethernet con-name enp1s0-dhcp ifname enp1s0
 
 rm /etc/netplan/*.yaml
 cat << EOF > /etc/netplan/01-netcfg.yaml
@@ -88,16 +110,16 @@ netplan generate
 netplan apply
 systemctl enable NetworkManager.service
 systemctl restart NetworkManager.service
-
-nmcli connection delete eth0
-nmcli connection delete enp1s0
+systemctl disable NetworkManager-wait-online.service
 
 # Disable IPv6
 echo '# Disable IPv6
 net.ipv6.conf.all.disable_ipv6=1
 net.ipv6.conf.lo.disable_ipv6=1
 net.ipv6.conf.enp1s0.disable_ipv6=1
+net.ipv6.conf.enp2s0.disable_ipv6=1
 net.ipv6.conf.eth0.disable_ipv6=1
+net.ipv6.conf.eth1.disable_ipv6=1
 net.ipv6.conf.wint.disable_ipv6=1
 net.ipv6.conf.wlan0.disable_ipv6=1
 net.ipv6.conf.wlan1.disable_ipv6=1' > /etc/sysctl.d/40-ipv6.conf
@@ -126,9 +148,19 @@ ExecStart=
 ExecStart=-/usr/bin/agetty --skip-login --nonewline --noissue --autologin root --noclear %I $TERM' > /etc/systemd/system/getty@tty1.service.d/skip-prompt.conf
 systemctl daemon-reload
 
+
+
 ### version
 ###
-echo "8.0  --  bootstraped with https://github.com/Hemisphere-Project/Pi-tools" > /boot/VERSION
+echo "9.0  --  bootstraped with https://github.com/Hemisphere-Project/Pi-tools" > /boot/VERSION
+
+# Clean up
+rm /var/lib/man-db/auto-update
+systemctl mask apt-daily-upgrade
+systemctl mask apt-daily
+systemctl disable apt-daily-upgrade.timer
+systemctl disable apt-daily.timer
+apt autoremove --purge -y
 
 ## Pi-tools
 cd /opt
@@ -156,10 +188,11 @@ for i in "${modules[@]}"; do
 done
 
 # MPV
-apt -y install mpv ffmpeg intel-gpu-tools libvdpau-va-gl1 intel-media-va-driver-non-free
+apt -y install mpv ffmpeg intel-gpu-tools libvdpau-va-gl1 intel-media-va-driver-non-free 
 
 # HPlayer2
 cd /opt
 git clone https://github.com/Hemisphere-Project/HPlayer2.git
 cd HPlayer2
 ./install.sh
+

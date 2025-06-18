@@ -69,8 +69,15 @@ if (lsblk -o uuid /dev/mmcblk0p3 > /dev/null 2>&1); then
     /tmp                                   /var/tmp    none    defaults,bind 0 0
     " > /etc/fstab
 
-    sed -i 's/rootwait/rootwait fastboot noswap ro/g' /boot/firmware/cmdline.txt
-    sed -i "s/root=[^ ]*/root=UUID=$UUID_root/g" /boot/firmware/cmdline.txt
+    if [ -f /boot/firmware/cmdline.txt ]; then
+        sed -i 's/rootwait/rootwait fastboot noswap ro/g' /boot/firmware/cmdline.txt
+        sed -i "s/root=[^ ]*/root=UUID=$UUID_root/g" /boot/firmware/cmdline.txt
+    else
+        sed -i 's/rw//g' /boot/cmdline.txt
+        sed -i 's/rootwait/rootwait fastboot noswap ro/g' /boot/cmdline.txt
+        sed -i "s/root=[^ ]*/root=UUID=$UUID_root/g" /boot/cmdline.txt
+    fi 
+    
     # sed -i "s/root=[^ ]*/root=UUID=$UUID_root rootfstype=ext4/g" /boot/firmware/cmdline.txt
 
     echo "source $BASEPATH/rorw.bashrc" >> /root/.bashrc

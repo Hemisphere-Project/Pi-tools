@@ -18,7 +18,7 @@ elif [[ $(command -v pacman) ]]; then
     DISTRO='arch'
     echo "Distribution: $DISTRO"
 
-    pacman -S lockfile-progs dosfstools xfsprogs hfsprogs --noconfirm --needed
+    pacman -S lockfile-progs dosfstools xfsprogs --noconfirm --needed
 
 ## Plateform not detected ...
 else

@@ -1,14 +1,14 @@
 #!/bin/bash
 
 #
-#   :: HBerry 2 :: aarch64 :: manjaro :: 24/06/2024
+#   :: HBerry 2000 :: aarch64 :: manjaro :: 08/04/2025
 #
 
 sudo su root         # =>  root
 
 ### Init Pacman & update
 ###
-pacman -Syu --noconfirm
+pacman -Syu     # yes / yes / 1) dbus-broker-units / yes to raspberrypi-firmware
 pacman-db-upgrade
 pacman -Sc --noconfirm
 
@@ -41,37 +41,38 @@ systemctl restart sshd
 
 ### python & tools
 ###
-pacman -S python python-pip python-setuptools python-wheel git wget imagemagick htop base-devel atop python-pipenv tmux --noconfirm --needed
+pacman -S git wget imagemagick htop base-devel atop python-pipenv lm_sensors tmux --noconfirm --needed
+pacman -S python python-pip python-setuptools python-wheel python-pipenv --noconfirm --needed
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source $HOME/.local/bin/env
 
-
-### pikaur
+### nodejs 
 ###
-# cd /opt
-# git clone https://aur.archlinux.org/pikaur.git
-# chmod 777 -R pikaur/
-# cd pikaur
-# sudo -u pi makepkg -fsri --noconfirm
+pacman -S nodejs npm --noconfirm --needed
+npm i -g n
+n lts
+hash -r
+npm install -g npm
+npm install -g pm2 nodemon
+npm update -g
 
-### Pi Kernel
+### yay
 ###
-# pacman -S linux-rpi --noconfirm
+pacman -S yay --noconfirm --needed
 
-### RPi.GPIO
+### pigpio
 ###
-# pikaur -S python-raspberry-gpio --noconfirm
-# pip install RPi.GPIO --break-system-packages
-
+yay -S pigpio --noconfirm --needed
 
 ### mosquitto server
 ###
 pacman -S mosquitto --noconfirm --needed
+systemctl disable mosquitto
 
 ### Audio Analog
 ##
 # modprobe snd_bcm2835
 # echo 'snd_bcm2835'  >>  /etc/modules
-
-
 
 ### avahi
 ###
@@ -80,13 +81,16 @@ sed -i 's/use-ipv6=yes/use-ipv6=no/g' /etc/avahi/avahi-daemon.conf
 systemctl enable avahi-daemon
 systemctl start avahi-daemon
 
-
+### randomness
+###
+pacman -S haveged --noconfirm --needed
+systemctl enable haveged
+systemctl start haveged
 
 ### switch from netctl/networkd to NetworkManager
 ###
 pacman -S networkmanager dnsmasq --noconfirm --needed
 pacman -R dhcpcd --noconfirm
-pacman -R netctl --noconfirm
 systemctl stop systemd-resolved
 systemctl disable systemd-resolved
 systemctl stop systemd-networkd.socket
@@ -94,54 +98,79 @@ systemctl disable systemd-networkd.socket
 systemctl stop systemd-networkd
 systemctl disable systemd-networkd
 
-rm /etc/resolv.conf
-echo "nameserver 8.8.8.8
-nameserver 1.1.1.1" > /etc/resolv.conf
+# rm /etc/resolv.conf
+# echo "nameserver 8.8.8.8
+# nameserver 1.1.1.1" > /etc/resolv.conf
 
 echo "hberry-000" > /etc/hostname
 
-echo " [main]
+echo "[main]
 plugins=keyfile
-dns=none" > /etc/NetworkManager/NetworkManager.conf
+dns=none
+
+[connection]
+wifi.powersave = 2
+
+[keyfile]
+unmanaged-devices=interface-name:p2p-dev-*
+" > /etc/NetworkManager/NetworkManager.conf
 
 mkdir -p /etc/dnsmasq.d/
 systemctl enable dnsmasq
 systemctl start dnsmasq
-systemctl enable NetworkManager
-systemctl start NetworkManager
-nmcli con add type ethernet con-name eth0-dhcp ifname eth0
-
 
 ### disable ipv6
 ###
 echo '# Disable IPv6
-net.ipv6.conf.all.disable_ipv6 = 1
-net.ipv6.conf.lo.disable_ipv6 = 1
-net.ipv6.conf.eth0.disable_ipv6 = 1
-net.ipv6.conf.wint.disable_ipv6 = 1
-net.ipv6.conf.wlan0.disable_ipv6 = 1
-net.ipv6.conf.wlan1.disable_ipv6 = 1' > /etc/sysctl.d/40-ipv6.conf
+net.ipv6.conf.all.disable_ipv6 = 1' > /etc/sysctl.d/40-ipv6.conf
 
 ### network interface name persistence (internal will be wint, external will be wlan0, wlan1...)
 ### 
 sed -i '$ s/$/ net.ifnames=0/' /boot/cmdline.txt
 echo 'ACTION=="add", SUBSYSTEM=="net", DRIVERS=="brcmfmac", NAME="wint"' > /etc/udev/rules.d/72-static-name.rules
+udevadm control --reload
+udevadm trigger
+
+# Start NetworkManager
+systemctl enable NetworkManager
+systemctl start NetworkManager
+nmcli con add type etherne d t con-name eth0-dhcp ifname eth0
+systemctl disable NetworkManager-wait-online.service
+
+# Disable power save on wifi
+echo "[Unit]
+Description=Disable WiFi Power Save
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/iw dev wint set power_save off
+Type=oneshot
+
+[Install]
+WantedBy=multi-user.target" > /etc/systemd/system/wifi-nopowersave.service
+systemctl enable wifi-nopowersave.service
+systemctl start wifi-nopowersave.service
 
 ### i2c
 ###
-echo "i2c-dev" >> /etc/modules-load.d/raspberrypi.conf
+# echo "i2c-dev" >> /etc/modules-load.d/raspberrypi.conf
 
 ### blackboot
 ###
 systemctl disable getty@tty1
 sed -i '$ s/tty1/tty3/' /boot/cmdline.txt
-sed -i '$ s/$/ loglevel=1 vt.global_cursor_default=0/' /boot/cmdline.txt      # logo.nologo vt.global_cursor_default=0 consoleblank=0 quiet vga=current
+sed -i '$ s/$/ loglevel=0 vt.global_cursor_default=0/' /boot/cmdline.txt      # logo.nologo vt.global_cursor_default=0 consoleblank=0 quiet vga=current
 
 ### touch fix (iiyama)
-sed -i '$ s/$/ usbhid.mousepoll=0/' /boot/cmdline.txt
+# sed -i '$ s/$/ usbhid.mousepoll=0/' /boot/cmdline.txt
+sed -i '$ s/usbhid.mousepoll=8/usbhid.mousepoll=0/' /boot/cmdline.txt
 
 ### spinner splash
 plymouth-set-default-theme -R spinner
+
+### oh-my-bash
+###
+bash -c "$(wget https://raw.githubusercontent.com/ohmybash/oh-my-bash/master/tools/install.sh -O -)"
 
 ### version
 ###
@@ -150,7 +179,7 @@ echo "8.0  --  bootstraped with https://github.com/Hemisphere-Project/Pi-tools" 
 ### write config.txt
 ### (check if there is no new config.txt settings that you should keep)
 ###
-cp /boot/config.txt /boot/config.txt.origin
+cp /boot/config.txt /boot/config.txt.origin && rm /boot/config.txt
 echo "
 #
 # See /boot/overlays/README for all available options
@@ -228,17 +257,17 @@ modules=(
     #splash         # not needed on Manjaro (plymouth splash is already installed)
     hostrename      # ok
     network-tools  ## todo
-    audioselect    ## todo
+    audioselect     # ok
     usbautomount    # ok
-    rorw           ## todo
+    rorw            # ok
     extendfs        # ok
     synczinc       ## todo  
-    webconf         ## flask broken.. 
-    # webfiles      ## todo  
-    bluetooth-pi    # todo  
-    rtpmidi         ## todo
+    webconf         # ok
+    filebrother     # ok  
+    bluetooth-pi   ## todo  
+    rtpmidi         # ok
     # camera-server
-    3615-disco      ## flask broken.. 
+    3615-disco      # ok
 )
 for i in "${modules[@]}"; do
     cd "$i"
@@ -253,8 +282,12 @@ cd HPlayer2
 ./install.sh
 
 # Regie
-# cd /opt
-# git clone https://github.com/KomplexKapharnaum/RPi-Regie.git
-# cd RPi-Regie
+cd /opt
+git clone https://github.com/KomplexKapharnaum/RPi-Regie.git
+cd RPi-Regie
 
-
+# Hartnet
+cd /opt
+git clone https://github.com/Hemisphere-Project/hartnet.js
+cd hartnet.js
+npm install

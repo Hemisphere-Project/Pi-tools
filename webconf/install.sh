@@ -6,7 +6,7 @@ DISTRO=''
 echo "$BASEPATH"
 cd "$BASEPATH"
 
-# poetry install
+# npm install
 npm install
 ln -sf "$BASEPATH/webconf.service" /etc/systemd/system/
 ln -sf "$BASEPATH/webconf" /usr/local/bin/

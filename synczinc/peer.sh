@@ -1,8 +1,8 @@
 #!/bin/bash
 export HOME=/root
 CONFIG_HOME=/data/var/syncthing
-SYNC_PATH=/data/sync
 DRIVEID_PATH=/data/var/sync-id
+SYNC_PATH=/data/sync
 
 pkill syncthing
 cd "$(dirname "$(readlink -f "$0")")"

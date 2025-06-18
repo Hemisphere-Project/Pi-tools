@@ -1,0 +1,62 @@
+pcm.multi16 {
+    type multi
+    slaves.a.pcm "hw:0,0"
+    slaves.a.channels 8
+    slaves.b.pcm "hw:1,0"
+    slaves.b.channels 8
+
+    bindings.0.slave a
+    bindings.0.channel 0
+    bindings.1.slave a
+    bindings.1.channel 1
+    bindings.2.slave a
+    bindings.2.channel 2
+    bindings.3.slave a
+    bindings.3.channel 3
+    bindings.4.slave a
+    bindings.4.channel 4
+    bindings.5.slave a
+    bindings.5.channel 5
+    bindings.6.slave a
+    bindings.6.channel 6
+    bindings.7.slave a
+    bindings.7.channel 7
+    bindings.8.slave b
+    bindings.8.channel 0
+    bindings.9.slave b
+    bindings.9.channel 1
+    bindings.10.slave b
+    bindings.10.channel 2
+    bindings.11.slave b
+    bindings.11.channel 3
+    bindings.12.slave b
+    bindings.12.channel 4
+    bindings.13.slave b
+    bindings.13.channel 5
+    bindings.14.slave b
+    bindings.14.channel 6
+    bindings.15.slave b
+    bindings.15.channel 7
+}
+
+pcm.combined16 {
+    type route
+    slave.pcm "multi16"
+    slave.channels 16
+    ttable.0.0 1
+    ttable.1.1 1
+    ttable.2.2 1
+    ttable.3.3 1
+    ttable.4.4 1
+    ttable.5.5 1
+    ttable.6.6 1
+    ttable.7.7 1
+    ttable.8.8 1
+    ttable.9.9 1
+    ttable.10.10 1
+    ttable.11.11 1
+    ttable.12.12 1
+    ttable.13.13 1
+    ttable.14.14 1
+    ttable.15.15 1
+}
