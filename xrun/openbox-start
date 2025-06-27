@@ -1,0 +1,18 @@
+#!/bin/bash
+
+# Set X authority in tmpfs
+export XAUTHORITY=/tmp/.Xauthority
+
+# Configure multi-monitor layout (extended mode)
+xrandr --auto
+connected_outputs=$(xrandr | grep " connected" | cut -d' ' -f1)
+if [ $(echo "$connected_outputs" | wc -l) -gt 1 ]; then
+    xrandr --output $(echo "$connected_outputs" | head -1) --auto --primary
+    for display in $(echo "$connected_outputs" | tail -n +2); do
+        xrandr --output $display --auto --right-of $(echo "$connected_outputs" | head -1)
+    done
+fi
+
+# Start applications (customize as needed)
+# chromium --kiosk "http://your-url" &
+# mpv --fs /path/to/video &

@@ -1,9 +1,5 @@
 #!/bin/bash
-# Kill all X processes for user 'hmini'
-pkill -u hmini -e -f "Xorg"
-pkill -u hmini -e -f "openbox"
-pkill -u hmini -e -f "lightdm"
-pkill -u hmini -e -f "x-session-manager"
+systemctl mask --now lightdm.service
 
 # Cleanup X authority
 rm -f /tmp/.Xauthority

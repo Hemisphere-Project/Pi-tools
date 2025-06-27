@@ -43,35 +43,19 @@ autologin-session=openbox
 greeter-show-manual-login=true
 EOL
 
+# Allow X run from remote
+# sed -i '/^allowed_users=/c\allowed_users=anybody' /etc/X11/Xwrapper.config
 
 # Disable automatic LightDM startup
-sudo systemctl disable lightdm.service
+systemctl mask --now lightdm.service
 
 # Configure Openbox session
-sudo mkdir -p /etc/xdg/openbox
-sudo tee /etc/xdg/openbox/autostart > /dev/null <<'EOL'
-#!/bin/bash
-
-# Set X authority in tmpfs
-export XAUTHORITY=/tmp/.Xauthority
-
-# Configure multi-monitor layout (extended mode)
-xrandr --auto
-connected_outputs=$(xrandr | grep " connected" | cut -d' ' -f1)
-if [ $(echo "$connected_outputs" | wc -l) -gt 1 ]; then
-    xrandr --output $(echo "$connected_outputs" | head -1) --auto --primary
-    for display in $(echo "$connected_outputs" | tail -n +2); do
-        xrandr --output $display --auto --right-of $(echo "$connected_outputs" | head -1)
-    done
-fi
-
-# Start applications (customize as needed)
-# chromium --kiosk "http://your-url" &
-# mpv --fs /path/to/video &
-EOL
+mkdir -p /etc/xdg/openbox
+rm -f /etc/xdg/openbox/autostart
+ln -sf "$BASEPATH/openbox-start" /etc/xdg/openbox/autostart
 
 # Set permissions
-sudo chmod +x /etc/xdg/openbox/autostart
+chmod +x /etc/xdg/openbox/autostart
 
 
 ln -sf "$BASEPATH/xrun" /usr/local/bin/

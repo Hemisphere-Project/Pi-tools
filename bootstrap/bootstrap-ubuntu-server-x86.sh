@@ -193,7 +193,9 @@ add-apt-repository -y ppa:kobuk-team/intel-graphics
 apt -y install intel-gpu-tools intel-media-va-driver-non-free libmfx-gen1 libvpl2 libvpl-tools libva-glx2 va-driver-all vainfo libvdpau-va-gl1
 
 # X/Openbox/Chromium
-apt install -y xorg openbox lightdm lightdm-gtk-greeter chromium
+# apt install -y xorg openbox lightdm lightdm-gtk-greeter chromium
+# systemctl disable lightdm.service
+# => see Pi-tools/xrun/install.sh
 
 # MPV
 apt -y install mpv ffmpeg
