@@ -1,7 +1,13 @@
 #!/bin/bash
 
-# Set X authority in tmpfs
-export XAUTHORITY=/tmp/.Xauthority
+# Disable any form of screen saver / screen blanking / power management
+xset s off
+xset s noblank
+xset -dpms
+
+POINTER_XID=$(xinput -list | grep "pointer" | grep -v vc4 | grep -v "Virtual" | cut -f 2 | cut -d "=" -f 2)
+echo "POINTER_XID: $POINTER_XID"
+
 
 # Configure multi-monitor layout (extended mode)
 xrandr --auto
@@ -12,6 +18,52 @@ if [ $(echo "$connected_outputs" | wc -l) -gt 1 ]; then
         xrandr --output $display --auto --right-of $(echo "$connected_outputs" | head -1)
     done
 fi
+
+# Rotate the screen if specified
+KIOSK_ROTATE=${KIOSK_ROTATE:-"0"}
+if [ "$KIOSK_ROTATE" != "0" ]; then
+    case $KIOSK_ROTATE in
+        90)
+            xrandr --output $(xrandr | grep " connected" | cut -d' ' -f1 | head -1) --rotate right
+            ;;
+        180)
+            xrandr --output $(xrandr | grep " connected" | cut -d' ' -f1 | head -1) --rotate inverted
+            ;;
+        270)
+            xrandr --output $(xrandr | grep " connected" | cut -d' ' -f1 | head -1) --rotate left
+            ;;
+        *)
+            xrandr --output $(xrandr | grep " connected" | cut -d' ' -f1 | head -1) --rotate normal
+            ;;
+    esac
+fi
+
+# Flip the screen if specified
+KIOSK_REFLECT=${KIOSK_REFLECT:-"n"}
+if [ "$KIOSK_REFLECT" != "n" ]; then
+    case $KIOSK_REFLECT in
+        x)
+            xrandr --output $(xrandr | grep " connected" | cut -d' ' -f1 | head -1) --reflect x
+            ;;
+        y)
+            xrandr --output $(xrandr | grep " connected" | cut -d' ' -f1 | head -1) --reflect y
+            ;;
+        xy)
+            xrandr --output $(xrandr | grep " connected" | cut -d' ' -f1 | head -1) --reflect xy
+            ;;
+        *)
+            xrandr --output $(xrandr | grep " connected" | cut -d' ' -f1 | head -1) --reflect none
+            ;;
+    esac
+fi
+
+# Pointer to the primary output
+if [ -n "$POINTER_XID" ]; then
+    xinput --map-to-output $POINTER_XID $(xrandr | grep " connected" | cut -d' ' -f1 | head -1)
+fi
+
+# Allow quitting the X server with CTRL-ATL-Backspace
+setxkbmap -option terminate:ctrl_alt_bksp
 
 # Start applications (customize as needed)
 # chromium --kiosk "http://your-url" &

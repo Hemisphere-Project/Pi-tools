@@ -11,7 +11,7 @@ if [[ $(command -v apt) ]]; then
     DISTRO='xbian'
     echo "Distribution: $DISTRO"
 
-    apt install -y xorg openbox
+    apt install -y xorg openbox xdotool python3-xdg
 
 ## ARCH Linux
 elif [[ $(command -v pacman) ]]; then
