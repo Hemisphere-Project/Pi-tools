@@ -1,15 +1,7 @@
 #!/bin/bash
-# Start X session as 'hmini' with tmpfs Xauthority
-export XAUTHORITY=/tmp/.Xauthority
-chmod 777 /tmp
-touch $XAUTHORITY
-chown hmini:hmini $XAUTHORITY
 
 # Start LightDM 
 # systemctl unmask lightdm.service # Not working on RO filesystem
-systemctl start lightdm.service
-
-# Start Openbox session directly without LightDM
-# USER=hmini
-# export XAUTHORITY=/tmp/.Xauthority
-# sudo -u $USER XAUTHORITY=$XAUTHORITY startx /usr/bin/openbox-session -- :0
+# systemctl start lightdm.service
+chmod 777 /tmp
+XAUTHORITY=/tmp/.Xauthority startx -- vt7

@@ -36,19 +36,19 @@ if ! id "hmini" &>/dev/null; then
 fi
 
 # Configure LightDM for manual start and autologin
-sudo tee /etc/lightdm/lightdm.conf.d/50-hmini.conf > /dev/null <<EOL
-[Seat:*]
-autologin-user=hmini
-autologin-session=openbox
-greeter-show-manual-login=true
-EOL
+# sudo tee /etc/lightdm/lightdm.conf.d/50-hmini.conf > /dev/null <<EOL
+# [Seat:*]
+# autologin-user=hmini
+# autologin-session=openbox
+# greeter-show-manual-login=true
+# EOL
 
 # Allow X run from remote
 # sed -i '/^allowed_users=/c\allowed_users=anybody' /etc/X11/Xwrapper.config
 
 # Disable automatic LightDM startup
-systemctl disable lightdm.service
-systemctl set-default multi-user.target
+# systemctl disable lightdm.service
+# systemctl set-default multi-user.target
 
 # Configure Openbox session
 mkdir -p /etc/xdg/openbox
@@ -57,6 +57,29 @@ ln -sf "$BASEPATH/openbox-start" /etc/xdg/openbox/autostart
 
 # Set permissions
 chmod +x /etc/xdg/openbox/autostart
+
+# xinit configuration
+echo "exec openbox-session" > /root/.xinitrc
+chmod +x /root/.xinitrc
+
+# # Move /var/lib/lightdm to /data/var/lightdm
+# if [ -d /var/lib/lightdm ]; then
+#     mv /var/lib/lightdm /data/var/lightdm
+# else
+#     mkdir -p /data/var/lightdm
+# fi
+# ln -s /data/var/lightdm /var/lib/lightdm
+
+# # map /home/hmini/.Xauthority to /data/var/.Xauthority
+# if [ -d /home/hmini ]; then
+#     rm -f /home/hmini/.Xauthority
+#     touch /data/var/.Xauthority
+#     ln -s /data/var/.Xauthority /home/hmini/.Xauthority
+#     chown hmini:hmini /data/var/.Xauthority
+#     chmod 600 /data/var/.Xauthority
+# else
+#     echo "Warning: /home/hmini does not exist. Skipping .Xauthority setup."
+# fi
 
 
 ln -sf "$BASEPATH/xrun" /usr/local/bin/

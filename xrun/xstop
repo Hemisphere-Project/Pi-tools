@@ -1,7 +1,13 @@
 #!/bin/bash
 # systemctl mask --now lightdm.service # Not working on RO filesystem
-systemctl stop lightdm.service
+# systemctl stop lightdm.service
 
+# clear X authority content
+# echo "" >| /data/var/.xauthority
 
-# Cleanup X authority
+# stop Xorg and Openbox
+pkill openbox
+pkill Xorg
+pkill X
+
 rm -f /tmp/.Xauthority
