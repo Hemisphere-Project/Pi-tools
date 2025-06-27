@@ -1,0 +1,4 @@
+#!/bin/bash
+pkill openbox
+pkill Xorg
+pkill X
