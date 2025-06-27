@@ -1,7 +1,63 @@
 #!/bin/bash
 
-# Start LightDM 
-# systemctl unmask lightdm.service # Not working on RO filesystem
-# systemctl start lightdm.service
+# interactive only (prevent start over ssh)
+# [[ $- != *i* ]] && return
+
+#
+# DEFAULT CONFIG
+#
+ROTATE="0"      # 0, 90, 180, 270
+REFLECT="n"     # n, x, y, xy
+NOCURSOR=""     # "", -nocursor
+
+#
+# CMD LINE OVERWRITE
+#
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    -r|--rotate)
+      ROTATE="$2"
+      shift # past argument
+      shift # past value
+      ;;
+    -m|--reflect)
+      REFLECT="$2"
+      shift # past argument
+      shift # past value
+      ;;
+    -c|--nocursor)
+      NOCURSOR="-nocursor"
+      shift # past argument
+      ;;
+    -h|--help)
+      echo "Usage: kiosk [options]"
+      echo " "
+      echo "Options:"
+      echo "  -r, --rotate <deg>     Rotate screen (0, 90, 180, 270)"
+      echo "  -m, --reflect <mode>   Reflect screen (n, x, y, xy)"
+      echo "  -c, --nocursor         Hide cursor"
+      echo "  -h, --help             Show this help"
+      echo " "
+      shift # past argument
+      ;;
+    *)
+      echo "Unknown argument $1"
+      echo "See kiosk --help for more info."
+      exit 1
+      ;;
+  esac
+done
+
+
+#INFO
+echo " "
+echo ".:: XRUN ::."
+echo " "
 chmod 777 /tmp
-XAUTHORITY=/tmp/.Xauthority startx -- vt7
+XAUTHORITY=/tmp/.Xauthority KIOSK_ROTATE=$ROTATE KIOSK_REFLECT=$REFLECT startx -- vt7 $NOCURSOR
+logout
+
+
+
+# chmod 777 /tmp
+# XAUTHORITY=/tmp/.Xauthority startx -- vt7
