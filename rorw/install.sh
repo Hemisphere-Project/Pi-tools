@@ -140,8 +140,6 @@ systemctl daemon-reload
 mount -a
 chmod -R 777 /tmp
 
-exit 0
-
 # bash prompt color
 #
 echo "source $BASEPATH/rorw.bashrc" >> /root/.bashrc

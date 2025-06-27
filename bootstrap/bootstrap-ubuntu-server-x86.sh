@@ -169,13 +169,14 @@ git clone https://github.com/Hemisphere-Project/Pi-tools.git
 
 # Deploy modules
 cd /opt/Pi-tools
-modules=(
+modules=( 
     starter         #+ ok 
+    xrun            #+ ok
     hostrename      #+ ok
     network-tools   #+ ok
     rorw            #+ ok
     usbautomount    #+ ok
-    extendfs        # ok
+    extendfs        #+ ok
     synczinc        ## todo  
     webconf         ## flask broken.. 
     # webfiles      ## todo  
