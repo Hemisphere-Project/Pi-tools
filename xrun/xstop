@@ -1,4 +1,9 @@
 #!/bin/bash
-pkill openbox
-pkill Xorg
-pkill X
+# Kill all X processes for user 'hmini'
+pkill -u hmini -e -f "Xorg"
+pkill -u hmini -e -f "openbox"
+pkill -u hmini -e -f "lightdm"
+pkill -u hmini -e -f "x-session-manager"
+
+# Cleanup X authority
+rm -f /tmp/.Xauthority

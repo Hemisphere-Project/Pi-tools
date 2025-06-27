@@ -1,5 +1,5 @@
 # install Ubuntu server with OpenSSH enabled 
-# User : hberry // pi
+# User : hmini // hmini
 
 # Remote login as hberry
 sudo su root         # =>  root
@@ -16,8 +16,8 @@ echo "root:rootpi" | chpasswd
 sed -i "s/PermitRootLogin.*/PermitRootLogin yes/g" /etc/ssh/sshd_config
 sed -i "s/#PermitRootLogin/PermitRootLogin/g" /etc/ssh/sshd_config
 sed -i "s/UsePAM yes/UsePAM no/g" /etc/ssh/sshd_config
-echo "IPQoS 0x00" >> /etc/ssh/ssh_config
-echo "IPQoS 0x00" >> /etc/ssh/sshd_config
+#echo "IPQoS 0x00" >> /etc/ssh/ssh_config
+#echo "IPQoS 0x00" >> /etc/ssh/sshd_config
 echo "IPQoS cs0 cs0" >> /etc/ssh/sshd_config
 
 # Allow PasswordAuthentication
@@ -33,6 +33,14 @@ cat /dev/zero | ssh-keygen -q -N ""      # => no password
 systemctl restart ssh
 # [from remote machine] ssh-copy-id root@<IP-ADDRESS>
 
+# Python & tools
+apt -y install git wget tmux imagemagick htop libsensors5 build-essential lsof nano
+apt -y install python3 python3-pip python3-setuptools python3-wheel pipx pipenv
+
+# Mosquitto server
+apt -y install mosquitto
+systemctl disable mosquitto
+
 ### oh-my-bash
 ###
 grep -qxF 'DISABLE_UPDATE_PROMPT=true' ~/.bashrc || echo 'DISABLE_UPDATE_PROMPT=true' >> ~/.bashrc
@@ -47,13 +55,6 @@ systemctl disable --now open-iscsi.service
 systemctl disable --now systemd-networkd-wait-online.service
 systemctl disable --now unattended-upgrades.service
 
-# Python & tools
-apt -y install git wget tmux imagemagick htop libsensors5 build-essential lsof nano
-apt -y install python3 python3-pip python3-setuptools python3-wheel pipx pipenv
-
-# Mosquitto server
-apt -y install mosquitto
-systemctl disable mosquitto
 
 # Avahi / mdns
 apt -y install avahi-daemon avahi-utils libnss-mdns
@@ -189,10 +190,10 @@ done
 
 # Intel GPU drivers
 add-apt-repository -y ppa:kobuk-team/intel-graphics
-apt -y install intel-gpu-tools intel-media-va-driver-non-free libmfx-gen1 libvpl2 libvpl-tools libva-glx2 va-driver-all vainfo libvdpau-va-gl1 libmfxgen libmfx1
+apt -y install intel-gpu-tools intel-media-va-driver-non-free libmfx-gen1 libvpl2 libvpl-tools libva-glx2 va-driver-all vainfo libvdpau-va-gl1
 
 # X/Openbox/Chromium
-apt -y install xorg openbox chromium-browser
+apt install -y xorg openbox lightdm lightdm-gtk-greeter chromium
 
 # MPV
 apt -y install mpv ffmpeg
