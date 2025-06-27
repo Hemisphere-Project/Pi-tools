@@ -47,7 +47,8 @@ EOL
 # sed -i '/^allowed_users=/c\allowed_users=anybody' /etc/X11/Xwrapper.config
 
 # Disable automatic LightDM startup
-systemctl mask --now lightdm.service
+systemctl disable lightdm.service
+systemctl set-default multi-user.target
 
 # Configure Openbox session
 mkdir -p /etc/xdg/openbox

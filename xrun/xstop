@@ -1,5 +1,7 @@
 #!/bin/bash
-systemctl mask --now lightdm.service
+# systemctl mask --now lightdm.service # Not working on RO filesystem
+systemctl stop lightdm.service
+
 
 # Cleanup X authority
 rm -f /tmp/.Xauthority

@@ -6,7 +6,7 @@ touch $XAUTHORITY
 chown hmini:hmini $XAUTHORITY
 
 # Start LightDM 
-systemctl unmask lightdm.service
+# systemctl unmask lightdm.service # Not working on RO filesystem
 systemctl start lightdm.service
 
 # Start Openbox session directly without LightDM
