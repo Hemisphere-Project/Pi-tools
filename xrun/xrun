@@ -1,0 +1,43 @@
+#!/bin/bash
+# xrun - Start X server and Openbox with multi-display support
+
+export DISPLAY=:0
+
+# Start X server if not already running
+if ! pgrep -x "Xorg" > /dev/null; then
+    X :0 -nolisten tcp vt7 &
+    sleep 2  # Give X time to start
+fi
+
+# Start Openbox if not already running
+if ! pgrep -x "openbox" > /dev/null; then
+    openbox &
+    sleep 1
+fi
+
+# Wait for X to be ready
+for i in {1..10}; do
+    xdpyinfo -display :0 > /dev/null 2>&1 && break
+    sleep 1
+done
+
+# Detect connected displays
+CONNECTED_DISPLAYS=($(DISPLAY=:0 xrandr --query | grep " connected" | cut -d" " -f1))
+
+if [ ${#CONNECTED_DISPLAYS[@]} -eq 0 ]; then
+    echo "No displays connected!" >&2
+    exit 1
+fi
+
+# Arrange displays horizontally
+PREV=""
+for DISP in "${CONNECTED_DISPLAYS[@]}"; do
+    if [ -z "$PREV" ]; then
+        DISPLAY=:0 xrandr --output "$DISP" --primary --auto
+    else
+        DISPLAY=:0 xrandr --output "$DISP" --auto --right-of "$PREV"
+    fi
+    PREV="$DISP"
+done
+
+# Script ends here; X and Openbox remain running for clients to connect

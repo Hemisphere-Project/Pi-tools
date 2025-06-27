@@ -172,7 +172,7 @@ modules=(
     starter         #+ ok 
     hostrename      #+ ok
     network-tools   #+ ok
-    rorw            # ok
+    rorw            #+ ok
     usbautomount    #+ ok
     extendfs        # ok
     synczinc        ## todo  
@@ -187,8 +187,15 @@ for i in "${modules[@]}"; do
     cd /opt/Pi-tools
 done
 
+# Intel GPU drivers
+add-apt-repository -y ppa:kobuk-team/intel-graphics
+apt -y install intel-gpu-tools intel-media-va-driver-non-free libmfx-gen1 libvpl2 libvpl-tools libva-glx2 va-driver-all vainfo libvdpau-va-gl1 libmfxgen libmfx1
+
+# X/Openbox/Chromium
+apt -y install xorg openbox chromium-browser
+
 # MPV
-apt -y install mpv ffmpeg intel-gpu-tools libvdpau-va-gl1 intel-media-va-driver-non-free 
+apt -y install mpv ffmpeg
 
 # HPlayer2
 cd /opt
