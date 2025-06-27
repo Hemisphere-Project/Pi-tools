@@ -30,5 +30,6 @@ else
 fi
 
 ln -sf "$BASEPATH/xrun" /usr/local/bin/
+ln -sf "$BASEPATH/xstop" /usr/local/bin/
 systemctl daemon-reload
 
