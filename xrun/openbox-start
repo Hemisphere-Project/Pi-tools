@@ -65,6 +65,7 @@ fi
 # Allow quitting the X server with CTRL-ATL-Backspace
 setxkbmap -option terminate:ctrl_alt_bksp
 
+xrandr
 # Start applications (customize as needed)
 # chromium --kiosk "http://your-url" &
 # mpv --fs /path/to/video &
