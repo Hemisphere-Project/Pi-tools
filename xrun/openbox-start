@@ -20,9 +20,9 @@ if [ $(echo "$connected_outputs" | wc -l) -gt 1 ]; then
 fi
 
 # Rotate the screen if specified
-KIOSK_ROTATE=${KIOSK_ROTATE:-"0"}
-if [ "$KIOSK_ROTATE" != "0" ]; then
-    case $KIOSK_ROTATE in
+XROTATE=${XROTATE:-"0"}
+if [ "$XROTATE" != "0" ]; then
+    case $XROTATE in
         90)
             xrandr --output $(xrandr | grep " connected" | cut -d' ' -f1 | head -1) --rotate right
             ;;
@@ -39,9 +39,9 @@ if [ "$KIOSK_ROTATE" != "0" ]; then
 fi
 
 # Flip the screen if specified
-KIOSK_REFLECT=${KIOSK_REFLECT:-"n"}
-if [ "$KIOSK_REFLECT" != "n" ]; then
-    case $KIOSK_REFLECT in
+XREFLECT=${XREFLECT:-"n"}
+if [ "$XREFLECT" != "n" ]; then
+    case $XREFLECT in
         x)
             xrandr --output $(xrandr | grep " connected" | cut -d' ' -f1 | head -1) --reflect x
             ;;

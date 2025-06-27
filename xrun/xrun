@@ -30,7 +30,7 @@ while [[ $# -gt 0 ]]; do
       shift # past argument
       ;;
     -h|--help)
-      echo "Usage: kiosk [options]"
+      echo "Usage: xrun [options]"
       echo " "
       echo "Options:"
       echo "  -r, --rotate <deg>     Rotate screen (0, 90, 180, 270)"
@@ -42,7 +42,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     *)
       echo "Unknown argument $1"
-      echo "See kiosk --help for more info."
+      echo "See xrun --help for more info."
       exit 1
       ;;
   esac
@@ -54,7 +54,7 @@ echo " "
 echo ".:: XRUN ::."
 echo " "
 chmod 777 /tmp
-XAUTHORITY=/tmp/.Xauthority KIOSK_ROTATE=$ROTATE KIOSK_REFLECT=$REFLECT startx -- vt7 $NOCURSOR
+XAUTHORITY=/tmp/.Xauthority XROTATE=$ROTATE XREFLECT=$REFLECT startx -- vt7 $NOCURSOR
 logout
 
 
