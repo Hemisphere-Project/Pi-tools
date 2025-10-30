@@ -28,7 +28,7 @@ if (!fs.existsSync(configPath)) {
     // remove database if exists
     if (fs.existsSync(databasePath)) fs.unlinkSync(databasePath);
     execSync(`filebrowser -d ${databasePath} config init -p ${PORT} -r ${ROOT} -a '0.0.0.0' --auth.method=noauth`, { stdio: 'inherit' });
-    execSync(`filebrowser -d ${databasePath} users add root rootpi`, { stdio: 'inherit' });
+    execSync(`filebrowser -d ${databasePath} users add root rootpirootpi`, { stdio: 'inherit' });
     execSync(`filebrowser -d ${databasePath} config export ${configPath}`, { stdio: 'inherit' });
 }
 let p = execSync(`filebrowser -c ${configPath} -d ${databasePath}`, { stdio: 'inherit' });

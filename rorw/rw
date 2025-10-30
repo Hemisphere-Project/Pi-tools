@@ -11,7 +11,12 @@ for i in {1..5}; do
 
     # Try to remount the boot partition as read-write
     if (lsblk -o uuid /dev/mmcblk0p3 > /dev/null 2>&1); then
-        mount -o remount,rw /boot/firmware 
+        # check if /boot/firmware exists
+        if [ -d /boot/firmware ]; then
+            mount -o remount,rw /boot/firmware
+        else
+            mount -o remount,rw /boot
+        fi
     elif (lsblk -o uuid /dev/mmcblk1p8 > /dev/null 2>&1); then
         mount -o remount,rw /boot/efi 
     fi

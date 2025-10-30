@@ -106,6 +106,7 @@ mkdir -p /data/var/NetworkManager
 mkdir -p /data/var/dnsmasq
 mkdir -p /var/lib/dnsmasq
 mkdir -p /data/var/tmp
+mkdir -p /data/var/cache
 
 echo "
 UUID=$UUID_boot                                 ${TARGET_boot}  vfat    defaults,ro,errors=remount-ro,umask=177        0       0
@@ -119,6 +120,7 @@ tmpfs                                           /tmp            tmpfs   defaults
 /tmp                                            /var/log        none    defaults,bind                                  0 0
 /tmp                                            /var/tmp        none    defaults,bind                                  0 0
 
+/data/var/cache                                 /root/.cache       none    defaults,bind                                  0 0
 /data/var/dnsmasq                               /var/lib/dnsmasq none   defaults,bind                                 0 0
 /data/var/NetworkManager                        /var/lib/NetworkManager none defaults,bind                             0 0
 " > /etc/fstab
