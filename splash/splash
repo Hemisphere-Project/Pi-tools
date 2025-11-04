@@ -8,3 +8,5 @@ p = subprocess.Popen( ('fbi -d /dev/fb0 --noverbose -a '+os.path.join(dir, 'spla
 time.sleep(5)
 p.kill()
 p = subprocess.Popen( ('fbi -d /dev/fb0 --noverbose -a '+os.path.join(dir, 'black.png')).split(' ') )
+# Keep the script running so the black screen stays displayed
+p.wait()

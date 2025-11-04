@@ -139,16 +139,17 @@ if [ "$1" = add ]; then
 				options="$MOUNTOPTIONS${options:+,$options}"
 			fi
 
-			# Mount the filesystem.
-			log info "executing command: mount -t$fstype ${options:+-o$options} $DEVNAME $mountpoint"
-			mount "-t$fstype" "${options:+-o$options}" "$DEVNAME" "$mountpoint"
+		# Mount the filesystem.
+		log info "executing command: mount -t$fstype ${options:+-o$options} $DEVNAME $mountpoint"
+		mount "-t$fstype" "${options:+-o$options}" "$DEVNAME" "$mountpoint"
 
-			# Symlink last mounted
-			if [ -n "$MOUNTLAST" ]; then
-				ln -sfn "$mountpoint" "$MOUNTLAST"
-			fi
+		# Symlink last mounted
+		if [ -n "$MOUNTLAST" ]; then
+			rm -rf "$MOUNTLAST"
+			ln -sfn "$mountpoint" "$MOUNTLAST"
+		fi
 
-			# Determine vendor and model.
+		# Determine vendor and model.
 			vendor=
 			if [ -r "/sys$DEVPATH/device/vendor" ]; then
 				vendor="`cat \"/sys$DEVPATH/device/vendor\"`"
