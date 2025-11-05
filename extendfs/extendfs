@@ -3,6 +3,29 @@ set -euo pipefail
 
 cd "$(dirname "$(readlink -f "$0")")"
 
+# Enable read-write mode if rw/ro commands are available
+RW_RO_AVAILABLE=false
+if command -v rw >/dev/null 2>&1 && command -v ro >/dev/null 2>&1; then
+        RW_RO_AVAILABLE=true
+        echo "Switching to read-write mode..."
+        rw
+        sleep 1
+fi
+
+# Cleanup function to restore read-only mode if needed
+cleanup() {
+        local exit_code=$?
+        if [[ "$RW_RO_AVAILABLE" == true ]]; then
+                echo ""
+                echo "Restoring read-only mode..."
+                ro
+        fi
+        exit $exit_code
+}
+
+# Set trap to restore read-only mode on exit or error
+trap cleanup EXIT
+
 usage() {
         echo "Usage: $(basename "$0") [-f]"
         echo "  -f  Force filesystem expansion even if drive-id matches"
@@ -257,6 +280,9 @@ if [[ "$STAGE2_MODE" == false ]]; then
                         
                         # Drop flag for other services
                         touch /tmp/new-drive
+                        
+                        # Disable cleanup trap before reboot (no need to restore ro mode)
+                        trap - EXIT
                         
                         echo ""
                         echo "Rebooting in 5 seconds..."
