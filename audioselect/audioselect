@@ -9,42 +9,24 @@
 
 BASEPATH="$(dirname "$(readlink -f "$0")")"
 
-echo "[audioselect] auto-selecting audio output device or specify: hdmi0/jack/usb/both"
+echo "[audioselect] auto-selecting audio output device or specify: hdmi0/hdmi1/analog/usb/both"
 
 ###
 ### RENAMING CARDS
 ###
 
 #
-# check JACK card device name
+# check HDMI0 card device name (do this FIRST to avoid confusion with analog)
 #
-find_jackcard=$(aplay -l | grep bcm2835 -m1)
-if [ "$find_jackcard" ]; then
-    target_jackcard=$(echo $find_jackcard | awk -F ' ' '{print $3}')
-    current_jackcard=$(cat /etc/asound.conf | awk '/pcm.jack/{getline; getline; print}' | awk -F ' ' '{print $2}')
-    if [[ "$current_jackcard" != "$target_jackcard" ]]; then
-        echo "JACK card found as card $target_jackcard instead of $current_jackcard, renaming..."
-        rw
-        sed -i "s/card $current_jackcard/card $target_jackcard/g" /etc/asound.conf
-        sync
-        ro
-        echo "JACK card set to $target_jackcard"
-    fi
-else
-    echo "No JACK audio card found using 'aplay -l'"
-fi
-
-#
-# check HDMI0 card device name
-#
-find_hdmi0card=$(aplay -l | grep hdmi -m1)
+find_hdmi0card=$(aplay -l | grep -iE "hdmi|vc4-hdmi" -m1)
 if [ "$find_hdmi0card" ]; then
-    target_hdmi0card=$(echo $find_hdmi0card | awk -F ' ' '{print $3}')
-    current_hdmi0card=$(cat /etc/asound.conf | awk '/pcm.hdmi0/{getline; getline; getline; getline; getline; getline; print}' | awk -F ' ' '{print $2}')
+    target_hdmi0card=$(echo $find_hdmi0card | awk '{print $2}' | tr -d ':')
+    current_hdmi0card=$(cat /etc/asound.conf | awk '/pcm.hdmi0/{getline; getline; getline; getline; getline; getline; print}' | awk '{print $NF}')
     if [[ "$current_hdmi0card" != "$target_hdmi0card" ]]; then
         echo "HDMI0 card found as card $target_hdmi0card instead of $current_hdmi0card, renaming..."
         rw
-        sed -i "s/card $current_hdmi0card/card $target_hdmi0card/g" /etc/asound.conf
+        # Use word boundaries to prevent cascading replacements
+        sed -i "s/\bcard $current_hdmi0card\b/card $target_hdmi0card/g" /etc/asound.conf
         sync
         ro
         echo "HDMI0 card set to $target_hdmi0card"
@@ -54,16 +36,62 @@ else
 fi
 
 #
+# check HDMI1 card device name (Pi4+ only)
+#
+find_hdmi1card=$(aplay -l | grep -iE "hdmi|vc4-hdmi" | sed -n '2p')
+if [ "$find_hdmi1card" ]; then
+    target_hdmi1card=$(echo $find_hdmi1card | awk '{print $2}' | tr -d ':')
+    # Check if asound.conf has hdmi1 section (Pi4+ config)
+    if grep -q "^pcm.hdmi1" /etc/asound.conf; then
+        current_hdmi1card=$(cat /etc/asound.conf | awk '/pcm.hdmi1/{getline; getline; getline; getline; getline; getline; print}' | awk '{print $NF}')
+        if [[ "$current_hdmi1card" != "$target_hdmi1card" ]]; then
+            echo "HDMI1 card found as card $target_hdmi1card instead of $current_hdmi1card, renaming..."
+            rw
+            # Use word boundaries to prevent cascading replacements
+            sed -i "s/\bcard $current_hdmi1card\b/card $target_hdmi1card/g" /etc/asound.conf
+            sync
+            ro
+            echo "HDMI1 card set to $target_hdmi1card"
+        fi
+    else
+        echo "HDMI1 card detected but config doesn't support it (use asound.conf-pi4)"
+    fi
+else
+    echo "No HDMI1 audio card found (single HDMI system)"
+fi
+
+#
+# check ANALOG card device name (find bcm2835 that is NOT HDMI)
+#
+find_analogcard=$(aplay -l | grep bcm2835 | grep -viE "hdmi|vc4-hdmi" -m1)
+if [ "$find_analogcard" ]; then
+    target_analogcard=$(echo $find_analogcard | awk '{print $2}' | tr -d ':')
+    current_analogcard=$(cat /etc/asound.conf | awk '/pcm.analog/{getline; getline; print}' | awk '{print $NF}')
+    if [[ "$current_analogcard" != "$target_analogcard" ]]; then
+        echo "ANALOG card found as card $target_analogcard instead of $current_analogcard, renaming..."
+        rw
+        # Use word boundaries to prevent cascading replacements
+        sed -i "s/\bcard $current_analogcard\b/card $target_analogcard/g" /etc/asound.conf
+        sync
+        ro
+        echo "ANALOG card set to $target_analogcard"
+    fi
+else
+    echo "No ANALOG audio card found using 'aplay -l'"
+fi
+
+#
 # check USB card device name
 #
 find_usbcard=$(aplay -l | grep USB -m1)
 if [ "$find_usbcard" ]; then
-    target_usbcard=$(echo $find_usbcard | awk -F ' ' '{print $3}')
-    current_usbcard=$(cat /etc/asound.conf | awk '/ctl.usb/{getline; getline; print}' | awk -F ' ' '{print $2}')
+    target_usbcard=$(echo $find_usbcard | awk '{print $2}' | tr -d ':')
+    current_usbcard=$(cat /etc/asound.conf | awk '/ctl.usb/{getline; getline; print}' | awk '{print $NF}')
     if [[ "$current_usbcard" != "$target_usbcard" ]]; then
         echo "USB card found as card $target_usbcard instead of $current_usbcard, renaming..."
         rw
-        sed -i "s/card $current_usbcard/card $target_usbcard/g" /etc/asound.conf
+        # Use word boundaries to prevent cascading replacements
+        sed -i "s/\bcard $current_usbcard\b/card $target_usbcard/g" /etc/asound.conf
         sync
         ro
         echo "USB card set to $target_usbcard"
@@ -87,29 +115,57 @@ if [ -z "$target_route" ]; then
     target_route=$current_route
 fi
 
-# if target route is jack, try both
+# handle legacy "jack" naming - convert to "analog"
 if [ "$target_route" = "jack" ]; then
+    echo "Legacy mode: 'jack' renamed to 'analog'"
+    target_route="analog"
+fi
+
+# if target route is analog, try both (analog + USB if available)
+if [ "$target_route" = "analog" ]; then
     target_route="both"
-fi 
+fi
 
 # if target route is hdmi0, check if hdmi0 card is available
 if [ "$target_route" = "hdmi0" ]; then
     if [ -z "$find_hdmi0card" ]; then
         target_route="both"
-        echo "=> No HDMI0 audio card found, falling back to JACK/USB"
+        echo "=> No HDMI0 audio card found, falling back to ANALOG/USB"
     else
         target_route="hdmi0"
         echo "=> using HDMI0 audio card found as card $target_hdmi0card"
     fi
 fi
 
+# if target route is hdmi1, check if hdmi1 card is available
+if [ "$target_route" = "hdmi1" ]; then
+    if [ -z "$find_hdmi1card" ]; then
+        echo "=> No HDMI1 audio card found, falling back to HDMI0"
+        if [ -z "$find_hdmi0card" ]; then
+            target_route="both"
+            echo "=> No HDMI0 either, falling back to ANALOG/USB"
+        else
+            target_route="hdmi0"
+            echo "=> using HDMI0 audio card found as card $target_hdmi0card"
+        fi
+    else
+        if grep -q "^pcm.hdmi1" /etc/asound.conf; then
+            target_route="hdmi1"
+            echo "=> using HDMI1 audio card found as card $target_hdmi1card"
+        else
+            echo "=> HDMI1 card exists but config doesn't support it, using HDMI0"
+            target_route="hdmi0"
+        fi
+    fi
+fi
+
 # if target route is usb or both, check if usb card is available
 if [ "$target_route" = "usb" ] || [ "$target_route" = "both" ]; then
     if [ -z "$find_usbcard" ]; then
-        target_route="jack"
-        echo "=> No USB audio card found, falling back to JACK"
+        target_route="analog"
+        echo "=> No USB audio card found, falling back to ANALOG"
     elif [ "$target_route" = "both" ]; then
-        echo "=> using BOTH usb and jack audio cards"
+        echo "=> using BOTH usb and analog audio cards"
     else
         echo "=> using USB audio card found as card $target_usbcard"
     fi
@@ -138,8 +194,8 @@ fi
 
 
 # Volume and settings
-amixer -D jack cset numid=1 -- 99%
-if [ $target_route = "both" ]; then
-    amixer -D usb set Speaker -- 95%
-    amixer -D usb sset PCM -- 95%
+amixer -D analog cset numid=1 -- 99% 2>/dev/null || amixer -D jack cset numid=1 -- 99% 2>/dev/null || true
+if [ "$target_route" = "both" ]; then
+    amixer -D usb set Speaker -- 95% 2>/dev/null || true
+    amixer -D usb sset PCM -- 95% 2>/dev/null || true
 fi

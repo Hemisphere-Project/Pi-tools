@@ -1,15 +1,15 @@
 # copy this file to /etc/asound.conf
 
 
-# define jack
+# define analog
 #
 
-pcm.jack { 
+pcm.analog { 
     type hw
     card Headphones
 }
 
-ctl.jack {
+ctl.analog {
     type hw
     card Headphones
 }
@@ -92,7 +92,7 @@ pcm.both {
                   pcm { 
                      # add the multi plugin - used to merge the 2 sound cards together 
                      type multi; 
-                     slaves.a.pcm "jack" 
+                     slaves.a.pcm "analog" 
                      slaves.b.pcm "usb"
 
                      # this creates a 4 channel stream using 2 inputs from each card 
@@ -128,5 +128,5 @@ pcm.both {
 } 
 
 # sets the default output device 
-pcm.!default jack
-ctl.!default jack
+pcm.!default analog
+ctl.!default analog

@@ -30,19 +30,8 @@ else
 fi
 
 if [[ $(uname -m) = armv* ]]; then
-    # Detect Debian/Raspbian version
-    if [[ -f /etc/os-release ]]; then
-        . /etc/os-release
-        VERSION_CODENAME="${VERSION_CODENAME:-}"
-    fi
-    
-    if [[ "$VERSION_CODENAME" == "buster" ]]; then
-        echo "Detected Buster on armv*, using asound.conf-pi2-buster"
-        cp "$BASEPATH/asound.conf-pi2-buster" /etc/asound.conf
-    else
-        echo "Detected armv* (not Buster), using asound.conf-pi2"
-        cp "$BASEPATH/asound.conf-pi2" /etc/asound.conf
-    fi
+    echo "Detected armv* (not Buster), using asound.conf-pi2"
+    cp "$BASEPATH/asound.conf-pi2" /etc/asound.conf
 fi
 if [[ $(uname -m) = aarch64 ]]; then
     cp "$BASEPATH/asound.conf-pi4" /etc/asound.conf
@@ -54,11 +43,16 @@ ln -sf "$BASEPATH/70-audioselect.rules" /etc/udev/rules.d/
 
 systemctl daemon-reload
 
+systemctl stop alsa-restore
+systemctl mask alsa-restore
+systemctl stop alsa-state
+systemctl mask alsa-state
+
 #systemctl enable audioselect
 FILE=/boot/starter.txt
 if test -f "$FILE"; then
-echo "## [audioselect] specify audio output device (hdmi0, jack, usb, both)
-## if interface missing, falls back to jack. If jack, try both JACK/USB (hotplug support)
+echo "## [audioselect] specify audio output device (hdmi0, analog, usb, both)
+## if interface missing, falls back to ANALOG. If ANALOG, try both ANALOG/USB (hotplug support)
 # audioselect@both
 " >> /boot/starter.txt
 fi
