@@ -236,6 +236,10 @@ fi
 
 if [[ "$STAGE2_MODE" == false ]]; then
         echo "Deleting and recreating partition $PART_NUM to use all remaining space..."
+        
+        # Set backup directory for sfdisk (needed when running via systemd without $HOME)
+        export SFDISK_BACKUP_DIR=/tmp
+        
         sfdisk --backup --no-reread --delete "$DISK_DEV" "$PART_NUM"
 
         PART_SPEC="start=$PART_START, size=$NEW_SIZE"
