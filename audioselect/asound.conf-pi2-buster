@@ -17,7 +17,7 @@ pcm.hdmi0 {
       format IEC958_SUBFRAME_LE
       pcm {
          type hw
-         card vc4hdmi
+         card b1
       }
    }
 }
@@ -32,7 +32,7 @@ ctl.hdmi0 {
 		}
 		control {
 			name "HDMI Playback Volume"
-			card vc4hdmi
+			card b1
 		}
 	}
 }

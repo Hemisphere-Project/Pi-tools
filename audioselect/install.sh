@@ -30,7 +30,19 @@ else
 fi
 
 if [[ $(uname -m) = armv* ]]; then
-    cp "$BASEPATH/asound.conf-pi2" /etc/asound.conf
+    # Detect Debian/Raspbian version
+    if [[ -f /etc/os-release ]]; then
+        . /etc/os-release
+        VERSION_CODENAME="${VERSION_CODENAME:-}"
+    fi
+    
+    if [[ "$VERSION_CODENAME" == "buster" ]]; then
+        echo "Detected Buster on armv*, using asound.conf-pi2-buster"
+        cp "$BASEPATH/asound.conf-pi2-buster" /etc/asound.conf
+    else
+        echo "Detected armv* (not Buster), using asound.conf-pi2"
+        cp "$BASEPATH/asound.conf-pi2" /etc/asound.conf
+    fi
 fi
 if [[ $(uname -m) = aarch64 ]]; then
     cp "$BASEPATH/asound.conf-pi4" /etc/asound.conf
