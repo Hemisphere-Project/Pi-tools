@@ -1,63 +1,360 @@
 #!/bin/bash
+set -euo pipefail
+
 cd "$(dirname "$(readlink -f "$0")")"
 
-# CHECK IF SD HAS BEEN CLONED !
-DRIVE=$(findmnt -n -o SOURCE --target /)
-DRIVE_ID=$(udevadm info --name=$DRIVE | grep ID_SERIAL= | cut -d '=' -f2)
-LAST_DRIVE_ID=$(cat /data/var/drive-id)
+usage() {
+        echo "Usage: $(basename "$0") [-f]"
+        echo "  -f  Force filesystem expansion even if drive-id matches"
+        exit 1
+}
 
-if [[ $DRIVE_ID == $LAST_DRIVE_ID ]]
-        then
-                echo "drive-id is valid"
-        else
-                echo "drive-id has changed, i am a clone !"
-                echo $DRIVE_ID > /data/var/drive-id
+FORCE=false
+while getopts ":fh" opt; do
+        case "$opt" in
+                f)
+                        FORCE=true
+                        ;;
+                h)
+                        usage
+                        ;;
+                ?)
+                        usage
+                        ;;
+        esac
+done
+shift $((OPTIND - 1))
 
-                echo "extending FS"
-
-                # target disk
-                if (ls /dev/mmcblk0 > /dev/null 2>&1); then
-                        disk='mmcblk0'
-                elif (ls /dev/mmcblk1 > /dev/null 2>&1); then
-                        disk='mmcblk1'
-		elif (ls /dev/sda > /dev/null 2>&1); then
-			disk='sda'
-                else
-                        echo "ERROR: can't find disk mmcblk0 ok mmcblk1 or sda"
-                        exit 1
-                fi
-
-                # get last partition
-                part=$(grep  "${disk}p" /proc/partitions | tail -1 | awk '{print $4}' | xargs)
-		# if no part found retry without p
-                if [ -z "$part" ]; then
-                        part=$(grep  "${disk}" /proc/partitions | tail -1 | awk '{print $4}' | xargs)
-                fi
-		# if still no part found exit
-                if [ -z "$part" ]; then
-                        echo "ERROR: can't find partition"
-                        exit 1
-                fi
-
-                partN=$(echo $part | tail -c 2)  
-                firstSec=$(parted /dev/${disk} 'unit s print' | grep "^ $partN" | awk '{print $2}')
-                firstSec=${firstSec::-1}  
-
-                # fdisk: delete and recreate the last partition with the largest size possible.
-                (
-                echo d # Delete partition
-                echo $partN # Last partition
-                echo n # Add a new partition
-                echo p # Primary partition
-                echo $partN # Last partition
-                echo $firstSec # First sector 
-                echo           # Last sector (Accept default: varies)
-                echo Y # confirm existing signature 
-                echo w # Write changes
-                ) | fdisk /dev/$disk 
-
-                resize2fs /dev/$part
-
-                # Put Flair to inform other modules
-                touch /tmp/new-drive
+if [[ $# -gt 0 ]]; then
+        usage
 fi
+
+STATE_DIR="/data/var"
+STATE_FILE="$STATE_DIR/drive-id"
+STATE_FILE_STAGE1="$STATE_DIR/drive-id-stage1"
+mkdir -p "$STATE_DIR"
+
+# If force flag is set, remove drive-id files to trigger expansion
+if [[ "$FORCE" == true ]]; then
+        echo "Force mode: removing existing drive-id markers"
+        rm -f "$STATE_FILE" "$STATE_FILE_STAGE1"
+fi
+
+# Determine the block device that backs the root filesystem.
+ROOT_SRC=$(findmnt -nro SOURCE / || true)
+if [[ -z "${ROOT_SRC}" ]]; then
+        echo "ERROR: unable to determine root source device"
+        exit 1
+fi
+
+ROOT_DEV=$(readlink -f "$ROOT_SRC")
+if [[ ! -b "$ROOT_DEV" ]]; then
+        echo "ERROR: root device $ROOT_DEV is not a block device"
+        exit 1
+fi
+
+# Try to obtain a stable drive identifier (prefer serial, fall back to UUID).
+DRIVE_ID=$(udevadm info --query=property --name "$ROOT_DEV" 2>/dev/null | awk -F= '/^ID_SERIAL(_SHORT)?=/{print $2; exit}')
+if [[ -z "${DRIVE_ID:-}" ]]; then
+        DRIVE_ID=$(lsblk -no SERIAL "$ROOT_DEV" 2>/dev/null | head -n1 || true)
+fi
+if [[ -z "${DRIVE_ID:-}" ]]; then
+        DRIVE_ID=$(blkid -s UUID -o value "$ROOT_DEV" 2>/dev/null || true)
+fi
+if [[ -z "${DRIVE_ID:-}" ]]; then
+        DRIVE_ID="unknown-$(echo "$ROOT_DEV" | sha1sum | cut -c1-12)"
+fi
+
+LAST_DRIVE_ID=""
+if [[ -f "$STATE_FILE" ]]; then
+        LAST_DRIVE_ID=$(cat "$STATE_FILE" 2>/dev/null || true)
+fi
+
+# Check if we're resuming from a stage1 completion (partition resized, needs filesystem resize after reboot)
+STAGE1_DRIVE_ID=""
+if [[ -f "$STATE_FILE_STAGE1" ]]; then
+        STAGE1_DRIVE_ID=$(cat "$STATE_FILE_STAGE1" 2>/dev/null || true)
+fi
+
+if [[ -n "$LAST_DRIVE_ID" && "$DRIVE_ID" == "$LAST_DRIVE_ID" ]]; then
+        echo "drive-id is valid, no expansion needed"
+        exit 0
+fi
+
+# Determine if this is a stage2 run (resume after reboot)
+STAGE2_MODE=false
+if [[ -n "$STAGE1_DRIVE_ID" && "$DRIVE_ID" == "$STAGE1_DRIVE_ID" ]]; then
+        STAGE2_MODE=true
+        echo "Resuming expansion after reboot (stage 2: filesystem resize)"
+        echo "Current drive: $DRIVE_ID"
+else
+        echo "drive-id has changed or not set, i am a clone!"
+        echo "Current drive: $DRIVE_ID"
+        echo "Last drive: $LAST_DRIVE_ID"
+fi
+echo "extending FS..."
+
+# Find the base disk device that contains the root partition.
+DISK_NAME=$(lsblk -nro PKNAME "$ROOT_DEV" 2>/dev/null | head -n1 || true)
+if [[ -z "${DISK_NAME:-}" ]]; then
+        BASENAME=$(basename "$ROOT_DEV")
+        if [[ "$BASENAME" =~ ^(mmcblk[0-9]+)p[0-9]+$ ]]; then
+                DISK_NAME="${BASH_REMATCH[1]}"
+        elif [[ "$BASENAME" =~ ^(nvme[0-9]+n[0-9]+)p[0-9]+$ ]]; then
+                DISK_NAME="${BASH_REMATCH[1]}"
+        elif [[ "$BASENAME" =~ ^([a-zA-Z]+)[0-9]+$ ]]; then
+                DISK_NAME="${BASH_REMATCH[1]}"
+        else
+                DISK_NAME="$BASENAME"
+        fi
+fi
+
+if [[ -z "$DISK_NAME" ]]; then
+        echo "ERROR: unable to determine parent disk for $ROOT_DEV"
+        exit 1
+fi
+
+DISK_DEV="/dev/$DISK_NAME"
+if [[ ! -b "$DISK_DEV" ]]; then
+        echo "ERROR: disk device $DISK_DEV not found"
+        exit 1
+fi
+
+echo "Target disk: $DISK_DEV"
+
+# Identify the last partition on the disk.
+LAST_PART=$(lsblk -nrpo NAME,TYPE "$DISK_DEV" | awk '$2=="part" {last=$1} END {print last}')
+if [[ -z "$LAST_PART" ]]; then
+        echo "ERROR: could not locate the last partition on $DISK_DEV"
+        exit 1
+fi
+
+echo "Last partition: $LAST_PART"
+
+PART_BASENAME=$(basename "$LAST_PART")
+if [[ "$PART_BASENAME" =~ ^${DISK_NAME}p?([0-9]+)$ ]]; then
+        PART_NUM="${BASH_REMATCH[1]}"
+else
+        echo "ERROR: unable to parse partition number from $LAST_PART"
+        exit 1
+fi
+
+# Gather existing partition metadata via sfdisk.
+PART_INFO=$(sfdisk -d "$DISK_DEV" 2>/dev/null | awk -v part="$LAST_PART" '$1==part {print; exit}')
+if [[ -z "$PART_INFO" ]]; then
+        echo "ERROR: unable to read partition info for $LAST_PART"
+        exit 1
+fi
+
+PART_START=$(echo "$PART_INFO" | sed -n 's/.*start= *\([0-9]\+\).*/\1/p')
+PART_TYPE=$(echo "$PART_INFO" | sed -n 's/.*type= *\([^, ]\+\).*/\1/p')
+
+if [[ -z "$PART_START" ]]; then
+        echo "ERROR: could not determine start sector for $LAST_PART"
+        exit 1
+fi
+
+echo "Partition number: $PART_NUM"
+echo "First sector: $PART_START"
+if [[ -n "$PART_TYPE" ]]; then
+        echo "Partition type: $PART_TYPE"
+fi
+
+DISK_SIZE=$(blockdev --getsz "$DISK_DEV" 2>/dev/null || true)
+if [[ -z "$DISK_SIZE" ]]; then
+        if [[ -r "/sys/block/$DISK_NAME/size" ]]; then
+                DISK_SIZE=$(cat "/sys/block/$DISK_NAME/size")
+        fi
+fi
+
+if [[ -z "$DISK_SIZE" ]] || (( DISK_SIZE <= 0 )); then
+        echo "ERROR: unable to determine size of $DISK_DEV"
+        exit 1
+fi
+
+NEW_SIZE=$((DISK_SIZE - PART_START))
+if (( NEW_SIZE <= 0 )); then
+        echo "ERROR: calculated new partition size is not positive"
+        exit 1
+fi
+
+CURRENT_SIZE=$(echo "$PART_INFO" | sed -n 's/.*size= *\([0-9]\+\).*/\1/p')
+if [[ -n "$CURRENT_SIZE" ]] && (( CURRENT_SIZE >= NEW_SIZE )); then
+        echo "Partition already consumes available space"
+        
+        # If we're in stage2 mode, we still need to resize the filesystem
+        if [[ "$STAGE2_MODE" == true ]]; then
+                echo "Stage 2: partition table already updated, proceeding to filesystem resize"
+        else
+                echo "Skipping partition resize"
+                # Check if filesystem also matches partition size
+                if findmnt -nr -S "$LAST_PART" >/dev/null 2>&1; then
+                        FS_SIZE=$(df --output=size -B 512 "$LAST_PART" 2>/dev/null | tail -n1 | xargs)
+                        # Allow 1% tolerance for overhead
+                        MIN_EXPECTED=$((CURRENT_SIZE * 99 / 100))
+                        if [[ -n "$FS_SIZE" ]] && (( FS_SIZE >= MIN_EXPECTED )); then
+                                echo "Filesystem is also fully expanded"
+                                echo "$DRIVE_ID" > "$STATE_FILE"
+                                rm -f "$STATE_FILE_STAGE1"
+                                touch /tmp/new-drive
+                                exit 0
+                        else
+                                echo "Filesystem needs resize (partition: $CURRENT_SIZE sectors, filesystem: $FS_SIZE sectors)"
+                                STAGE2_MODE=true
+                        fi
+                else
+                        echo "$DRIVE_ID" > "$STATE_FILE"
+                        rm -f "$STATE_FILE_STAGE1"
+                        touch /tmp/new-drive
+                        exit 0
+                fi
+        fi
+fi
+
+if [[ "$STAGE2_MODE" == false ]]; then
+        echo "Deleting and recreating partition $PART_NUM to use all remaining space..."
+        sfdisk --backup --no-reread --delete "$DISK_DEV" "$PART_NUM"
+
+        PART_SPEC="start=$PART_START, size=$NEW_SIZE"
+        if [[ -n "$PART_TYPE" ]]; then
+                PART_SPEC+=", type=$PART_TYPE"
+        fi
+
+        printf '%s\n' "$PART_SPEC" | sfdisk --force --no-reread -N "$PART_NUM" "$DISK_DEV"
+
+        echo "Partition table updated successfully"
+else
+        echo "Skipping partition table update (stage 2 mode)"
+fi
+
+# Ask the kernel to reload the table; ignore failures (some kernels refuse while busy).
+echo "Reloading partition table..."
+RELOAD_SUCCESS=false
+if [[ "$STAGE2_MODE" == false ]]; then
+        if partprobe "$DISK_DEV" 2>&1 | tee /tmp/partprobe-output.txt; then
+                echo "partprobe succeeded"
+                RELOAD_SUCCESS=true
+        elif partx -u "$DISK_DEV" 2>&1 | tee /tmp/partx-output.txt; then
+                echo "partx succeeded"
+                RELOAD_SUCCESS=true
+        else
+                echo "WARNING: kernel could not reload partition table (device busy)"
+                
+                # Check if the partition is mounted
+                if findmnt -nr -S "$LAST_PART" >/dev/null 2>&1; then
+                        MOUNT_POINT=$(findmnt -nro TARGET -S "$LAST_PART")
+                        echo "Partition $LAST_PART is mounted at $MOUNT_POINT"
+                        echo ""
+                        echo "═══════════════════════════════════════════════════════════"
+                        echo "  Stage 1 complete: Partition table updated"
+                        echo "═══════════════════════════════════════════════════════════"
+                        echo ""
+                        echo "The partition has been resized in the partition table,"
+                        echo "but the kernel cannot reload it while mounted."
+                        echo ""
+                        echo "Saving progress and triggering automatic reboot..."
+                        echo "$DRIVE_ID" > "$STATE_FILE_STAGE1"
+                        
+                        # Drop flag for other services
+                        touch /tmp/new-drive
+                        
+                        echo ""
+                        echo "Rebooting in 5 seconds..."
+                        sleep 5
+                        reboot
+                        exit 0
+                fi
+        fi
+        
+        sleep 2
+else
+        echo "Skipping partition reload (stage 2 mode, already reloaded)"
+        RELOAD_SUCCESS=true
+fi
+
+if [[ ! -b "$LAST_PART" ]]; then
+        echo "ERROR: partition $LAST_PART not found after table update"
+        exit 1
+fi
+
+echo "Checking if $LAST_PART is mounted..."
+if findmnt -nr -S "$LAST_PART" >/dev/null 2>&1; then
+        echo "Partition is mounted; performing online resize with resize2fs"
+        if ! resize2fs "$LAST_PART" 2>&1 | tee /tmp/resize2fs-output.txt; then
+                echo ""
+                echo "╔════════════════════════════════════════════════════════════╗"
+                echo "║  resize2fs FAILED - Unsupported Filesystem Features       ║"
+                echo "╚════════════════════════════════════════════════════════════╝"
+                echo ""
+                
+                # Show current features
+                echo "Current filesystem features:"
+                tune2fs -l "$LAST_PART" 2>/dev/null | grep "Filesystem features:" || true
+                echo ""
+                
+                # Show resize2fs version
+                RESIZE2FS_VER=$(resize2fs -V 2>&1 | head -1)
+                echo "Installed: $RESIZE2FS_VER"
+                echo ""
+                
+                # Detect problematic features
+                FEATURES=$(tune2fs -l "$LAST_PART" 2>/dev/null | grep "Filesystem features:" || true)
+                if echo "$FEATURES" | grep -q "FEATURE_"; then
+                        echo "⚠ Found unknown feature flags (FEATURE_*)"
+                        echo "  These indicate the filesystem was created with a newer"
+                        echo "  e2fsprogs than currently installed (1.44.5)."
+                        echo ""
+                fi
+                
+                echo "╔════════════════════════════════════════════════════════════╗"
+                echo "║  SOLUTION                                                  ║"
+                echo "╚════════════════════════════════════════════════════════════╝"
+                echo ""
+                echo "On the system that created this image (with newer e2fsprogs):"
+                echo ""
+                echo "  1. Mount the partition:"
+                echo "     sudo mount /dev/sdX3 /mnt"
+                echo ""
+                echo "  2. Unmount it:"
+                echo "     sudo umount /mnt"
+                echo ""
+                echo "  3. Remove incompatible features:"
+                echo "     sudo e2fsck -f /dev/sdX3"
+                echo "     sudo tune2fs -O ^metadata_csum /dev/sdX3"
+                echo "     sudo tune2fs -O ^metadata_csum_seed /dev/sdX3"
+                echo "     sudo e2fsck -f /dev/sdX3"
+                echo ""
+                echo "  4. Verify features are gone:"
+                echo "     sudo tune2fs -l /dev/sdX3 | grep 'Filesystem features'"
+                echo "     (should NOT show metadata_csum or FEATURE_*)"
+                echo ""
+                echo "  5. Re-image your SD cards from this cleaned partition"
+                echo ""
+                echo "Then extendfs will work on Buster systems."
+                echo ""
+                exit 1
+        fi
+else
+        echo "Partition is not mounted; running e2fsck before offline resize"
+        e2fsck -f -y "$LAST_PART" || true
+        resize2fs "$LAST_PART"
+fi
+
+echo "Filesystem resized successfully"
+
+# Mark the drive ID so we do not rerun until hardware changes again.
+echo "$DRIVE_ID" > "$STATE_FILE"
+
+# Clean up stage1 marker if it exists
+rm -f "$STATE_FILE_STAGE1"
+
+# Drop a flag for other services if needed.
+touch /tmp/new-drive
+
+echo "New partition size:"
+df -h "$LAST_PART" 2>/dev/null || lsblk "$LAST_PART"
+
+echo ""
+echo "═══════════════════════════════════════════════════════════"
+echo "  Expansion complete!"
+echo "═══════════════════════════════════════════════════════════"
