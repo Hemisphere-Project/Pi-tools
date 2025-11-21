@@ -107,6 +107,7 @@ mkdir -p /data/var/dnsmasq
 mkdir -p /var/lib/dnsmasq
 mkdir -p /data/var/tmp
 mkdir -p /data/var/cache
+mkdir -p /root/.cache
 
 echo "
 UUID=$UUID_boot                                 ${TARGET_boot}  vfat    defaults,ro,errors=remount-ro,umask=177        0       0
