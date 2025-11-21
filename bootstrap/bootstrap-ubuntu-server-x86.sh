@@ -237,3 +237,14 @@ git clone https://github.com/Hemisphere-Project/HPlayer2.git
 cd HPlayer2
 ./install.sh
 
+# Regie
+cd /opt
+git clone https://github.com/KomplexKapharnaum/RPi-Regie.git
+cd RPi-Regie
+
+# Hartnet
+cd /opt
+git clone https://github.com/Hemisphere-Project/hartnet.js
+cd hartnet.js
+npm install
+
