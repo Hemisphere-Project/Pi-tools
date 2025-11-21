@@ -209,6 +209,7 @@ modules=(
     rorw            #+ ok
     usbautomount    #+ ok
     extendfs        #+ ok
+    filebrother     # ok (to check)
     synczinc        ## todo  
     webconf         ## flask broken.. 
     # webfiles      ## todo  
