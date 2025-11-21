@@ -34,8 +34,21 @@ systemctl restart ssh
 # [from remote machine] ssh-copy-id root@<IP-ADDRESS>
 
 # Python & tools
-apt -y install git wget tmux imagemagick htop libsensors5 build-essential lsof nano
-apt -y install python3 python3-pip python3-setuptools python3-wheel pipx pipenv
+apt -y install git wget tmux imagemagick htop libsensors5 build-essential lsof nano python3
+
+## nodejs 
+apt install nodejs npm -y
+npm i -g n
+# n lts
+n lts  # 18?
+hash -r 
+npm install -g npm
+npm install -g pm2 nodemon
+npm update -g
+
+# uv
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source $HOME/.local/bin/env
 
 # Mosquitto server
 apt -y install mosquitto
@@ -73,6 +86,8 @@ apt -y install network-manager dnsmasq
 
 ### switch from netplan/networkd to NetworkManager/dnsmasq
 ###
+systemctl stop systemd-networkd.socket
+systemctl disable systemd-networkd.socket
 systemctl stop systemd-resolved
 systemctl disable systemd-resolved
 systemctl stop systemd-networkd
@@ -82,6 +97,7 @@ rm /etc/resolv.conf
 echo "nameserver 1.1.1.1
 nameserver 1.0.0.1" > /etc/resolv.conf
 
+rm /etc/NetworkManager/NetworkManager.conf
 echo "[main]
 plugins=keyfile
 dns=none
@@ -131,6 +147,8 @@ update-grub
 
 # Internal wifi as wint
 echo 'ACTION=="add", SUBSYSTEM=="net", DRIVERS=="iwlwifi", NAME="wint"' > /etc/udev/rules.d/72-static-name.rules
+udevadm control --reload
+udevadm trigger
 
 # Plymouth spinner
 sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT=""/GRUB_CMDLINE_LINUX_DEFAULT="quiet splash consoleblank=0 loglevel=0 fbcon=nodefer vt.global_cursor_default=0 consoleblank=0 rd.systemd.show_status=auto rd.udev.log-priority=3"/g' /etc/default/grub
@@ -149,19 +167,33 @@ ExecStart=
 ExecStart=-/usr/bin/agetty --skip-login --nonewline --noissue --autologin root --noclear %I $TERM' > /etc/systemd/system/getty@tty1.service.d/skip-prompt.conf
 systemctl daemon-reload
 
+# Remove snap
+sudo systemctl stop snapd.service snapd.socket snapd.seeded.service
+sudo apt purge snapd
+sudo rm -rf /var/cache/snapd/
 
+# INTEL GPU
+add-apt-repository -y ppa:kobuk-team/intel-graphics
+apt update
+apt install -y intel-media-va-driver-non-free libmfx-gen1 libvpl2 libvpl-tools libva-glx2 va-driver-all vainfo
 
-### version
+# MPV
+apt -y install ffmpeg mpv
+
+### version 
 ###
 echo "9.0  --  bootstraped with https://github.com/Hemisphere-Project/Pi-tools" > /boot/VERSION
 
 # Clean up
+apt remove --purge apport popularity-contest whoopsie
 rm /var/lib/man-db/auto-update
 systemctl mask apt-daily-upgrade
 systemctl mask apt-daily
 systemctl disable apt-daily-upgrade.timer
 systemctl disable apt-daily.timer
 apt autoremove --purge -y
+
+systemctl mask --system alsa-restore.service --now
 
 ## Pi-tools
 cd /opt
@@ -172,7 +204,7 @@ cd /opt/Pi-tools
 modules=( 
     starter         #+ ok 
     xrun            #+ ok
-    hostrename      #+ ok
+    hostrename      #+ ok 
     network-tools   #+ ok
     rorw            #+ ok
     usbautomount    #+ ok
@@ -197,9 +229,6 @@ apt -y install intel-gpu-tools intel-media-va-driver-non-free libmfx-gen1 libvpl
 # apt install -y xorg openbox lightdm lightdm-gtk-greeter chromium
 # systemctl disable lightdm.service
 # => see Pi-tools/xrun/install.sh
-
-# MPV
-apt -y install mpv ffmpeg
 
 # HPlayer2
 cd /opt
