@@ -1,0 +1,67 @@
+# ============================================
+#  Pi-tools Configuration
+# ============================================
+#
+#  Place this file on the boot partition as 'pitools.txt':
+#    Raspberry Pi:  /boot/firmware/pitools.txt
+#    x86:           /boot/pitools.txt
+#
+#  Or place it on a USB drive as 'pitools.txt'
+#  to auto-configure on first setup.
+#
+#  All options have sensible defaults.
+#  Uncomment and edit as needed.
+#
+# ============================================
+
+[system]
+# hostname = artbox-001
+# timezone = Europe/Paris
+# password = rootpi
+
+[network]
+# WiFi networks: wifi_N = SSID=password
+# wifi_1 = MyNetwork=password123
+# wifi_2 = Gallery=artshow2024
+
+# Enable hotspot (SSID = hostname)
+# hotspot = yes
+
+[modules]
+# Core modules (starter, extendfs, splash, datesync) are always installed.
+#
+# Set each to: yes / no / ask
+#   yes  = install automatically
+#   no   = skip
+#   ask  = prompt during install (default for optional modules)
+
+# system — read-only root filesystem + USB automount
+# system = yes
+
+# network — WiFi profile management + dynamic hostname
+# network = yes
+
+# web — webconf + filebrother + 3615-disco web UIs
+# web = ask
+
+# audioselect — HDMI/analog/USB audio routing (Pi only)
+# audioselect = ask
+
+# xrun — X11/Openbox display server
+# xrun = no
+
+# synczinc — Syncthing-based file sync
+# synczinc = no
+
+# bluetooth — Bluetooth controller (Pi only)
+# bluetooth = no
+
+# rtpmidi — RTP MIDI (CoreMIDI compatible)
+# rtpmidi = no
+
+[display]
+# HDMI resolution (Pi only)
+# resolution = 1920x1080@30
+
+# Screen rotation: 0, 90, 180, 270
+# rotation = 0

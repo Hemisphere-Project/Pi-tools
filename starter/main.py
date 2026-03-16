@@ -1,61 +1,67 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
+"""Starter — read starter.txt and start listed systemd services."""
 
-from pydbus import SystemBus
-from shutil import copyfile
 import os
-import filecmp
+import subprocess
+import time
 
-bus = SystemBus()
-systemd = bus.get(".systemd1")
+CONFIG_PATHS = [
+    '/boot/firmware/starter.txt',
+    '/boot/starter.txt',
+]
 
-# for unit in systemd.ListUnits():
-#     print(unit)
 
-# engageRW = False
+def find_config():
+    for p in CONFIG_PATHS:
+        if os.path.isfile(p):
+            return p
+    return None
 
-# # Sync from /data/sync
-# SRCFILE = "/data/sync/starter.txt"
-# DESTFILE = "/boot/starter.txt"
-# if os.path.exists(SRCFILE) and not filecmp.cmp(SRCFILE, DESTFILE, shallow=False):
-#     if not engageRW:
-#         engageRW = True
-#         os.system('rw')
-#     copyfile(SRCFILE, DESTFILE)
-#     print("[starter] Syncing from "+SRCFILE)
 
-# # Sync from USB
-# SRCFILE = "/data/usb/starter.txt"
-# DESTFILE = "/boot/starter.txt"
-# if os.path.exists(SRCFILE) and not filecmp.cmp(SRCFILE, DESTFILE, shallow=False):
-#     if not engageRW:
-#         engageRW = True
-#         os.system('rw')
-#     copyfile(SRCFILE, DESTFILE)
-#     print("[starter] Syncing from "+SRCFILE)
+def parse_services(config_path):
+    services = []
+    with open(config_path) as f:
+        for line in f:
+            # Lines starting with # are comments; uncommented lines are services
+            line = line.strip().split('#')[0].strip()
+            if line:
+                services.append(line.replace('@ ', '@'))
+    return services
 
-# # Dirty
-# if engageRW:
-#     # RO
-#     os.system('ro')
-#     engageRW = False
 
-services = []
-with open("/boot/starter.txt") as f:
-    for line in f.readlines():
-        elements = line.strip().split('#')
-        if len(elements) > 0: 
-            serv = elements[0].strip()
-            if len(serv) > 0:
-                services.append(serv.replace('@ ', '@'))
+def start_service(name):
+    svc = f"{name}.service"
+    print(f"Starting {svc}...")
+    t0 = time.monotonic()
+    result = subprocess.run(
+        ['systemctl', 'start', svc],
+        capture_output=True, text=True
+    )
+    elapsed = time.monotonic() - t0
+    if result.returncode != 0:
+        print(f"  FAILED ({result.stderr.strip()})")
+    else:
+        print(f"  OK ({elapsed:.1f}s)")
 
-if len(services) == 0:
-    print("No service found in /boot/starter.txt")
 
-for s in services:
-    s = s.rstrip()
-    print ("Starting service "+s)
-    # monitor start time
-    t0 = os.times()[4]
-    systemd.StartUnit(s+".service", "fail")
-    t1 = os.times()[4]
-    print ("Service "+s+" started in "+str(t1-t0)+" seconds")
+def main():
+    config = find_config()
+    if not config:
+        print("[starter] No starter.txt found")
+        return
+
+    print(f"[starter] Reading {config}")
+    services = parse_services(config)
+
+    if not services:
+        print("[starter] No services to start")
+        return
+
+    for s in services:
+        start_service(s)
+
+    print(f"[starter] Done — {len(services)} service(s) processed")
+
+
+if __name__ == '__main__':
+    main()

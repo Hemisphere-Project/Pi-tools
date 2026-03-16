@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 import sys, filecmp, os
 from shutil import copyfile
-import filecmp
 
 
-LOCALSOURCE = '/boot/wifi'
+# Auto-detect boot partition (modern Pi OS uses /boot/firmware)
+BOOT_DIR = '/boot/firmware' if os.path.isdir('/boot/firmware') else '/boot'
+LOCALSOURCE = os.path.join(BOOT_DIR, 'wifi')
 USBSOURCE = '/data/usb/wifi'
-SYNCSOURCE = '/data/sync/wifi'
 DEST = '/etc/NetworkManager/system-connections'
 EXT = '.nmconnection'
 
@@ -60,10 +60,6 @@ def syncFolder(src, dest, ext=''):
             
     return somethingChanged
 
-
-# copy profiles from sync
-syncFolder(SYNCSOURCE, LOCALSOURCE, EXT)
-print()
 
 # copy profiles from usb
 syncFolder(USBSOURCE, LOCALSOURCE, EXT)

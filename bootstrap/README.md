@@ -1,16 +1,16 @@
-# Rasta-OS
+# Bootstrap (Legacy)
 
-Bootstrap a fresh ArchARM image for RaspberryPi with rasta-modules
+These bootstrap scripts are kept as reference. The recommended way to set up
+Pi-tools is now via `setup.sh` in the repository root:
 
+```bash
+sudo ./setup.sh
+```
 
-### Create Arch image
-- Create image using instructions here: https://archlinuxarm.org/platforms/armv7/broadcom/raspberry-pi-2
-- ADD 3rd partition (ext4) using fdisk or gparted
+See the main [README](../README.md) for full instructions.
 
-### Bootstrap image
-- Plug ethernet cable
-- Boot the Pi with the fresh image
-- ssh into it, or use keyboard and screen (user: alarm / password: alarm)
-- `cd /opt && git clone https://framagit.org/KXKM/rasta-os.git && cd rasta-os`
-- `./bootstrap.sh`
+## Reference scripts
+
+- `bootstrap-raspbian-pi4.sh` — Original Raspberry Pi OS 64-bit bootstrap
+- `bootstrap-ubuntu-server-x86.sh` — Original Ubuntu Server x86 bootstrap
   

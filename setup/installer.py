@@ -1,0 +1,450 @@
+#!/usr/bin/env python3
+"""Pi-tools installer — main orchestrator.
+
+Usage:
+    sudo ./setup.sh          # Normal interactive install
+    sudo ./setup.sh --yes    # Accept all defaults (non-interactive)
+"""
+
+import os
+import sys
+import shutil
+import platform as platform_mod
+import configparser
+
+# Ensure imports work when run as: python3 setup/installer.py
+SETUP_DIR = os.path.dirname(os.path.abspath(__file__))
+PITOOLS_DIR = os.path.dirname(SETUP_DIR)
+sys.path.insert(0, PITOOLS_DIR)
+
+from setup import ui, detect, config, utils, bootstrap
+
+
+# ── Module group definitions ────────────────────────────────────────
+# (group_key, description, [module_dirs], default_setting)
+
+MODULE_GROUPS = [
+    ('system',      'System (read-only root + USB automount)',
+     ['rorw', 'usbautomount'], 'yes'),
+    ('network',     'Network (WiFi profiles + hostname)',
+     ['network-tools', 'hostrename'], 'yes'),
+    ('web',         'Web UIs (config + file manager + discovery)',
+     ['webconf', 'filebrother', '3615-disco'], 'ask'),
+    ('audioselect', 'Audio routing (HDMI/analog/USB)',
+     ['audioselect'], 'ask'),
+    ('xrun',        'X11/Openbox display server',
+     ['xrun'], 'no'),
+    ('synczinc',    'Syncthing synchronization',
+     ['synczinc'], 'no'),
+    ('bluetooth',   'Bluetooth controller',
+     ['bluetooth-pi'], 'no'),
+    ('rtpmidi',     'RTP MIDI (CoreMIDI)',
+     ['rtpmidi'], 'no'),
+]
+
+CORE_MODULES = ['starter', 'extendfs', 'splash']
+
+
+# ── Module installation ─────────────────────────────────────────────
+
+
+def discover_module(name):
+    """Find module directory and parse its module.ini."""
+    module_dir = os.path.join(PITOOLS_DIR, name)
+    ini_path = os.path.join(module_dir, 'module.ini')
+    if not os.path.isfile(ini_path):
+        return None, None
+    ini = configparser.ConfigParser()
+    ini.read(ini_path)
+    return module_dir, ini
+
+
+def check_platform(ini, platinfo):
+    """Check if module supports current platform."""
+    platforms = ini.get('module', 'platforms', fallback='pi,x86')
+    platforms = [p.strip() for p in platforms.split(',')]
+    if platinfo['is_pi'] and 'pi' not in platforms:
+        return False
+    if platinfo['is_x86'] and 'x86' not in platforms:
+        return False
+    return True
+
+
+def install_module(name, platinfo):
+    """Install a single module based on its module.ini."""
+    module_dir, ini = discover_module(name)
+    if not module_dir:
+        ui.error(f"Module '{name}' has no module.ini")
+        return False
+
+    if not check_platform(ini, platinfo):
+        ui.skip(f"{name}: not supported on this platform")
+        return True
+
+    desc = ini.get('module', 'description', fallback=name)
+    ui.info(f"Installing {name} — {desc}")
+
+    # If module has script=yes, use its install.sh for everything
+    use_script = ini.getboolean('install', 'script', fallback=False)
+    if use_script:
+        script = os.path.join(module_dir, 'install.sh')
+        if os.path.isfile(script):
+            utils.run(f'bash "{script}"', cwd=module_dir)
+            ui.success(f"{name} installed (via install.sh)")
+            return True
+
+    # ── Standard module.ini-driven install ──
+
+    # 1. Apt dependencies
+    if ini.has_option('deps', 'apt'):
+        pkgs = ini.get('deps', 'apt').strip()
+        if pkgs:
+            utils.apt_install(*pkgs.split())
+
+    # 2. Create directories
+    if ini.has_option('files', 'dirs'):
+        for d in ini.get('files', 'dirs').split():
+            os.makedirs(d, exist_ok=True)
+
+    # 3. npm install
+    if ini.getboolean('files', 'npm', fallback=False):
+        utils.npm_install(module_dir)
+
+    # 4. Link binaries
+    if ini.has_option('files', 'bins'):
+        for b in ini.get('files', 'bins').split():
+            src = os.path.join(module_dir, b)
+            if os.path.isfile(src):
+                os.chmod(src, 0o755)
+                utils.link_bin(src)
+
+    # 5. Install services
+    if ini.has_option('files', 'services'):
+        for s in ini.get('files', 'services').split():
+            src = os.path.join(module_dir, s)
+            if os.path.isfile(src):
+                utils.install_service(src)
+
+    # 6. Install timers
+    if ini.has_option('files', 'timers'):
+        for t in ini.get('files', 'timers').split():
+            src = os.path.join(module_dir, t)
+            if os.path.isfile(src):
+                utils.install_service(src)
+
+    # 7. Udev rules
+    if ini.has_option('files', 'udev_rules'):
+        for r in ini.get('files', 'udev_rules').split():
+            src = os.path.join(module_dir, r)
+            if os.path.isfile(src):
+                utils.install_udev_rule(src)
+        utils.udev_reload()
+
+    # 8. Enable services
+    if ini.has_option('files', 'enable'):
+        for s in ini.get('files', 'enable').split():
+            utils.enable_service(s)
+
+    # 9. Mask services
+    if ini.has_option('files', 'mask'):
+        for s in ini.get('files', 'mask').split():
+            utils.mask_service(s)
+
+    # 10. Post-install hook
+    if name in POST_HOOKS:
+        POST_HOOKS[name](module_dir, platinfo)
+
+    # 11. Starter entry
+    if ini.has_option('starter', 'comment') and ini.has_option('starter', 'service'):
+        comment = ini.get('starter', 'comment')
+        service = ini.get('starter', 'service')
+        entry = f"## [{name}] {comment}\n# {service}\n"
+        utils.append_starter(entry)
+
+    utils.daemon_reload()
+    ui.success(f"{name} installed")
+    return True
+
+
+# ── Post-install hooks ──────────────────────────────────────────────
+
+
+def hook_starter(module_dir, platinfo):
+    """Create initial starter.txt if missing, enable service."""
+    path = utils.starter_txt_path()
+    if not os.path.isfile(path):
+        with open(path, 'w') as f:
+            f.write("#\n"
+                    "#  Pi-tools starter configuration\n"
+                    "#  Services listed here are started at boot.\n"
+                    "#  Uncomment a line to enable a service.\n"
+                    "#\n\n")
+    utils.enable_service('starter.service')
+
+
+def hook_network_tools(module_dir, platinfo):
+    """Configure dnsmasq and WiFi directory."""
+    dnsmasq_conf = '/etc/dnsmasq.conf'
+    with open(dnsmasq_conf, 'w') as f:
+        f.write("listen-address=10.0.0.1\n"
+                "dhcp-range=10.0.0.2,10.0.0.99,255.255.255.0,12h\n\n"
+                "listen-address=10.1.0.1\n"
+                "dhcp-range=10.1.0.2,10.1.0.99,255.255.255.0,12h\n\n"
+                "dhcp-leasefile=/var/lib/dnsmasq/dnsmasq.leases\n")
+
+    boot_dir = utils.find_boot_dir()
+    wifi_dir = os.path.join(boot_dir, 'wifi')
+    os.makedirs(wifi_dir, exist_ok=True)
+
+    # Copy default profiles
+    profiles_dir = os.path.join(module_dir, 'profiles')
+    if os.path.isdir(profiles_dir):
+        for fn in os.listdir(profiles_dir):
+            src = os.path.join(profiles_dir, fn)
+            dst = os.path.join(wifi_dir, fn)
+            if os.path.isfile(src) and not os.path.exists(dst):
+                shutil.copy2(src, dst)
+
+
+def hook_audioselect(module_dir, platinfo):
+    """Copy asound.conf for detected architecture."""
+    arch = platform_mod.machine()
+    if arch == 'aarch64':
+        src = os.path.join(module_dir, 'asound.conf-pi4')
+    elif arch.startswith('arm'):
+        src = os.path.join(module_dir, 'asound.conf-pi2')
+    else:
+        return
+    if os.path.isfile(src):
+        shutil.copy2(src, '/etc/asound.conf')
+
+
+def hook_bluetooth(module_dir, platinfo):
+    """Enable Bluetooth auto-power-on."""
+    bt_conf = '/etc/bluetooth/main.conf'
+    if os.path.isfile(bt_conf):
+        with open(bt_conf) as f:
+            content = f.read()
+        if 'AutoEnable=true' not in content:
+            with open(bt_conf, 'a') as f:
+                f.write('\nAutoEnable=true\n')
+
+
+def hook_xrun(module_dir, platinfo):
+    """Configure X11 environment."""
+    # Create hmini user
+    utils.run('id hmini &>/dev/null || useradd -m hmini', check=False)
+
+    # Allow X from any user
+    xwrapper = '/etc/X11/Xwrapper.config'
+    if os.path.isfile(xwrapper):
+        with open(xwrapper) as f:
+            content = f.read()
+        import re
+        content = re.sub(r'^allowed_users=.*', 'allowed_users=anybody',
+                         content, flags=re.MULTILINE)
+        with open(xwrapper, 'w') as f:
+            f.write(content)
+
+    # Openbox autostart
+    os.makedirs('/etc/xdg/openbox', exist_ok=True)
+    dst = '/etc/xdg/openbox/autostart'
+    src = os.path.join(module_dir, 'openbox-start')
+    if os.path.lexists(dst):
+        os.remove(dst)
+    os.symlink(src, dst)
+    os.chmod(src, 0o755)
+
+    # xinitrc
+    with open('/root/.xinitrc', 'w') as f:
+        f.write('exec openbox-session\n')
+    os.chmod('/root/.xinitrc', 0o755)
+
+    # Remove picom autostart
+    picom_desktop = '/etc/xdg/autostart/picom.desktop'
+    if os.path.isfile(picom_desktop):
+        os.remove(picom_desktop)
+
+
+def hook_filebrother(module_dir, platinfo):
+    """Download filebrowser binary."""
+    if not os.path.isfile('/usr/local/bin/filebrowser'):
+        utils.run('curl -fsSL https://raw.githubusercontent.com/filebrowser/get/master/get.sh | bash',
+                  check=False)
+    os.makedirs('/data/var/filebrother', exist_ok=True)
+
+
+def hook_synczinc(module_dir, platinfo):
+    """Install syncthing from official repo."""
+    list_file = '/etc/apt/sources.list.d/syncthing.list'
+    if not os.path.isfile(list_file):
+        utils.run(
+            'curl -s https://syncthing.net/release-key.gpg | '
+            'gpg --dearmor -o /usr/share/keyrings/syncthing-archive-keyring.gpg',
+            check=False)
+        with open(list_file, 'w') as f:
+            f.write('deb [signed-by=/usr/share/keyrings/syncthing-archive-keyring.gpg] '
+                    'https://apt.syncthing.net/ syncthing stable\n')
+        utils.run('apt update', check=False)
+    utils.apt_install('syncthing')
+    utils.run('pip3 install syncthing', check=False)
+
+
+POST_HOOKS = {
+    'starter':       hook_starter,
+    'network-tools': hook_network_tools,
+    'audioselect':   hook_audioselect,
+    'bluetooth-pi':  hook_bluetooth,
+    'xrun':          hook_xrun,
+    'filebrother':   hook_filebrother,
+    'synczinc':      hook_synczinc,
+}
+
+
+# ── WiFi setup from config ──────────────────────────────────────────
+
+
+def setup_wifi_from_config(cfg, platinfo):
+    """Create WiFi .nmconnection profiles from pitools.txt config."""
+    networks = config.get_wifi_networks(cfg)
+    if not networks:
+        return
+
+    boot_dir = utils.find_boot_dir()
+    wifi_dir = os.path.join(boot_dir, 'wifi')
+    os.makedirs(wifi_dir, exist_ok=True)
+
+    for net in networks:
+        ssid = net['ssid']
+        password = net['password']
+        filepath = os.path.join(wifi_dir, f"{ssid}.nmconnection")
+
+        if not os.path.exists(filepath):
+            with open(filepath, 'w') as f:
+                f.write(f"[connection]\n"
+                        f"id={ssid}\n"
+                        f"type=wifi\n"
+                        f"autoconnect=true\n\n"
+                        f"[wifi]\n"
+                        f"ssid={ssid}\n"
+                        f"mode=infrastructure\n\n"
+                        f"[wifi-security]\n"
+                        f"key-mgmt=wpa-psk\n"
+                        f"psk={password}\n\n"
+                        f"[ipv4]\n"
+                        f"method=auto\n\n"
+                        f"[ipv6]\n"
+                        f"method=disabled\n")
+            os.chmod(filepath, 0o600)
+            ui.success(f"WiFi profile created: {ssid}")
+
+
+# ── Main ─────────────────────────────────────────────────────────────
+
+
+def main():
+    ui.banner()
+
+    auto_yes = '--yes' in sys.argv
+
+    # Platform detection
+    platinfo = detect.detect()
+    if platinfo['is_pi']:
+        pi_ver = platinfo['pi_model'] or '?'
+        ui.info(f"Platform: Raspberry Pi {pi_ver}")
+    elif platinfo['is_x86']:
+        ui.info(f"Platform: x86_64")
+    else:
+        ui.warn(f"Platform: {platinfo['arch']} (best-effort)")
+
+    ui.info(f"Boot partition: {platinfo['boot_dir']}")
+
+    # Find config
+    config_path = detect.find_config(platinfo)
+    if config_path:
+        ui.success(f"Config: {config_path}")
+    else:
+        ui.info("No pitools.txt found — using interactive mode")
+
+    cfg = config.load(config_path)
+
+    # Interactive prompts if no config file
+    if not config_path and not auto_yes:
+        hostname = ui.ask_text("Hostname", default='')
+        if hostname:
+            cfg.set('system', 'hostname', hostname)
+
+        tz = ui.ask_text("Timezone", default='Europe/Paris')
+        if tz:
+            cfg.set('system', 'timezone', tz)
+
+    # ── Bootstrap ──
+    bootstrap.run_bootstrap(platinfo, cfg)
+
+    # ── WiFi from config ──
+    setup_wifi_from_config(cfg, platinfo)
+
+    # ── Core modules (always installed) ──
+    ui.header("Core Modules")
+    for mod_name in CORE_MODULES:
+        mod_dir = os.path.join(PITOOLS_DIR, mod_name)
+        if utils.is_module_installed(mod_dir):
+            ui.skip(f"{mod_name}: already installed")
+        else:
+            install_module(mod_name, platinfo)
+
+    # Datesync (standalone script, not a full module)
+    datesync_src = os.path.join(PITOOLS_DIR, 'datesync')
+    if os.path.isfile(datesync_src):
+        os.chmod(datesync_src, 0o755)
+        utils.link_bin(datesync_src)
+        ui.success("datesync linked")
+
+    # ── Optional module groups ──
+    ui.header("Optional Modules")
+
+    for group_key, group_desc, mod_names, default in MODULE_GROUPS:
+        # Config setting
+        setting = cfg.get('modules', group_key, fallback=default)
+
+        # Check if already installed
+        all_installed = all(
+            utils.is_module_installed(os.path.join(PITOOLS_DIR, m))
+            for m in mod_names
+        )
+
+        if all_installed:
+            ui.skip(f"{group_desc}: already installed")
+            continue
+
+        # Decide
+        if setting == 'no':
+            ui.skip(f"{group_desc}: disabled")
+            continue
+        elif setting == 'ask':
+            if auto_yes:
+                # --yes treats 'ask' as 'no' for optional modules
+                ui.skip(f"{group_desc}: skipped (--yes mode)")
+                continue
+            if not ui.ask_yn(f"Install {group_desc}?"):
+                ui.skip(f"{group_desc}: skipped")
+                continue
+
+        # Install each module in the group
+        for mod_name in mod_names:
+            if utils.is_module_installed(os.path.join(PITOOLS_DIR, mod_name)):
+                ui.skip(f"  {mod_name}: already installed")
+            else:
+                install_module(mod_name, platinfo)
+
+    # ── Done ──
+    ui.header("Setup Complete")
+    starter_path = utils.starter_txt_path()
+    ui.success("Pi-tools installed!")
+    ui.info(f"Edit {starter_path} to enable/disable services at boot")
+    ui.info("Then reboot to apply.")
+    print()
+
+
+if __name__ == '__main__':
+    main()

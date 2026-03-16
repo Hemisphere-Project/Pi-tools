@@ -11,7 +11,7 @@ if [[ $(command -v apt) ]]; then
     DISTRO='xbian'
     echo "Distribution: $DISTRO"
 
-    apt install -y xorg openbox xdotool python3-xdg
+    apt install -y xorg openbox xdotool python3-xdg picom
 
 ## ARCH Linux
 elif [[ $(command -v pacman) ]]; then
@@ -49,6 +49,9 @@ chmod +x /etc/xdg/openbox/autostart
 # xinit configuration
 echo "exec openbox-session" > /root/.xinitrc
 chmod +x /root/.xinitrc
+
+# picom start
+rm /etc/xdg/autostart/picom.desktop
 
 ln -sf "$BASEPATH/xrun" /usr/local/bin/
 ln -sf "$BASEPATH/xstop" /usr/local/bin/
