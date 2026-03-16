@@ -1,0 +1,12 @@
+[Unit]
+Description=Tailscale daemon (RO-filesystem safe)
+After=network-online.target data.mount
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/tailscale-start
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

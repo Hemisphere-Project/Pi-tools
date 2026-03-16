@@ -59,6 +59,9 @@
 # rtpmidi — RTP MIDI (CoreMIDI compatible)
 # rtpmidi = no
 
+# tailscale — Tailscale VPN (state persists on /data, RO-safe)
+# tailscale = ask
+
 [display]
 # HDMI resolution (Pi only)
 # resolution = 1920x1080@30

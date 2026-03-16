@@ -40,6 +40,8 @@ MODULE_GROUPS = [
      ['bluetooth-pi'], 'no'),
     ('rtpmidi',     'RTP MIDI (CoreMIDI)',
      ['rtpmidi'], 'no'),
+    ('tailscale',   'Tailscale VPN',
+     ['tailscale'], 'ask'),
 ]
 
 CORE_MODULES = ['starter', 'extendfs', 'splash']
@@ -368,8 +370,8 @@ def main():
 
     cfg = config.load(config_path)
 
-    # Interactive prompts if no config file
-    if not config_path and not auto_yes:
+    # Interactive prompts only on first run (no config file, not yet bootstrapped)
+    if not config_path and not auto_yes and not bootstrap.is_bootstrapped():
         hostname = ui.ask_text("Hostname", default='')
         if hostname:
             cfg.set('system', 'hostname', hostname)
@@ -395,10 +397,14 @@ def main():
 
     # Datesync (standalone script, not a full module)
     datesync_src = os.path.join(PITOOLS_DIR, 'datesync')
+    datesync_dst = '/usr/local/bin/datesync'
     if os.path.isfile(datesync_src):
-        os.chmod(datesync_src, 0o755)
-        utils.link_bin(datesync_src)
-        ui.success("datesync linked")
+        if os.path.lexists(datesync_dst):
+            ui.skip("datesync: already linked")
+        else:
+            os.chmod(datesync_src, 0o755)
+            utils.link_bin(datesync_src)
+            ui.success("datesync linked")
 
     # ── Optional module groups ──
     ui.header("Optional Modules")

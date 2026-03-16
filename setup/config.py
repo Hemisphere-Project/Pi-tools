@@ -22,6 +22,7 @@ DEFAULTS = {
         'synczinc': 'no',
         'bluetooth': 'no',
         'rtpmidi': 'no',
+        'tailscale': 'ask',
     },
     'display': {
         'resolution': '1920x1080@30',

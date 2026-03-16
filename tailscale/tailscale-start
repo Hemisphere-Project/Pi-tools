@@ -1,0 +1,11 @@
+#!/bin/bash
+# Start tailscaled with state on /data partition
+# Ensures bind mount is active before starting
+
+# Make sure the bind mount is in place
+if ! mountpoint -q /var/lib/tailscale 2>/dev/null; then
+    mkdir -p /data/var/tailscale /var/lib/tailscale
+    mount --bind /data/var/tailscale /var/lib/tailscale
+fi
+
+exec tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock
