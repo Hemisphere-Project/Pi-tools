@@ -306,6 +306,12 @@ POST_HOOKS = {
 # ── WiFi setup from config ──────────────────────────────────────────
 
 
+def _sanitize_filename(name):
+    """Sanitize a string for use as a filename. Keeps alphanumeric, dash, underscore, space."""
+    import re
+    return re.sub(r'[^\w\s\-]', '_', name).strip()
+
+
 def setup_wifi_from_config(cfg, platinfo):
     """Create WiFi .nmconnection profiles from pitools.txt config."""
     networks = config.get_wifi_networks(cfg)
@@ -319,7 +325,11 @@ def setup_wifi_from_config(cfg, platinfo):
     for net in networks:
         ssid = net['ssid']
         password = net['password']
-        filepath = os.path.join(wifi_dir, f"{ssid}.nmconnection")
+        safe_name = _sanitize_filename(ssid)
+        if not safe_name:
+            ui.warn(f"Skipping WiFi with empty/invalid SSID")
+            continue
+        filepath = os.path.join(wifi_dir, f"{safe_name}.nmconnection")
 
         if not os.path.exists(filepath):
             with open(filepath, 'w') as f:
