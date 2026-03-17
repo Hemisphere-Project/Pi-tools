@@ -29,6 +29,7 @@
 
 # Enable hotspot (SSID = hostname)
 # hotspot = yes
+# hotspot_password = raspberry
 
 [modules]
 # Core modules (starter, extendfs, splash, datesync) are always installed.

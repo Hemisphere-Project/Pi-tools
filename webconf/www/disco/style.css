@@ -1,0 +1,75 @@
+html,
+body {
+    overflow-x: hidden;
+    height: 100%;
+}
+
+body {
+    background-color: #222;
+    color: #DDD;
+}
+
+.navbar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    z-index: 100;
+}
+
+.main {
+    margin-top: 71px;
+    min-height: calc(100% - 71px - 40px);
+}
+
+.footer {
+    margin-top: 10px;
+    width: 100%;
+    height: 30px;
+    line-height: 30px;
+    background-color: rgb(41, 41, 41);
+}
+
+.panel {
+    padding: 0 10px;
+}
+
+#link-connected {
+    float: right;
+    color: green;
+    display: none;
+}
+
+#link-disconnected {
+    color: red;
+    float: right;
+}
+
+.badge {
+    cursor: pointer;
+}
+
+.ip {
+    cursor: pointer;
+    background-color: #222;
+    color: #DDD;
+    padding: 2px;
+    margin: 2px;
+}
+
+.title {
+    cursor: pointer;
+    color: #DDD;
+}
+
+.title:hover {
+    text-decoration: underline;
+}
+
+#devices .list-group-item {
+    background-color: #444;
+}
+
+#devices .list-group-item.not-interesting {
+    display: none;
+}

@@ -1,4 +1,9 @@
 #!/bin/bash
+TAG="hostrename"
+log() { echo "[$TAG] $1"; logger -t "$TAG" "$1"; }
+
+# Source with_rw if available
+[ -f /usr/local/lib/pitools/with_rw.sh ] && source /usr/local/lib/pitools/with_rw.sh
 
 if [ "$#" -eq  "0" ]; then
  	name=rastapi-unknown
@@ -6,46 +11,47 @@ else
  	name=$1
 fi
 
-echo "[hostrename] Setting name: $name"
-
-current=$(cat /etc/hostname)
-if [[ $current == $name ]]; then
-	echo "[hostrename] hostname already set as $name"
-	exit 0
-fi
-	
-rw
-
-systemctl restart systemd-hostnamed
-sed -i -E 's/^127.0.1.1.*/127.0.1.1\t'"$name"'/' /etc/hosts
-for file in /boot/wifi/*-hotspot.nmconnection /boot/wifi/_disabled/*-hotspot.nmconnection; do
-	if [ -f "$file" ]; then
-		sed -i -E 's/^ssid=.*/ssid='"$name"'/' "$file"
-		echo "updated $(basename "$file") name"
-	fi
-done
-
-# try hostnamectl set-hostname first, if it fails, fallback to manual edit
-
-hostnamectl set-hostname "$name"
-sync
-
-current=$(cat /etc/hostname)
-if [[ $current != $name ]]; then
-	echo "[hostrename] hostnamectl failed, trying manual edit"
-	echo "$name" > /etc/hostname
-fi
-sync
-
-systemctl restart avahi-daemon
-setnet
-ro
-
-current=$(cat /etc/hostname)
-if [[ $current != $name ]]; then
-	echo "[hostrename] hostname change failed, current: $current, expected: $name"
+# Validate hostname: RFC 1123 (alphanumeric + hyphens, max 63 chars)
+if ! echo "$name" | grep -qE '^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$'; then
+	log "ERROR: invalid hostname '$name' (must be alphanumeric/hyphens, 1-63 chars)"
 	exit 1
 fi
 
-echo "[hostrename] hostname changed to $name"    
+log "Setting name: $name"
+
+current=$(cat /etc/hostname)
+if [[ $current == $name ]]; then
+	log "hostname already set as $name"
+	exit 0
+fi
+
+with_rw "
+systemctl restart systemd-hostnamed
+sed -i -E 's/^127.0.1.1.*/127.0.1.1\t$name/' /etc/hosts
+for file in /boot/wifi/*-hotspot.nmconnection /boot/wifi/_disabled/*-hotspot.nmconnection; do
+	if [ -f \"\$file\" ]; then
+		sed -i -E 's/^ssid=.*/ssid=$name/' \"\$file\"
+		echo \"updated \$(basename \"\$file\") name\"
+	fi
+done
+hostnamectl set-hostname '$name'
+sync
+"
+
+current=$(cat /etc/hostname)
+if [[ $current != $name ]]; then
+	log "hostnamectl failed, trying manual edit"
+	with_rw "echo '$name' > /etc/hostname && sync"
+fi
+
+systemctl restart avahi-daemon
+setnet
+
+current=$(cat /etc/hostname)
+if [[ $current != $name ]]; then
+	log "hostname change failed, current: $current, expected: $name"
+	exit 1
+fi
+
+log "hostname changed to $name"
 exit 0

@@ -23,10 +23,8 @@ set -e
 # Log a string via the syslog facility.
 log()
 {
-    #if [ $1 != debug ] || expr "$VERBOSE" : "[yY]" > /dev/null; then
-	#logger -p user.$1 -t "usbautomount[$$]" -- "$2"
-    #fi
-	echo $2
+    logger -p user.$1 -t "usbautomount[$$]" -- "$2" 2>/dev/null || true
+    echo "$2"
 }
 
 

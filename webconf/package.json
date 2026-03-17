@@ -9,7 +9,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "bonjour": "^3.5.0",
+    "bonjour-service": "^1.2.1",
     "express": "^4.21.2",
     "socket.io": "^4.8.1"
   }

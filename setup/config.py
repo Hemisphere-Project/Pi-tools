@@ -13,6 +13,7 @@ DEFAULTS = {
     'network': {
         'wifi_country': 'FR',
         'hotspot': 'yes',
+        'hotspot_password': 'raspberry',
     },
     'modules': {
         'system': 'yes',

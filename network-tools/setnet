@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
-import sys, filecmp, os
+import sys, filecmp, os, syslog
 from shutil import copyfile
+
+
+TAG = 'setnet'
+
+def log(msg):
+    print(f"[{TAG}] {msg}")
+    syslog.syslog(syslog.LOG_INFO, f"{TAG}: {msg}")
 
 
 # Auto-detect boot partition (modern Pi OS uses /boot/firmware)
@@ -13,11 +20,26 @@ EXT = '.nmconnection'
 engageRW = False
 
 
+def rw_on():
+    global engageRW
+    if not engageRW:
+        engageRW = True
+        os.system('rw')
+
+
+def rw_off():
+    global engageRW
+    if engageRW:
+        os.system('sync')
+        os.system('ro')
+        engageRW = False
+
+
 def syncFolder(src, dest, ext=''):
     global engageRW
     somethingChanged = False
     
-    print("[setnet] Syncing "+src+" to "+dest)
+    log("Syncing "+src+" to "+dest)
     
     if not os.path.isdir(src):
         print("  - Source path not found.. abort")
@@ -36,9 +58,7 @@ def syncFolder(src, dest, ext=''):
         if not os.path.exists(srcFile):
             print('ERROR: file not found:', c)
         elif not os.path.exists(destFile) or not filecmp.cmp(srcFile, destFile, shallow=False):
-            if not engageRW:
-                engageRW = True
-                os.system('rw')
+            rw_on()
             copyfile(srcFile, destFile)
             print('  File updated:', c)
             somethingChanged = True
@@ -48,9 +68,7 @@ def syncFolder(src, dest, ext=''):
     # remove unused
     for e in destList:
         if not e in srcList:
-            if not engageRW:
-                engageRW = True
-                os.system('rw')
+            rw_on()
             try:
                 os.remove(os.path.join(dest,e+ext))
             except FileNotFoundError:
@@ -61,27 +79,21 @@ def syncFolder(src, dest, ext=''):
     return somethingChanged
 
 
-# copy profiles from usb
-syncFolder(USBSOURCE, LOCALSOURCE, EXT)
-print()
+try:
+    # copy profiles from usb
+    syncFolder(USBSOURCE, LOCALSOURCE, EXT)
+    print()
 
-# copy profiles to NM
-print("[setnet] Applying profiles to NetworkManager")
-syncFolder(LOCALSOURCE, DEST, EXT)
+    # copy profiles to NM
+    log("Applying profiles to NetworkManager")
+    syncFolder(LOCALSOURCE, DEST, EXT)
 
+    if engageRW:
+        os.system('chmod 600 -R ' + DEST)
+        rw_off()
+        log('Restarting NetworkManager')
+        os.system('systemctl restart NetworkManager')
+finally:
+    rw_off()
 
-# Dirty
-if engageRW:
-    # Set permission
-    os.system('chmod 600 -R '+DEST  )
-
-    # RO
-    os.system('ro')
-    engageRW = False
-
-    # Restart NM
-    print('\n[setnet] Restarting NetworkManager')
-    os.system('systemctl restart NetworkManager')
-
-
-print('\ndone !')
+log('done !')

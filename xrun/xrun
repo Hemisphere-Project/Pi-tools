@@ -48,6 +48,24 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Validate ROTATE
+case "$ROTATE" in
+  0|90|180|270) ;;
+  *)
+    echo "ERROR: invalid rotation '$ROTATE' (must be 0, 90, 180, or 270)"
+    exit 1
+    ;;
+esac
+
+# Validate REFLECT
+case "$REFLECT" in
+  n|x|y|xy) ;;
+  *)
+    echo "ERROR: invalid reflect mode '$REFLECT' (must be n, x, y, or xy)"
+    exit 1
+    ;;
+esac
+
 
 #INFO
 echo " "

@@ -8,6 +8,12 @@ xset -dpms
 POINTER_XID=$(xinput -list | grep "pointer" | grep -v vc4 | grep -v "Virtual" | cut -f 2 | cut -d "=" -f 2)
 echo "POINTER_XID: $POINTER_XID"
 
+# Validate env vars
+XROTATE=${XROTATE:-"0"}
+case "$XROTATE" in 0|90|180|270) ;; *) echo "WARN: invalid XROTATE '$XROTATE', using 0"; XROTATE="0" ;; esac
+XREFLECT=${XREFLECT:-"n"}
+case "$XREFLECT" in n|x|y|xy) ;; *) echo "WARN: invalid XREFLECT '$XREFLECT', using n"; XREFLECT="n" ;; esac
+
 
 # Configure multi-monitor layout (extended mode)
 xrandr --auto
@@ -20,7 +26,6 @@ if [ $(echo "$connected_outputs" | wc -l) -gt 1 ]; then
 fi
 
 # Rotate the screen if specified
-XROTATE=${XROTATE:-"0"}
 if [ "$XROTATE" != "0" ]; then
     case $XROTATE in
         90)
@@ -39,7 +44,6 @@ if [ "$XROTATE" != "0" ]; then
 fi
 
 # Flip the screen if specified
-XREFLECT=${XREFLECT:-"n"}
 if [ "$XREFLECT" != "n" ]; then
     case $XREFLECT in
         x)

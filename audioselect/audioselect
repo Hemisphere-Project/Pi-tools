@@ -8,8 +8,13 @@
 # cat /proc/asound/cards
 
 BASEPATH="$(dirname "$(readlink -f "$0")")"
+TAG="audioselect"
+log() { echo "[$TAG] $1"; logger -t "$TAG" "$1"; }
 
-echo "[audioselect] auto-selecting audio output device or specify: hdmi0/hdmi1/analog/usb/both"
+# Source with_rw if available
+[ -f /usr/local/lib/pitools/with_rw.sh ] && source /usr/local/lib/pitools/with_rw.sh
+
+log "auto-selecting audio output device or specify: hdmi0/hdmi1/analog/usb/both"
 
 ###
 ### RENAMING CARDS
@@ -24,11 +29,7 @@ if [ "$find_hdmi0card" ]; then
     current_hdmi0card=$(cat /etc/asound.conf | awk '/pcm.hdmi0/{getline; getline; getline; getline; getline; getline; print}' | awk '{print $NF}')
     if [[ "$current_hdmi0card" != "$target_hdmi0card" ]]; then
         echo "HDMI0 card found as card $target_hdmi0card instead of $current_hdmi0card, renaming..."
-        rw
-        # Use word boundaries to prevent cascading replacements
-        sed -i "s/\bcard $current_hdmi0card\b/card $target_hdmi0card/g" /etc/asound.conf
-        sync
-        ro
+        with_rw "sed -i 's/\bcard $current_hdmi0card\b/card $target_hdmi0card/g' /etc/asound.conf"
         echo "HDMI0 card set to $target_hdmi0card"
     fi
 else
@@ -46,11 +47,7 @@ if [ "$find_hdmi1card" ]; then
         current_hdmi1card=$(cat /etc/asound.conf | awk '/pcm.hdmi1/{getline; getline; getline; getline; getline; getline; print}' | awk '{print $NF}')
         if [[ "$current_hdmi1card" != "$target_hdmi1card" ]]; then
             echo "HDMI1 card found as card $target_hdmi1card instead of $current_hdmi1card, renaming..."
-            rw
-            # Use word boundaries to prevent cascading replacements
-            sed -i "s/\bcard $current_hdmi1card\b/card $target_hdmi1card/g" /etc/asound.conf
-            sync
-            ro
+            with_rw "sed -i 's/\bcard $current_hdmi1card\b/card $target_hdmi1card/g' /etc/asound.conf"
             echo "HDMI1 card set to $target_hdmi1card"
         fi
     else
@@ -69,11 +66,7 @@ if [ "$find_analogcard" ]; then
     current_analogcard=$(cat /etc/asound.conf | awk '/pcm.analog/{getline; getline; print}' | awk '{print $NF}')
     if [[ "$current_analogcard" != "$target_analogcard" ]]; then
         echo "ANALOG card found as card $target_analogcard instead of $current_analogcard, renaming..."
-        rw
-        # Use word boundaries to prevent cascading replacements
-        sed -i "s/\bcard $current_analogcard\b/card $target_analogcard/g" /etc/asound.conf
-        sync
-        ro
+        with_rw "sed -i 's/\bcard $current_analogcard\b/card $target_analogcard/g' /etc/asound.conf"
         echo "ANALOG card set to $target_analogcard"
     fi
 else
@@ -89,11 +82,7 @@ if [ "$find_usbcard" ]; then
     current_usbcard=$(cat /etc/asound.conf | awk '/ctl.usb/{getline; getline; print}' | awk '{print $NF}')
     if [[ "$current_usbcard" != "$target_usbcard" ]]; then
         echo "USB card found as card $target_usbcard instead of $current_usbcard, renaming..."
-        rw
-        # Use word boundaries to prevent cascading replacements
-        sed -i "s/\bcard $current_usbcard\b/card $target_usbcard/g" /etc/asound.conf
-        sync
-        ro
+        with_rw "sed -i 's/\bcard $current_usbcard\b/card $target_usbcard/g' /etc/asound.conf"
         echo "USB card set to $target_usbcard"
     fi
 else
@@ -179,12 +168,7 @@ current_route=$(cat /etc/asound.conf | grep pcm.\!default -m1 | awk -F ' ' '{pri
 # apply new route if necessary
 if [[ "$current_route" != "$target_route" ]]; then
     echo "Audio route found as $current_route instead of $target_route, updating..."
-    rw
-    # sed -i "s/?USB?/$usb_card/g" /etc/asound.conf
-    sed -i "s/pcm.!default $current_route/pcm.!default $target_route/g" /etc/asound.conf
-    sed -i "s/ctl.!default $current_route/ctl.!default $target_route/g" /etc/asound.conf
-    sync
-    ro
+    with_rw "sed -i 's/pcm.!default $current_route/pcm.!default $target_route/g' /etc/asound.conf && sed -i 's/ctl.!default $current_route/ctl.!default $target_route/g' /etc/asound.conf"
     echo "Audio set to $target_route"
 else
     echo "Audio already set to $target_route"

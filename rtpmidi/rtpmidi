@@ -1,8 +1,17 @@
 #!/bin/bash
 DIR="$(dirname "$(readlink -f "$0")")"
-modprobe snd_virmidi
-HOST=`cat /etc/hostname`
+TAG="rtpmidi"
+log() { echo "[$TAG] $1"; logger -t "$TAG" "$1"; }
+
+log "Loading virtual MIDI module"
+modprobe snd_virmidi || { log "ERROR: failed to load snd_virmidi"; exit 1; }
+
+HOST=$(cat /etc/hostname)
+# Sanitize hostname for safe sed usage
+SAFE_HOST=$(printf '%s' "$HOST" | sed 's/[&/\]/\\&/g')
+
 cp "$DIR/ravelox.conf" /tmp/
-sed -i "s/rastamidi/rastaMidi._$HOST/g" /tmp/ravelox.conf
-# "$DIR/raveloxmidi" -c /tmp/ravelox.conf
+sed -i "s/rastamidi/rastaMidi._${SAFE_HOST}/g" /tmp/ravelox.conf
+
+log "Starting raveloxmidi as $HOST"
 raveloxmidi -c /tmp/ravelox.conf

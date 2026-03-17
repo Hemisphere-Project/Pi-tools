@@ -8,6 +8,10 @@ cd "$BASEPATH"
 ln -sf "$BASEPATH/ro" /usr/local/bin/
 ln -sf "$BASEPATH/rw" /usr/local/bin/
 
+# Install shared with_rw library
+mkdir -p /usr/local/lib/pitools
+ln -sf "$BASEPATH/with_rw.sh" /usr/local/lib/pitools/
+
 
 ### randomness
 ###

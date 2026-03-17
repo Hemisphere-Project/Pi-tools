@@ -2,6 +2,8 @@
 set -euo pipefail
 
 cd "$(dirname "$(readlink -f "$0")")"
+TAG="extendfs"
+log() { echo "[$TAG] $1"; logger -t "$TAG" "$1" 2>/dev/null || true; }
 
 # Enable read-write mode if rw/ro commands are available
 RW_RO_AVAILABLE=false

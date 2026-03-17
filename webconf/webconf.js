@@ -4,8 +4,10 @@ const socketIo = require('socket.io');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const bonjour = require('bonjour')();
+const { Bonjour } = require('bonjour-service');
+const bonjour = new Bonjour();
 const { exec } = require('./utils');
+const { startDisco } = require('./disco');
 
 const app = express();
 const server = http.createServer(app);
@@ -24,31 +26,41 @@ class Server {
         this.settings = {};
         this.refresh();
 
+        app.use('/disco', express.static(path.join(__dirname, 'www', 'disco')));
         app.use(express.static(path.join(__dirname, 'www')));
+
+        // Start discovery service
+        this.disco = startDisco(io, port);
 
         io.on('connection', (socket) => {
             console.log('Client connected');
             socket.emit('name', os.hostname());
             socket.emit('settings', this.getSettings());
 
+            // Send existing discovered devices
+            this.disco.sendAll(socket);
+
             socket.on('disconnect', () => {
                 console.log('Client disconnected');
             });
 
             socket.on('update', (values) => {
-                exec('rw');
-                for (const [key, value] of Object.entries(values)) {
-                    let [section, element] = key.split('.');
-                    section = parseInt(section);
-                    console.log('section:', section, 'element:', element, 'value:', value);
-                    if (section in this.settings && element in this.settings[section].elements)
-                        if (typeof this.settings[section].elements[element].apply === 'function') {
-                            this.settings[section].elements[element].apply(value);
-                            exec('sync');
-                        }
+                try {
+                    exec('rw');
+                    for (const [key, value] of Object.entries(values)) {
+                        let [section, element] = key.split('.');
+                        section = parseInt(section);
+                        console.log('section:', section, 'element:', element, 'value:', value);
+                        if (section in this.settings && element in this.settings[section].elements)
+                            if (typeof this.settings[section].elements[element].apply === 'function') {
+                                this.settings[section].elements[element].apply(value);
+                                exec('sync');
+                            }
+                    }
+                    exec('setnet');
+                } finally {
+                    exec('ro');
                 }
-                exec('setnet');
-                exec('ro');
                 exec('nmcli c d eth0');
                 this.refresh();
                 socket.emit('settings', this.getSettings());
@@ -107,6 +119,7 @@ class Server {
 
     stop() {
         this.bonjourService.stop();
+        this.disco.stop();
         server.close(() => {
             console.log('Web server stopped');
         });

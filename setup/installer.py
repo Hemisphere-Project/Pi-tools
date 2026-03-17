@@ -29,7 +29,7 @@ MODULE_GROUPS = [
     ('network',     'Network (WiFi profiles + hostname)',
      ['network-tools', 'hostrename'], 'yes'),
     ('web',         'Web UIs (config + file manager + discovery)',
-     ['webconf', 'filebrother', '3615-disco'], 'ask'),
+     ['webconf', 'filebrother'], 'ask'),
     ('audioselect', 'Audio routing (HDMI/analog/USB)',
      ['audioselect'], 'ask'),
     ('xrun',        'X11/Openbox display server',
@@ -314,13 +314,41 @@ def _sanitize_filename(name):
 
 def setup_wifi_from_config(cfg, platinfo):
     """Create WiFi .nmconnection profiles from pitools.txt config."""
-    networks = config.get_wifi_networks(cfg)
-    if not networks:
-        return
-
     boot_dir = utils.find_boot_dir()
     wifi_dir = os.path.join(boot_dir, 'wifi')
     os.makedirs(wifi_dir, exist_ok=True)
+
+    # Hotspot AP profile (SSID = hostname)
+    if cfg.get('network', 'hotspot', fallback='yes') == 'yes':
+        hostname = cfg.get('system', 'hostname', fallback='') or 'pitools'
+        hotspot_pw = cfg.get('network', 'hotspot_password', fallback='raspberry')
+        hotspot_file = os.path.join(wifi_dir, 'wint-hotspot.nmconnection')
+        if not os.path.exists(hotspot_file):
+            with open(hotspot_file, 'w') as f:
+                f.write(f"[connection]\n"
+                        f"id=hotspot-wint\n"
+                        f"type=wifi\n"
+                        f"autoconnect=true\n"
+                        f"interface-name=wint\n\n"
+                        f"[wifi]\n"
+                        f"hidden=false\n"
+                        f"mode=ap\n"
+                        f"ssid={hostname}\n\n"
+                        f"[wifi-security]\n"
+                        f"key-mgmt=wpa-psk\n"
+                        f"psk={hotspot_pw}\n\n"
+                        f"[ipv4]\n"
+                        f"address1=10.0.0.1/16,10.0.0.1\n"
+                        f"method=manual\n\n"
+                        f"[ipv6]\n"
+                        f"method=disabled\n")
+            os.chmod(hotspot_file, 0o600)
+            ui.success(f"Hotspot profile created: {hostname} (wint)")
+
+    # Client WiFi profiles
+    networks = config.get_wifi_networks(cfg)
+    if not networks:
+        return
 
     for net in networks:
         ssid = net['ssid']

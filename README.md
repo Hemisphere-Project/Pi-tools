@@ -24,7 +24,13 @@ web management, and file sync — from fresh OS image to running system.
 
 ### 2. Bootstrap & install
 
-SSH into the machine as root, then:
+SSH into the machine, then run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Hemisphere-Project/Pi-tools/main/setup.sh | sudo bash
+```
+
+Or manually:
 
 ```bash
 sudo su root

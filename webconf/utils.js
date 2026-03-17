@@ -4,10 +4,12 @@ const { execSync } = require('child_process');
 
 function exec(command) {
     try {
-        execSync(command);
+        execSync(command, { stdio: 'pipe' });
+        return true;
     }
     catch (err) {
-        // console.error(err);
+        console.error(`[exec] '${command}' failed:`, err.message);
+        return false;
     }
 }
 
