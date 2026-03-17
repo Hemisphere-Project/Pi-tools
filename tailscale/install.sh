@@ -4,6 +4,11 @@ BASEPATH="$(dirname "$(readlink -f "$0")")"
 
 echo "[tailscale] Installing Tailscale..."
 
+# Switch to read-write if rorw is active (official installer writes to /usr/share/keyrings etc.)
+if command -v rw >/dev/null 2>&1; then
+    rw
+fi
+
 # Install via official script
 curl -fsSL https://tailscale.com/install.sh | sh
 
@@ -22,16 +27,7 @@ mkdir -p /var/lib/tailscale
 # Add fstab bind mount so /var/lib/tailscale uses the writable /data partition
 # This is required for read-only root filesystem (rorw module)
 if ! grep -q '/data/var/tailscale' /etc/fstab 2>/dev/null; then
-    # If rorw is active, switch to rw first
-    if command -v rw >/dev/null 2>&1; then
-        rw
-    fi
-
     echo '/data/var/tailscale                             /var/lib/tailscale none defaults,bind                                 0 0' >> /etc/fstab
-
-    if command -v ro >/dev/null 2>&1; then
-        ro
-    fi
     echo "[tailscale] Added fstab bind mount for persistent state"
 fi
 
@@ -46,6 +42,11 @@ systemctl daemon-reload
 
 # Don't auto-enable tailscaled — let starter.txt control it
 systemctl disable tailscaled 2>/dev/null || true
+
+# Switch back to read-only if rorw is active
+if command -v ro >/dev/null 2>&1; then
+    ro
+fi
 
 echo "[tailscale] Installed. Run 'tailscale up' to authenticate."
 echo "[tailscale] State persists in /data/var/tailscale (RO-filesystem safe)"

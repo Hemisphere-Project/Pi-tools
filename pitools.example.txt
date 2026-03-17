@@ -20,6 +20,9 @@
 # password = rootpi
 
 [network]
+# WiFi regulatory country code (default: FR)
+# wifi_country = FR
+
 # WiFi networks: wifi_N = SSID=password
 # wifi_1 = MyNetwork=password123
 # wifi_2 = Gallery=artshow2024

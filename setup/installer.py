@@ -390,6 +390,10 @@ def main():
         if tz:
             cfg.set('system', 'timezone', tz)
 
+        wifi_country = ui.ask_text("WiFi country code", default='FR')
+        if wifi_country:
+            cfg.set('network', 'wifi_country', wifi_country)
+
     # ── Bootstrap ──
     bootstrap.run_bootstrap(platinfo, cfg)
 

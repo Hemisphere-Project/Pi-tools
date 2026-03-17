@@ -186,8 +186,10 @@ systemctl enable fake-clock-autosave.timer
 
 fake-clock save
 
-echo "rw
+echo 'if [ "$(id -u)" -eq 0 ]; then
+rw
 history -a
 ro
 fake-clock save
-" >> /etc/bash.bash_logout
+fi
+' >> /etc/bash.bash_logout

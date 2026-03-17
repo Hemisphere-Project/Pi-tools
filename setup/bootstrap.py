@@ -32,6 +32,7 @@ def run_bootstrap(platinfo, cfg):
     ui.header("System Bootstrap")
 
     _update_system()
+    _configure_locale()
     _configure_ssh()
     _set_password(cfg)
     _install_base_packages()
@@ -51,6 +52,10 @@ def run_bootstrap(platinfo, cfg):
         _bootstrap_pi(platinfo, cfg)
     elif platinfo['is_x86']:
         _bootstrap_x86(platinfo)
+
+    # WiFi country
+    wifi_country = cfg.get('network', 'wifi_country', fallback='FR')
+    _set_wifi_country(wifi_country, platinfo)
 
     # Hostname
     hostname = cfg.get('system', 'hostname', fallback='')
@@ -76,6 +81,14 @@ def _update_system():
     utils.run('DEBIAN_FRONTEND=noninteractive apt upgrade -y', check=False)
 
 
+def _configure_locale():
+    ui.info("Configuring locale...")
+    utils.run('sed -i "s/^# *en_US.UTF-8/en_US.UTF-8/" /etc/locale.gen', check=False)
+    utils.run('locale-gen', check=False)
+    utils.run('update-locale LANG=en_US.UTF-8', check=False)
+    ui.success("Locale configured (en_US.UTF-8)")
+
+
 def _configure_ssh():
     ui.info("Configuring SSH...")
     sshd_conf = '/etc/ssh/sshd_config'
@@ -89,6 +102,10 @@ def _configure_ssh():
 
         if 'IPQoS' not in content:
             content += '\nIPQoS cs0 cs0\n'
+
+        # Disable locale forwarding to prevent client/server locale mismatch
+        content = re.sub(r'^\s*AcceptEnv\s+LANG.*$', '# AcceptEnv LANG LC_*',
+                         content, flags=re.MULTILINE)
 
         with open(sshd_conf, 'w') as f:
             f.write(content)
@@ -227,9 +244,9 @@ def _setup_network_manager(platinfo):
 
 def _disable_ipv6(platinfo):
     ui.info("Disabling IPv6...")
-    ifaces = ['all', 'lo', 'eth0', 'wlan0', 'wlan1']
+    ifaces = ['all', 'lo', 'eth0', 'wlan0', 'wlan1', 'wint']
     if platinfo['is_x86']:
-        ifaces.extend(['enp1s0', 'enp2s0', 'eth1', 'wint'])
+        ifaces.extend(['enp1s0', 'enp2s0', 'eth1'])
 
     lines = ['# Disable IPv6']
     for iface in ifaces:
@@ -389,6 +406,13 @@ gpu_mem=512
             with open(cmdline_path, 'w') as f:
                 f.write(cmdline + '\n')
 
+    # Internal WiFi rename to wint
+    udev_rule = '/etc/udev/rules.d/72-static-name.rules'
+    if not os.path.isfile(udev_rule):
+        with open(udev_rule, 'w') as f:
+            f.write('ACTION=="add", SUBSYSTEM=="net", DRIVERS=="brcmfmac", NAME="wint"\n')
+        utils.run('udevadm control --reload', check=False)
+
     # Version marker
     version_file = os.path.join(platinfo['boot_dir'], 'VERSION')
     with open(version_file, 'w') as f:
@@ -416,9 +440,32 @@ def _bootstrap_x86(platinfo):
     ui.success("x86 configured")
 
 
+def _set_wifi_country(country, platinfo):
+    """Set WiFi regulatory country."""
+    utils.run(f'iw reg set {country}', check=False)
+    if platinfo['is_pi']:
+        utils.run(f'raspi-config nonint do_wifi_country {country}', check=False)
+    ui.success(f"WiFi country: {country}")
+
+
 def _set_hostname(hostname):
     """Set system hostname."""
     with open('/etc/hostname', 'w') as f:
         f.write(hostname + '\n')
+
+    # Ensure hostname resolves in /etc/hosts
+    hosts_file = '/etc/hosts'
+    if os.path.isfile(hosts_file):
+        with open(hosts_file) as f:
+            content = f.read()
+        # Update or add 127.0.1.1 entry
+        entry = f'127.0.1.1\t{hostname}'
+        if re.search(r'^127\.0\.1\.1\s', content, re.MULTILINE):
+            content = re.sub(r'^127\.0\.1\.1\s.*$', entry, content, flags=re.MULTILINE)
+        else:
+            content = content.rstrip('\n') + f'\n{entry}\n'
+        with open(hosts_file, 'w') as f:
+            f.write(content)
+
     utils.run(f'hostnamectl set-hostname "{hostname}"', check=False)
     ui.success(f"Hostname: {hostname}")

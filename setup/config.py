@@ -11,6 +11,7 @@ DEFAULTS = {
         'password': 'rootpi',
     },
     'network': {
+        'wifi_country': 'FR',
         'hotspot': 'yes',
     },
     'modules': {
