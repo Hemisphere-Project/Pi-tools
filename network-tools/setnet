@@ -23,8 +23,8 @@ def syncFolder(src, dest, ext=''):
         print("  - Source path not found.. abort")
         return False
     
-    srcList     = [f.split(ext)[0] for f in os.listdir(src)     if os.path.isfile(os.path.join(src, f))]
-    destList    = [f.split(ext)[0] for f in os.listdir(dest)    if os.path.isfile(os.path.join(dest, f))]
+    srcList     = [f[:-len(ext)] for f in os.listdir(src)  if os.path.isfile(os.path.join(src, f))  and f.endswith(ext)]
+    destList    = [f[:-len(ext)] for f in os.listdir(dest) if os.path.isfile(os.path.join(dest, f)) and f.endswith(ext)]
     
     print("  - Wanted files", srcList)
     print("  - Existing files", destList)
@@ -80,8 +80,8 @@ if engageRW:
     engageRW = False
 
     # Restart NM
-    print('\n[setnet] Restarting NetworkManager')
-    os.system('systemctl restart NetworkManager')
+    print('\n[setnet] Reloading NetworkManager')
+    os.system('nmcli connection reload')
 
 
 print('\ndone !')
