@@ -96,22 +96,4 @@ try:
 finally:
     rw_off()
 
-<<<<<<< HEAD
 log('done !')
-=======
-# Dirty
-if engageRW:
-    # Set permission
-    os.system('chmod 600 -R '+DEST  )
-
-    # RO
-    os.system('ro')
-    engageRW = False
-
-    # Restart NM
-    print('\n[setnet] Reloading NetworkManager')
-    os.system('nmcli connection reload')
-
-
-print('\ndone !')
->>>>>>> 26e3f8ddf51c7217c8d55d15078e1263964a4341
