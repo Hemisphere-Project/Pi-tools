@@ -5,6 +5,20 @@ cd "$(dirname "$(readlink -f "$0")")"
 TAG="extendfs"
 log() { echo "[$TAG] $1"; logger -t "$TAG" "$1" 2>/dev/null || true; }
 
+# Reset machine identity and wipe Tailscale state after cloning
+reset_clone_identity() {
+        log "Resetting machine-id for cloned drive"
+        rm -f /etc/machine-id
+        systemd-machine-id-setup
+        log "New machine-id: $(cat /etc/machine-id)"
+
+        if [[ -d /var/lib/tailscale ]]; then
+                log "Removing Tailscale state for cloned drive"
+                systemctl stop tailscaled 2>/dev/null || true
+                rm -rf /var/lib/tailscale/
+        fi
+}
+
 # Enable read-write mode if rw/ro commands are available
 RW_RO_AVAILABLE=false
 if command -v rw >/dev/null 2>&1 && command -v ro >/dev/null 2>&1; then
@@ -222,6 +236,7 @@ if [[ -n "$CURRENT_SIZE" ]] && (( CURRENT_SIZE >= NEW_SIZE )); then
                                 echo "$DRIVE_ID" > "$STATE_FILE"
                                 rm -f "$STATE_FILE_STAGE1"
                                 touch /tmp/new-drive
+                                reset_clone_identity
                                 exit 0
                         else
                                 echo "Filesystem needs resize (partition: $CURRENT_SIZE sectors, filesystem: $FS_SIZE sectors)"
@@ -231,6 +246,7 @@ if [[ -n "$CURRENT_SIZE" ]] && (( CURRENT_SIZE >= NEW_SIZE )); then
                         echo "$DRIVE_ID" > "$STATE_FILE"
                         rm -f "$STATE_FILE_STAGE1"
                         touch /tmp/new-drive
+                        reset_clone_identity
                         exit 0
                 fi
         fi
@@ -382,6 +398,7 @@ rm -f "$STATE_FILE_STAGE1"
 
 # Drop a flag for other services if needed.
 touch /tmp/new-drive
+reset_clone_identity
 
 echo "New partition size:"
 df -h "$LAST_PART" 2>/dev/null || lsblk "$LAST_PART"
