@@ -45,8 +45,8 @@ def syncFolder(src, dest, ext=''):
         print("  - Source path not found.. abort")
         return False
     
-    srcList     = [f.split(ext)[0] for f in os.listdir(src)     if os.path.isfile(os.path.join(src, f))]
-    destList    = [f.split(ext)[0] for f in os.listdir(dest)    if os.path.isfile(os.path.join(dest, f))]
+    srcList     = [f[:-len(ext)] for f in os.listdir(src)  if os.path.isfile(os.path.join(src, f))  and f.endswith(ext)]
+    destList    = [f[:-len(ext)] for f in os.listdir(dest) if os.path.isfile(os.path.join(dest, f)) and f.endswith(ext)]
     
     print("  - Wanted files", srcList)
     print("  - Existing files", destList)
@@ -96,4 +96,22 @@ try:
 finally:
     rw_off()
 
+<<<<<<< HEAD
 log('done !')
+=======
+# Dirty
+if engageRW:
+    # Set permission
+    os.system('chmod 600 -R '+DEST  )
+
+    # RO
+    os.system('ro')
+    engageRW = False
+
+    # Restart NM
+    print('\n[setnet] Reloading NetworkManager')
+    os.system('nmcli connection reload')
+
+
+print('\ndone !')
+>>>>>>> 26e3f8ddf51c7217c8d55d15078e1263964a4341
