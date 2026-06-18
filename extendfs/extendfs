@@ -14,9 +14,13 @@ reset_clone_identity() {
 
         if [[ -d /var/lib/tailscale ]]; then
                 log "Removing Tailscale state for cloned drive"
-                systemctl stop tailscaled 2>/dev/null || true
+                systemctl stop tailscaled tailscale-start 2>/dev/null || true
                 rm -rf /var/lib/tailscale/
         fi
+
+        log "Regenerating SSH host keys for cloned drive"
+        rm -f /etc/ssh/ssh_host_*
+        ssh-keygen -A
 }
 
 # Enable read-write mode if rw/ro commands are available
