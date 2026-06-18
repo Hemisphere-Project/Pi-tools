@@ -23,19 +23,29 @@ reset_clone_identity() {
         ssh-keygen -A
 }
 
-# Enable read-write mode if rw/ro commands are available
+# Detect whether we can toggle the read-only root (rorw module). We switch to
+# read-write only AFTER we know there is work to do (a clone/resize), so a normal
+# boot with a valid drive-id never remounts the root read-write.
 RW_RO_AVAILABLE=false
 if command -v rw >/dev/null 2>&1 && command -v ro >/dev/null 2>&1; then
         RW_RO_AVAILABLE=true
-        echo "Switching to read-write mode..."
-        rw
-        sleep 1
 fi
+DID_RW=false
 
-# Cleanup function to restore read-only mode if needed
+# Switch to read-write — only the first call acts.
+ensure_rw() {
+        if [[ "$RW_RO_AVAILABLE" == true && "$DID_RW" == false ]]; then
+                echo "Switching to read-write mode..."
+                rw
+                DID_RW=true
+                sleep 1
+        fi
+}
+
+# Cleanup: restore read-only mode, but only if we actually switched to rw.
 cleanup() {
         local exit_code=$?
-        if [[ "$RW_RO_AVAILABLE" == true ]]; then
+        if [[ "$DID_RW" == true ]]; then
                 echo ""
                 echo "Restoring read-only mode..."
                 ro
@@ -123,6 +133,10 @@ if [[ -n "$LAST_DRIVE_ID" && "$DRIVE_ID" == "$LAST_DRIVE_ID" ]]; then
         echo "drive-id is valid, no expansion needed"
         exit 0
 fi
+
+# From here on we modify the system (resize and/or reset identity) — now switch
+# the root to read-write. A normal boot never reaches this point.
+ensure_rw
 
 # Determine if this is a stage2 run (resume after reboot)
 STAGE2_MODE=false
