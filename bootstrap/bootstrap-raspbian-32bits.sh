@@ -225,10 +225,10 @@ modules=(
     network-tools
     audioselect
     usbautomount
+    webconf
     rorw
     extendfs
     synczinc
-    webconf
     # webfiles
     bluetooth-pi
     rtpmidi
