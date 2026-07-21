@@ -30,10 +30,8 @@ MODULE_GROUPS = [
      ['network-tools', 'hostrename'], 'yes'),
     ('web',         'Web UIs (config + file manager + discovery)',
      ['webconf', 'filebrother'], 'ask'),
-    ('audioselect', 'Audio routing (HDMI/analog/USB)',
-     ['audioselect'], 'ask'),
-    ('hplayer-audio', 'HPlayer2 audio hub (multi-output, replaces audioselect)',
-     ['hplayer-audio'], 'ask'),
+    ('audiohub',    'Audio hub: always-on multi-output (jack/HDMI/USB)',
+     ['audiohub'], 'ask'),
     ('xrun',        'X11/Openbox display server',
      ['xrun'], 'no'),
     ('synczinc',    'Syncthing synchronization',
@@ -210,19 +208,6 @@ def hook_network_tools(module_dir, platinfo):
                 shutil.copy2(src, dst)
 
 
-def hook_audioselect(module_dir, platinfo):
-    """Copy asound.conf for detected architecture."""
-    arch = platform_mod.machine()
-    if arch == 'aarch64':
-        src = os.path.join(module_dir, 'asound.conf-pi4')
-    elif arch.startswith('arm'):
-        src = os.path.join(module_dir, 'asound.conf-pi2')
-    else:
-        return
-    if os.path.isfile(src):
-        shutil.copy2(src, '/etc/asound.conf')
-
-
 def hook_bluetooth(module_dir, platinfo):
     """Enable Bluetooth auto-power-on."""
     bt_conf = '/etc/bluetooth/main.conf'
@@ -297,7 +282,6 @@ def hook_synczinc(module_dir, platinfo):
 POST_HOOKS = {
     'starter':       hook_starter,
     'network-tools': hook_network_tools,
-    'audioselect':   hook_audioselect,
     'bluetooth-pi':  hook_bluetooth,
     'xrun':          hook_xrun,
     'filebrother':   hook_filebrother,

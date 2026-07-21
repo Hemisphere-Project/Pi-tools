@@ -1,0 +1,198 @@
+# audiohub-graph-v2 — always-on multi-output audio hub, Raspberry Pi 3 (legacy/mmal)
+#
+# The player application plays pcm.hplayer: a plug pinned to the snd-aloop
+# loopback at 8ch/48kHz. Every physical output is an alsaloop forwarder
+# (audiohub@{jack,hdmi,usb} systemd units) reading the shared dsnoop capture:
+#
+#   app --> plug --> hw:Loopback,0,0             (fixed 8ch / 48k / S16)
+#                        |
+#                 hw:Loopback,1,0 --> dsnoop "aloopcap"
+#                        |-- alsaloop --> jackout   (Headphones, DOWNMIX, always)
+#                        |-- alsaloop --> hdmiout   (b1, ch 0/1, always)
+#                        `-- alsaloop --> usbout<N>:CARD=<id>  (hotplug, STRAIGHT)
+#
+# Channel policy:
+#   jack : the only output that COLLAPSES — ch0/1 at unity (stereo media keeps
+#          its calibrated level) + every other channel folded in at 0.5, so a
+#          multichannel piece is audible on a bench headphone. Sums saturate
+#          (clip) rather than wrap: monitoring output, not a mix bus.
+#   hdmi : ch 0/1 straight.
+#   usb  : STRAIGHT 1:1 — usbout<N> carries ch0..N-1, nothing folded. A 2ch
+#          interface plays ch0/1, an 8ch interface plays all. The forwarder
+#          wrapper picks N from the card's playback width (2/4/6/8).
+#
+# Why a hub and not a multi/dmix fan-out: bench 2026-07-21 (player-000,
+# Buster alsa-lib 1.1.8, kernel 6.18.38-v7+) showed dmix stalls on the
+# bcm2835 firmware devices even at default geometry, and a 12ch multi is
+# hard-clamped to a 4096-frame buffer and freezes. The loopback + per-output
+# forwarders use neither; each output fails independently, playback can
+# never block on hardware, and the app's audio clock rides the system timer.
+#
+# Latency: ONE deterministic alsaloop target for every output (audiohub.conf
+# latency_us, default 30ms — the bcm2835 VCHIQ path consumes in ~10ms quanta
+# and underruns below the measured 20ms floor).
+#
+# Static by design — nothing here is ever rewritten at runtime. The
+# "audiohub-graph-v2" marker on line 1 is the deploy check: bump it when the
+# graph changes shape.
+
+# ---- app-facing playback PCM ---------------------------------------------
+# The slave is pinned so the loopback cable always carries 8ch/48k/S16
+# whatever the media layout: the app negotiates its side freely (stereo
+# media stays stereo client-side) and the plug pads/converts. A pinned
+# cable means the dsnoop side below can never hit a parameter conflict.
+
+pcm.hplayer {
+    type plug
+    slave {
+        pcm "hw:Loopback,0,0"
+        channels 8
+        rate 48000
+        format S16_LE
+    }
+}
+
+pcm.!default hplayer
+ctl.!default {
+    type hw
+    card Headphones
+}
+
+# ---- shared capture side for the forwarders ------------------------------
+# Small periods: a forwarder chasing a ~30ms latency target starves behind
+# dsnoop's default ~125ms delivery.
+
+pcm.aloopcap {
+    type dsnoop
+    ipc_key 6101
+    slave {
+        pcm "hw:Loopback,1,0"
+        channels 8
+        rate 48000
+        format S16_LE
+        period_size 256
+        buffer_size 2048
+    }
+}
+
+# ---- per-output egress PCMs ----------------------------------------------
+
+# jack: ch0/1 unity + all other channels folded at 0.5 (see header)
+pcm.jackout {
+    type route
+    slave.pcm {
+        type plug
+        slave.pcm "hw:Headphones"
+    }
+    slave.channels 2
+    ttable.0.0 1
+    ttable.1.1 1
+    ttable.2.0 0.5
+    ttable.3.1 0.5
+    ttable.4.0 0.5
+    ttable.5.1 0.5
+    ttable.6.0 0.5
+    ttable.7.1 0.5
+}
+
+# hdmi: ch0/1 straight
+pcm.hdmiout {
+    type route
+    slave.pcm {
+        type plug
+        slave.pcm "hw:b1"
+    }
+    slave.channels 2
+    ttable.0.0 1
+    ttable.1.1 1
+}
+
+# usb: STRAIGHT identity routes, one per card width — the wrapper picks.
+# (plug's automatic 8->2 conversion would DOWNMIX, folding zones into the
+# stereo pair: exactly what these explicit identity tables prevent.)
+
+pcm.usbout2 {
+    @args [ CARD ]
+    @args.CARD { type string }
+    type route
+    slave.pcm {
+        type plug
+        slave.pcm { type hw; card $CARD }
+    }
+    slave.channels 2
+    ttable.0.0 1
+    ttable.1.1 1
+}
+
+pcm.usbout4 {
+    @args [ CARD ]
+    @args.CARD { type string }
+    type route
+    slave.pcm {
+        type plug
+        slave.pcm { type hw; card $CARD }
+    }
+    slave.channels 4
+    ttable.0.0 1
+    ttable.1.1 1
+    ttable.2.2 1
+    ttable.3.3 1
+}
+
+pcm.usbout6 {
+    @args [ CARD ]
+    @args.CARD { type string }
+    type route
+    slave.pcm {
+        type plug
+        slave.pcm { type hw; card $CARD }
+    }
+    slave.channels 6
+    ttable.0.0 1
+    ttable.1.1 1
+    ttable.2.2 1
+    ttable.3.3 1
+    ttable.4.4 1
+    ttable.5.5 1
+}
+
+pcm.usbout8 {
+    @args [ CARD ]
+    @args.CARD { type string }
+    type route
+    slave.pcm {
+        type plug
+        slave.pcm { type hw; card $CARD }
+    }
+    slave.channels 8
+    ttable.0.0 1
+    ttable.1.1 1
+    ttable.2.2 1
+    ttable.3.3 1
+    ttable.4.4 1
+    ttable.5.5 1
+    ttable.6.6 1
+    ttable.7.7 1
+}
+
+# ---- legacy names kept for hand tools (aplay -D jack ...) ----------------
+
+pcm.jack {
+    type hw
+    card Headphones
+}
+
+ctl.jack {
+    type hw
+    card Headphones
+}
+
+pcm.hdmi0 {
+    type hw
+    card b1
+}
+
+ctl.hdmi0 {
+    type hw
+    card b1
+}

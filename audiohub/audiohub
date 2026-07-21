@@ -1,0 +1,86 @@
+#!/bin/bash
+# audiohub — control CLI for the platform audio hub.
+#
+#   audiohub status              merged config + forwarder health + USB card
+#   audiohub set key=value ...   write overrides to /data/audiohub.conf
+#   audiohub apply               restart the forwarders (after config edits)
+#   audiohub test [jack|hdmi|usb]
+#                                play the test sound through the whole hub
+#                                (no arg), or through ONE physical output
+#                                (its forwarder is paused around the test)
+#
+# This is the third-party control surface: applications (HPlayer2, HPlayer3,
+# anything) either shell out to `audiohub set ... && audiohub apply` or write
+# /data/audiohub.conf themselves and restart the audiohub@* units.
+
+DIR="$(dirname "$(readlink -f "$0")")"
+UNITS="audiohub@jack audiohub@hdmi audiohub@usb"
+
+merged() {
+    for f in /etc/audiohub.conf /data/audiohub.conf; do
+        [ -f "$f" ] && sed -n 's/^\([a-z_]\+=.*\)/\1/p' "$f" | sed "s|^|$f: |"
+    done
+}
+
+case "${1:-status}" in
+
+status)
+    echo "== config (later wins):"
+    merged
+    echo "== forwarders:"
+    for u in $UNITS; do
+        printf "  %-16s %s\n" "$u" "$(systemctl is-active $u 2>/dev/null)"
+    done
+    echo "== usb card:"
+    grep 'USB-Audio' /proc/asound/cards || echo "  (none)"
+    ;;
+
+set)
+    shift
+    [ $# -ge 1 ] || { echo "usage: audiohub set key=value [...]"; exit 2; }
+    [ -d /data ] || { echo "/data not available: edit /etc/audiohub.conf instead"; exit 1; }
+    touch /data/audiohub.conf
+    for kv in "$@"; do
+        K="${kv%%=*}"
+        echo "$kv" | grep -q '=' || { echo "skipping '$kv' (want key=value)"; continue; }
+        if grep -q "^$K=" /data/audiohub.conf; then
+            sed -i "s|^$K=.*|$kv|" /data/audiohub.conf
+        else
+            echo "$kv" >> /data/audiohub.conf
+        fi
+        echo "set $kv"
+    done
+    echo "run 'audiohub apply' to take effect"
+    ;;
+
+apply)
+    systemctl restart $UNITS
+    echo "forwarders restarted"
+    ;;
+
+test)
+    SINK="${2:-}"
+    if [ -z "$SINK" ]; then
+        echo "playing test sound through the hub (all outputs)..."
+        aplay -q -D hplayer "$DIR/marimba.wav"
+    else
+        case "$SINK" in
+            jack) DEV=jackout ;;
+            hdmi) DEV=hdmiout ;;
+            usb)
+                LINE=$(grep -m1 'USB-Audio' /proc/asound/cards) || { echo "no USB card"; exit 1; }
+                CARD=$(echo "$LINE" | sed -n 's/^ *[0-9]* *\[\([^ ]*\) *\].*/\1/p')
+                DEV="usbout2:CARD=$CARD" ;;
+            *) echo "usage: audiohub test [jack|hdmi|usb]"; exit 2 ;;
+        esac
+        echo "pausing audiohub@$SINK, playing test sound on $DEV..."
+        systemctl stop "audiohub@$SINK"
+        aplay -q -D "$DEV" "$DIR/marimba.wav"
+        systemctl start "audiohub@$SINK"
+    fi
+    ;;
+
+*)
+    sed -n '2,15p' "$0" | sed 's/^# \?//'
+    ;;
+esac

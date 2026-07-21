@@ -1,0 +1,54 @@
+#!/bin/bash
+# audiohub forwarder — one per output, run by audiohub@.service
+#
+#   audiohub-fwd jack|hdmi|usb
+#
+# Reads the target latency from the audiohub config (/etc/audiohub.conf,
+# overridden by /data/audiohub.conf) and execs an alsaloop from the shared
+# dsnoop capture (aloopcap) to the sink's egress PCM. The usb variant first
+# waits for a USB audio card and picks the STRAIGHT egress matching its
+# playback width (usbout2/4/6/8 — never a downmix); on unplug alsaloop exits
+# and systemd's Restart=always brings us back to the wait loop — that IS the
+# hotplug mechanism.
+
+SINK="$1"
+
+LAT=""
+for f in /etc/audiohub.conf /data/audiohub.conf; do
+    [ -f "$f" ] || continue
+    V=$(sed -n 's/^latency_us=\([0-9]\+\).*/\1/p' "$f" | head -1)
+    [ -n "$V" ] && LAT="$V"
+done
+LAT=${LAT:-30000}
+if [ "$LAT" -lt 20000 ]; then
+    echo "latency_us=$LAT below the bcm2835 floor, clamping to 20000"
+    LAT=20000
+fi
+
+case "$SINK" in
+    jack) DEV="jackout" ;;
+    hdmi) DEV="hdmiout" ;;
+    usb)
+        while true; do
+            LINE=$(grep -m1 'USB-Audio' /proc/asound/cards)
+            if [ -n "$LINE" ]; then
+                IDX=$(echo "$LINE" | awk '{print $1}')
+                CARD=$(echo "$LINE" | sed -n 's/^ *[0-9]* *\[\([^ ]*\) *\].*/\1/p')
+                [ -n "$CARD" ] && break
+            fi
+            sleep 2
+        done
+        CH=$(awk '/^Playback:/{p=1} /^Capture:/{p=0} p && /Channels:/ {if ($2+0>c) c=$2+0} END{print c+0}' \
+                 "/proc/asound/card$IDX/stream0" 2>/dev/null)
+        CH=${CH:-2}
+        if   [ "$CH" -ge 8 ]; then W=8
+        elif [ "$CH" -ge 6 ]; then W=6
+        elif [ "$CH" -ge 4 ]; then W=4
+        else W=2; fi
+        DEV="usbout$W:CARD=$CARD"
+        echo "usb card: $CARD (${CH}ch) -> $DEV"
+        ;;
+    *)  echo "usage: audiohub-fwd jack|hdmi|usb"; exit 2 ;;
+esac
+
+exec /usr/bin/alsaloop -C aloopcap -P "$DEV" -r 48000 -f S16_LE -c 8 -t "$LAT" -S auto

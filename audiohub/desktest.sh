@@ -14,6 +14,5 @@ sleep 0.5
 timeout 5 alsaloop -C hw:Loopback,1,0 -P null -r 48000 -f S16_LE -c 8 -t 30000 -S auto
 RC=$?
 kill $FEED 2>/dev/null; wait $FEED 2>/dev/null
-# timeout's 124 = alsaloop survived the full window
 [ "$RC" = "124" ] && { echo PASS; exit 0; }
 echo "FAIL: alsaloop exited $RC"; exit 1
