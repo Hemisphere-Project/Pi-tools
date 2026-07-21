@@ -26,8 +26,8 @@ the hub" — HPlayer2/HPlayer3/third-party apps detect it, target
 audio environment alone (laptop/dev case).
 
 **Control CLI** (`audiohub`): `status` · `set latency_us=25000` · `apply` ·
-`test [jack|hdmi|usb]` (plays marimba.wav through the hub, or through one
-physical output with its forwarder paused around the test).
+`test [jack|hdmi|usb]` (plays marimba.wav on one physical output with its
+forwarder paused around the test; no argument walks all present outputs).
 
 - `latency_us` (default 30000) is the ONE forwarder target for every output —
   deterministic whatever is plugged; clamped at the 20 ms bcm2835 floor

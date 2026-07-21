@@ -61,8 +61,11 @@ apply)
 test)
     SINK="${2:-}"
     if [ -z "$SINK" ]; then
-        echo "playing test sound through the hub (all outputs)..."
-        aplay -q -D hplayer "$DIR/marimba.wav"
+        # the hub PCM is held by the running player, so no-arg walks the
+        # physical outputs one by one instead (usb only when a card is there)
+        "$0" test jack
+        "$0" test hdmi
+        grep -q 'USB-Audio' /proc/asound/cards && "$0" test usb
     else
         case "$SINK" in
             jack) DEV=jackout ;;
