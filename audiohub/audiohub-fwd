@@ -45,7 +45,19 @@ case "$SINK" in
         elif [ "$CH" -ge 6 ]; then W=6
         elif [ "$CH" -ge 4 ]; then W=4
         else W=2; fi
-        DEV="usbout$W:CARD=$CARD"
+        if awk '/^Playback:/{p=1} /^Capture:/{p=0} p && /Rates:/' "/proc/asound/card$IDX/stream0" 2>/dev/null | grep -qw 48000; then
+            # card speaks the cable rate: straight identity route, no conversion
+            DEV="usbout$W:CARD=$CARD"
+        else
+            # rate-limited card (e.g. ESI GIGAPort HD+: 8ch/44100 only). A
+            # rate-converting plug in alsaloop's write path produces measured
+            # discontinuities (~160/s, alsa-lib 1.1.8) — the clean path is the
+            # raw device with alsaloop's internal libsamplerate bridging the
+            # rates (bench-verified: 0 discontinuities). Needs a card width
+            # alsaloop can open at 8ch; narrow+rate-limited cards are logged.
+            DEV="hw:$CARD"
+            [ "$CH" -lt 8 ] && echo "WARNING: card is ${CH}ch and not 48k-capable: direct open may fail"
+        fi
         echo "usb card: $CARD (${CH}ch) -> $DEV"
 
         # alsaloop does NOT exit when its device vanishes (it error-loops or
