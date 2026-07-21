@@ -32,6 +32,8 @@ MODULE_GROUPS = [
      ['webconf', 'filebrother'], 'ask'),
     ('audioselect', 'Audio routing (HDMI/analog/USB)',
      ['audioselect'], 'ask'),
+    ('hplayer-audio', 'HPlayer2 audio hub (multi-output, replaces audioselect)',
+     ['hplayer-audio'], 'ask'),
     ('xrun',        'X11/Openbox display server',
      ['xrun'], 'no'),
     ('synczinc',    'Syncthing synchronization',

@@ -1,0 +1,14 @@
+[Unit]
+Description=HPlayer2 audio hub forwarder (%i)
+After=sound.target
+
+[Service]
+ExecStartPre=/sbin/modprobe snd-aloop
+ExecStart=/usr/local/bin/hplayer-audio-fwd %i
+Restart=always
+RestartSec=2
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=10
+
+[Install]
+WantedBy=multi-user.target
