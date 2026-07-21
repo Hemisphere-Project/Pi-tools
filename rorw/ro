@@ -11,16 +11,16 @@ for i in {1..5}; do
     # Try to remount the root filesystem as read-only
     mount -o remount,ro /
 
-    # Try to remount the boot partition as read-only
-    if (lsblk -o uuid /dev/mmcblk0p3 > /dev/null 2>&1); then
-        # check if /boot/firmware exists
-        if [ -d /boot/firmware ]; then
-            mount -o remount,ro /boot/firmware
-        else
-            mount -o remount,ro /boot
-        fi
-    elif (lsblk -o uuid /dev/mmcblk1p8 > /dev/null 2>&1); then
-        mount -o remount,ro /boot/efi 
+    # Try to remount the boot partition as read-only.
+    # Mountpoint-driven: covers Pi (/boot or /boot/firmware) and any EFI
+    # system (/boot/efi on mmc, sda, nvme — the old device probe missed
+    # x86).
+    if mountpoint -q /boot/firmware; then
+        mount -o remount,ro /boot/firmware
+    elif mountpoint -q /boot/efi; then
+        mount -o remount,ro /boot/efi
+    elif mountpoint -q /boot; then
+        mount -o remount,ro /boot
     fi
     
     if touch "$TESTFILE" 2>/dev/null; then
