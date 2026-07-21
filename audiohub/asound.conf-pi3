@@ -65,8 +65,11 @@ ctl.!default {
 }
 
 # ---- shared capture side for the forwarders ------------------------------
-# Small periods: a forwarder chasing a ~30ms latency target starves behind
-# dsnoop's default ~125ms delivery.
+# Small periods (delivery granularity: a forwarder chasing a ~30ms target
+# starves behind dsnoop's default ~125ms), DEEP buffer (stall absorption:
+# a rate-limited USB sink can block its forwarder ~200ms between writes —
+# with a shallow ring the capture overruns and every output gaps; RAM is
+# free, 16384 frames = 341ms of headroom).
 
 pcm.aloopcap {
     type dsnoop
