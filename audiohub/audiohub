@@ -54,7 +54,13 @@ set)
     ;;
 
 apply)
-    systemctl restart $UNITS
+    # one at a time: restarting all three at once can leave a sink wedged
+    # PREPARED with alsaloop spinning (bench 2026-07-21, twice); sequential
+    # starts never did
+    for u in $UNITS; do
+        systemctl restart "$u"
+        sleep 1
+    done
     echo "forwarders restarted"
     ;;
 

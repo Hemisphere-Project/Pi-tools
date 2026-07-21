@@ -82,5 +82,43 @@ case "$SINK" in
     *)  echo "usage: audiohub-fwd jack|hdmi|usb"; exit 2 ;;
 esac
 
-# jack/hdmi: firmware cards, they never vanish
-exec /usr/bin/alsaloop -C aloopcap -P "$DEV" -r 48000 -f S16_LE -c 8 -t "$LAT" -S auto
+# jack/hdmi: firmware cards, they never vanish — but their alsaloop can wedge
+# silently: sink stuck PREPARED, hw_ptr frozen, alsaloop spinning at RT prio
+# with nothing in the journal (bench 2026-07-21, twice, after concurrent unit
+# restarts; the RT spin also starves the SD's kworkers). Supervise flow the
+# way the usb branch supervises card presence: while the loopback cable has a
+# writer, the sink pointer must advance — three misses (~9s) recycles us.
+# SIGKILL, not TERM: the spin state ignores SIGTERM (measured).
+case "$SINK" in
+    jack) SINKCARD="Headphones" ;;
+    hdmi) SINKCARD="b1" ;;
+esac
+
+cardidx() { sed -n "s/^ *\([0-9]\+\) \[$1 .*/\1/p" /proc/asound/cards | head -1; }
+
+/usr/bin/alsaloop -C aloopcap -P "$DEV" -r 48000 -f S16_LE -c 8 -t "$LAT" -S auto &
+LOOP=$!
+trap "kill -9 $LOOP 2>/dev/null" TERM INT
+STALL=0 LASTPTR=-1
+while kill -0 "$LOOP" 2>/dev/null; do
+    sleep 3
+    LB=$(cardidx Loopback); SC=$(cardidx "$SINKCARD")
+    CABLE=$(sed -n 1p "/proc/asound/card$LB/pcm0p/sub0/status" 2>/dev/null)
+    if [ "$CABLE" != "state: RUNNING" ]; then
+        STALL=0; LASTPTR=-1; continue   # no writer on the cable: idle is legit
+    fi
+    ST=$(sed -n 1p "/proc/asound/card$SC/pcm0p/sub0/status" 2>/dev/null)
+    PTR=$(grep -h hw_ptr "/proc/asound/card$SC/pcm0p/sub0/status" 2>/dev/null | tr -dc 0-9)
+    if [ "$ST" = "state: RUNNING" ] && [ -n "$PTR" ] && [ "$PTR" != "$LASTPTR" ]; then
+        STALL=0; LASTPTR=$PTR; continue
+    fi
+    STALL=$((STALL+1)); LASTPTR=${PTR:-$LASTPTR}
+    if [ "$STALL" -ge 3 ]; then
+        echo "$SINK sink stalled (${ST:-closed}) with a live cable: recycling forwarder"
+        kill -9 "$LOOP" 2>/dev/null
+        wait "$LOOP" 2>/dev/null
+        exit 1
+    fi
+done
+wait "$LOOP"
+exit $?
