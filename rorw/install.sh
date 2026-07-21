@@ -130,10 +130,13 @@ tmpfs                                           /tmp            tmpfs   defaults
 /data/var/NetworkManager                        /var/lib/NetworkManager none defaults,bind                             0 0
 " > /etc/fstab
 
-# If snapd is installed, add snap mounts
+# If snapd is installed, add snap mounts. nofail: if snapd is later purged
+# its mount point vanishes and a required bind would drop boot to emergency
+# mode (N100 pilot 2026-07-21) — a missing optional bind must never brick
+# the machine. Purge snapd BEFORE running this installer when possible.
 if [ -d /var/lib/snapd ]; then
     mkdir -p /data/var/snapd
-    echo "/data/var/snapd /var/lib/snapd none defaults,bind 0 0" >> /etc/fstab
+    echo "/data/var/snapd /var/lib/snapd none defaults,bind,nofail 0 0" >> /etc/fstab
 fi
 
 
