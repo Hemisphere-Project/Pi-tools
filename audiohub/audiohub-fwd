@@ -25,6 +25,25 @@ if [ "$LAT" -lt 20000 ]; then
     LAT=20000
 fi
 
+cardidx() { sed -n "s/^ *\([0-9]\+\) \[$1 .*/\1/p" /proc/asound/cards | head -1; }
+
+# Never open the capture side while the loopback cable has no writer: an
+# aloopcap instance created against a closed cable can come up with degraded
+# geometry (2ch) and then poisons every later 8ch open — and the resulting
+# 2s crash-loop lockstep keeps the stale shm attached so it never frees
+# (bench 2026-07-21, three times: after every mpv restart). Nothing to
+# forward while the cable is closed anyway.
+wait_cable() {
+    while :; do
+        LB=$(cardidx Loopback)
+        if [ -n "$LB" ]; then
+            ST=$(sed -n 1p "/proc/asound/card$LB/pcm0p/sub0/status" 2>/dev/null)
+            [ -n "$ST" ] && [ "$ST" != "closed" ] && return
+        fi
+        sleep 1
+    done
+}
+
 case "$SINK" in
     jack) DEV="jackout" ;;
     hdmi) DEV="hdmiout" ;;
@@ -59,6 +78,7 @@ case "$SINK" in
             [ "$CH" -lt 8 ] && echo "WARNING: card is ${CH}ch and not 48k-capable: direct open may fail"
         fi
         echo "usb card: $CARD (${CH}ch) -> $DEV"
+        wait_cable
 
         # alsaloop does NOT exit when its device vanishes (it error-loops or
         # zombies — bench 2026-07-21, C-Media unplug): supervise the card
@@ -99,7 +119,7 @@ case "$SINK" in
     hdmi) SINKCARD="b1"; STAGGER=2 ;;
 esac
 
-cardidx() { sed -n "s/^ *\([0-9]\+\) \[$1 .*/\1/p" /proc/asound/cards | head -1; }
+wait_cable
 
 /usr/bin/alsaloop -C aloopcap -P "$DEV" -r 48000 -f S16_LE -c 8 -t "$LAT" -S auto &
 LOOP=$!
