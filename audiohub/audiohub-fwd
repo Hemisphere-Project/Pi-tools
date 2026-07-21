@@ -89,16 +89,21 @@ esac
 # way the usb branch supervises card presence: while the loopback cable has a
 # writer, the sink pointer must advance — three misses (~9s) recycles us.
 # SIGKILL, not TERM: the spin state ignores SIGTERM (measured).
+# STAGGER: closing both firmware PCMs at the same instant can race the VCHI
+# service close and oops the kernel (snd_pcm_pre_stop NULL deref in
+# vchiq-slot/0, 6.18.38-v7+, bench 2026-07-21 — audio dead until reboot).
+# hdmi always waits 2s before killing its alsaloop so the closes serialize;
+# stays well under the unit's TimeoutStopSec=5.
 case "$SINK" in
-    jack) SINKCARD="Headphones" ;;
-    hdmi) SINKCARD="b1" ;;
+    jack) SINKCARD="Headphones"; STAGGER=0 ;;
+    hdmi) SINKCARD="b1"; STAGGER=2 ;;
 esac
 
 cardidx() { sed -n "s/^ *\([0-9]\+\) \[$1 .*/\1/p" /proc/asound/cards | head -1; }
 
 /usr/bin/alsaloop -C aloopcap -P "$DEV" -r 48000 -f S16_LE -c 8 -t "$LAT" -S auto &
 LOOP=$!
-trap "kill -9 $LOOP 2>/dev/null" TERM INT
+trap "sleep $STAGGER; kill -9 $LOOP 2>/dev/null" TERM INT
 STALL=0 LASTPTR=-1
 while kill -0 "$LOOP" 2>/dev/null; do
     sleep 3
@@ -115,6 +120,7 @@ while kill -0 "$LOOP" 2>/dev/null; do
     STALL=$((STALL+1)); LASTPTR=${PTR:-$LASTPTR}
     if [ "$STALL" -ge 3 ]; then
         echo "$SINK sink stalled (${ST:-closed}) with a live cable: recycling forwarder"
+        sleep "$STAGGER"   # serialize with the sibling's kill (see STAGGER above)
         kill -9 "$LOOP" 2>/dev/null
         wait "$LOOP" 2>/dev/null
         exit 1

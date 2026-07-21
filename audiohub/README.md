@@ -63,3 +63,19 @@ usb forwarder with a large -t (>=300000) despite the latency cost, or
 replace alsaloop with a writer that decouples read/write buffering
 (ffmpeg is broken on the 7.1 image: /usr/local lib mismatch). A
 high-speed 48k-native 8ch interface would sidestep the whole class.
+
+## Kernel hazard — never close both firmware PCMs at the same instant
+
+Concurrent teardown of the two bcm2835 sinks (jack + hdmi closing together,
+e.g. a simultaneous `systemctl restart` of all forwarders with SIGKILL-fast
+stops) can race the VCHI service close and **oops the kernel**: signature is
+`bcm2835-audio: failed to close VCHI service connection (status=-11)`
+followed by a NULL deref in `snd_pcm_pre_stop` on the `vchiq-slot/0` thread
+(6.18.38-v7+, bench 2026-07-21). The oops dies holding the substream lock —
+every later open/status read on the card blocks forever, audio is dead until
+reboot.
+
+Mitigations shipped here: `audiohub apply` restarts units one at a time, and
+`audiohub-fwd` staggers the hdmi kill by 2s (TERM trap and watchdog path
+both), so the two firmware closes always serialize. Anything else driving
+these units must respect the same rule: **sequential stops only**.
