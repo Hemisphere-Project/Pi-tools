@@ -47,8 +47,28 @@ case "$SINK" in
         else W=2; fi
         DEV="usbout$W:CARD=$CARD"
         echo "usb card: $CARD (${CH}ch) -> $DEV"
+
+        # alsaloop does NOT exit when its device vanishes (it error-loops or
+        # zombies — bench 2026-07-21, C-Media unplug): supervise the card
+        # ourselves and die on unplug so Restart=always re-enters the wait
+        # loop above. That IS the hotplug mechanism.
+        /usr/bin/alsaloop -C aloopcap -P "$DEV" -r 48000 -f S16_LE -c 8 -t "$LAT" -S auto &
+        LOOP=$!
+        trap "kill $LOOP 2>/dev/null" TERM INT
+        while kill -0 "$LOOP" 2>/dev/null; do
+            if ! grep -qE "\[$CARD *\]" /proc/asound/cards; then
+                echo "usb card $CARD vanished: recycling forwarder"
+                kill "$LOOP" 2>/dev/null
+                wait "$LOOP" 2>/dev/null
+                exit 1
+            fi
+            sleep 2
+        done
+        wait "$LOOP"
+        exit $?
         ;;
     *)  echo "usage: audiohub-fwd jack|hdmi|usb"; exit 2 ;;
 esac
 
+# jack/hdmi: firmware cards, they never vanish
 exec /usr/bin/alsaloop -C aloopcap -P "$DEV" -r 48000 -f S16_LE -c 8 -t "$LAT" -S auto
