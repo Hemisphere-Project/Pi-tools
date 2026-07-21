@@ -114,10 +114,22 @@ esac
 # vchiq-slot/0, 6.18.38-v7+, bench 2026-07-21 — audio dead until reboot).
 # hdmi always waits 2s before killing its alsaloop so the closes serialize;
 # stays well under the unit's TimeoutStopSec=5.
-case "$SINK" in
-    jack) SINKCARD="Headphones"; STAGGER=0 ;;
-    hdmi) SINKCARD="b1"; STAGGER=2 ;;
-esac
+# Sink resolution is per-platform: the Pi has one firmware card per output
+# (each watched on its pcm0p), x86 HDA has ONE card (PCH) carrying analog as
+# device 0 and HDMI as device 3 — so the flow-watch must read the matching
+# pcmNp. The STAGGER serialization is vchiq-motivated but kept on x86 too:
+# serialized closes cost nothing and keep one behavior on both fleets.
+if grep -q '\[PCH ' /proc/asound/cards 2>/dev/null; then
+    case "$SINK" in
+        jack) SINKCARD="PCH"; SINKPCM="pcm0p"; STAGGER=0 ;;
+        hdmi) SINKCARD="PCH"; SINKPCM="pcm3p"; STAGGER=2 ;;
+    esac
+else
+    case "$SINK" in
+        jack) SINKCARD="Headphones"; SINKPCM="pcm0p"; STAGGER=0 ;;
+        hdmi) SINKCARD="b1"; SINKPCM="pcm0p"; STAGGER=2 ;;
+    esac
+fi
 
 wait_cable
 
@@ -132,8 +144,8 @@ while kill -0 "$LOOP" 2>/dev/null; do
     if [ "$CABLE" != "state: RUNNING" ]; then
         STALL=0; LASTPTR=-1; continue   # no writer on the cable: idle is legit
     fi
-    ST=$(sed -n 1p "/proc/asound/card$SC/pcm0p/sub0/status" 2>/dev/null)
-    PTR=$(grep -h hw_ptr "/proc/asound/card$SC/pcm0p/sub0/status" 2>/dev/null | tr -dc 0-9)
+    ST=$(sed -n 1p "/proc/asound/card$SC/$SINKPCM/sub0/status" 2>/dev/null)
+    PTR=$(grep -h hw_ptr "/proc/asound/card$SC/$SINKPCM/sub0/status" 2>/dev/null | tr -dc 0-9)
     if [ "$ST" = "state: RUNNING" ] && [ -n "$PTR" ] && [ "$PTR" != "$LASTPTR" ]; then
         STALL=0; LASTPTR=$PTR; continue
     fi

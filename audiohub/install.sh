@@ -14,10 +14,11 @@ else
     echo "Distribution not detected (needs APT or PACMAN)"; exit 1
 fi
 
-# ALSA graph (pi3 legacy/mmal for now — see the file header for the design)
+# ALSA graph per platform — see each file's header for the design
 case "$(uname -m)" in
-    armv*)  cp "$BASEPATH/asound.conf-pi3" /etc/asound.conf ;;
-    *)      echo "WARNING: no hub graph for $(uname -m) yet, /etc/asound.conf untouched" ;;
+    armv*)   cp "$BASEPATH/asound.conf-pi3" /etc/asound.conf ;;
+    x86_64)  cp "$BASEPATH/asound.conf-x86" /etc/asound.conf ;;
+    *)       echo "WARNING: no hub graph for $(uname -m) yet, /etc/asound.conf untouched" ;;
 esac
 
 # ── migrate from the transitional 'hplayer-audio' name ──
