@@ -71,9 +71,12 @@ ctl.!default {
 # with a shallow ring the capture overruns and every output gaps; RAM is
 # free, 16384 frames = 341ms of headroom).
 
+# NOTE: dsnoop's shared-memory instance outlives its readers — geometry
+# edits below are IGNORED by a live system until the ipc_key changes.
+# Bump the key together with any period/buffer change.
 pcm.aloopcap {
     type dsnoop
-    ipc_key 6101
+    ipc_key 6201
     slave {
         pcm "hw:Loopback,1,0"
         channels 8
