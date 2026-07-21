@@ -76,14 +76,14 @@ ctl.!default {
 # Bump the key together with any period/buffer change.
 pcm.aloopcap {
     type dsnoop
-    ipc_key 6201
+    ipc_key 6202
     slave {
         pcm "hw:Loopback,1,0"
         channels 8
         rate 48000
         format S16_LE
         period_size 256
-        buffer_size 2048
+        buffer_size 16384
     }
 }
 
