@@ -43,3 +43,23 @@ Smoke test without hardware: `./desktest.sh`.
 
 Health monitoring / UI: HPlayer2's `audiohub` interface watches the units and
 the USB card and shows per-output status chips in http2.
+
+## Known issue — parked 2026-07-21, revisit before the 02/09 install
+
+**ESI GIGAPort HD+ (8ch, full-speed, sole altset 8ch/S16/44100): periodic
+audio gaps through the forwarder**, unresolved. The trail, so nobody re-runs
+it: gaps scale with tlatency (~250ms gaps at t=60ms, ~500ms at t=150ms).
+Ruled out by ear + measurement: USB transport (direct speaker-test clean),
+plug resampler quality (speexrate clean via speaker-test), alsaloop sync
+mode (auto/none identical), SRC location (internal libsamplerate,
+capture-side plug, write-side plug — all gap alike), device-side stalls
+(hw_ptr advances continuously, zero XRUN: the gaps are IN the data), and
+the dsnoop ring depth (16384 frames verified live — no change). jack/hdmi
+reading the same dsnoop stay clean throughout.
+
+Next lead: alsaloop's *own* capture window is derived from -t, so a deep
+dsnoop ring can't help past the reader's window — first September test:
+usb forwarder with a large -t (>=300000) despite the latency cost, or
+replace alsaloop with a writer that decouples read/write buffering
+(ffmpeg is broken on the 7.1 image: /usr/local lib mismatch). A
+high-speed 48k-native 8ch interface would sidestep the whole class.
