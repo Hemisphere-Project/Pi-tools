@@ -14,6 +14,15 @@ dhcp-leasefile=/var/lib/dnsmasq/dnsmasq.leases
 mkdir -p /boot/wifi
 cp -r "$BASEPATH"/profiles/* /boot/wifi/
 
+# The wint-hotspot template pins 5GHz (band=a/chan36 — tuned on the Pi's
+# Broadcom). Intel iwlwifi (x86 minis) refuses AP mode on 5GHz until LAR
+# regulatory settles, and NM then fails the whole hotspot
+# (supplicant-timeout, biennale N100 pilot 2026-07-21): strip the pin on
+# x86 so NM falls back to 2.4GHz, matching the proven 2024 behavior.
+if [ "$(uname -m)" = "x86_64" ] && [ -f /boot/wifi/wint-hotspot.nmconnection ]; then
+    sed -i '/^band=a$/d;/^channel=36$/d' /boot/wifi/wint-hotspot.nmconnection
+fi
+
 ln -sf "$BASEPATH/setnet.service" /etc/systemd/system/
 ln -sf "$BASEPATH/setnet" /usr/local/bin/
 
