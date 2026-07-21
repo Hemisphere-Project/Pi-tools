@@ -17,4 +17,4 @@ method=auto
 route-metric=70
 
 [ipv6]
-method=disabled
+method=ignore

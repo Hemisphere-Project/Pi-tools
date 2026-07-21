@@ -9,4 +9,4 @@ address2=2.0.0.1/8
 method=manual
 
 [ipv6]
-method=disabled
+method=ignore

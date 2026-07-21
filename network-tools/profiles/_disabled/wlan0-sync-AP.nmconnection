@@ -5,16 +5,16 @@ autoconnect=true
 autoconnect-priority=0
 
 [wifi]
+powersave=2
 hidden=true
 mode=ap
+band=bg
+channel=6
 ssid=synclink-1
-
-[wifi-security]
-pmf=0
 
 [ipv4]
 address1=10.1.0.1/24,10.1.0.1
 method=manual
 
 [ipv6]
-method=disabled
+method=ignore

@@ -2,23 +2,28 @@
 id=hotspot-wint
 type=wifi
 autoconnect=true
+autoconnect-priority=9
 interface-name=wint
 
 [wifi]
 hidden=false
 mode=ap
+band=a
+channel=36
 ssid=rasta-00
 
 [wifi-security]
-pmf=0
-
-[wifi-security]
 key-mgmt=wpa-psk
+proto=rsn
+pairwise=ccmp
+group=ccmp
+pmf=1
 psk=Rastapi69*
 
 [ipv4]
-address1=10.0.0.1/16,10.0.0.1
+address1=10.0.0.1/24,10.0.0.1
 method=manual
 
 [ipv6]
-method=disabled
+addr-gen-mode=stable-privacy
+method=ignore

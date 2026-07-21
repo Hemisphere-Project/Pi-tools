@@ -8,5 +8,5 @@ interface-name=eth0
 method=auto
 
 [ipv6]
-method=disabled
+method=ignore
 

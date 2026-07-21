@@ -5,6 +5,7 @@ autoconnect=true
 autoconnect-priority=0
 
 [wifi]
+powersave=2
 hidden=true
 mode=infrastructure
 ssid=synclink-1
@@ -13,4 +14,4 @@ ssid=synclink-1
 method=auto
 
 [ipv6]
-method=disabled
+method=ignore

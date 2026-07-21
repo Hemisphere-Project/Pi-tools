@@ -15,4 +15,4 @@ ssid=kxkm5
 method=auto
 
 [ipv6]
-method=disabled
+method=ignore
