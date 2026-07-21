@@ -7,9 +7,9 @@ BASEPATH="$(dirname "$(readlink -f "$0")")"
 cd "$BASEPATH"
 
 if [[ $(command -v apt) ]]; then
-    apt install alsa-utils -y
+    apt install alsa-utils libasound2-plugins -y
 elif [[ $(command -v pacman) ]]; then
-    pacman -S alsa-utils --noconfirm --needed
+    pacman -S alsa-utils alsa-plugins --noconfirm --needed
 else
     echo "Distribution not detected (needs APT or PACMAN)"; exit 1
 fi

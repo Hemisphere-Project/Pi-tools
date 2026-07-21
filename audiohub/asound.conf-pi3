@@ -36,6 +36,12 @@
 # "audiohub-graph-v2" marker on line 1 is the deploy check: bump it when the
 # graph changes shape.
 
+# resampler for plug conversions (USB cards stuck at 44.1k, e.g. ESI
+# GIGAPort HD+ whose only altset is 8ch/44100): alsa-lib's default linear
+# converter audibly aliases — speexrate is clean and ARM-friendly. Needs
+# libasound2-plugins (a module dep). 48k-capable cards convert nothing.
+defaults.pcm.rate_converter "speexrate_medium"
+
 # ---- app-facing playback PCM ---------------------------------------------
 # The slave is pinned so the loopback cable always carries 8ch/48k/S16
 # whatever the media layout: the app negotiates its side freely (stereo
