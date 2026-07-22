@@ -245,6 +245,13 @@ systemctl mask logrotate.service logrotate.timer 2>/dev/null
 systemctl disable --now dpkg-db-backup.timer 2>/dev/null
 systemctl mask dpkg-db-backup.service dpkg-db-backup.timer 2>/dev/null
 
+# /var/log is a bind of /tmp: rsyslog's tmpfiles rule (z /var/log 0775
+# root syslog) force-perms the shared inode at EVERY boot, silently
+# stripping /tmp's 1777 — which breaks apt's GPG sandbox (_apt can't
+# write temp files; fleet-wide, 2026-07-22). A z-rule in a file sorting
+# last re-asserts /tmp after rsyslog's.
+echo "z /tmp 1777 root root -" > /etc/tmpfiles.d/zz-pitools-tmp.conf
+
 echo 'if [ "$(id -u)" -eq 0 ]; then
 rw
 history -a
