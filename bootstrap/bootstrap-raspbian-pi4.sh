@@ -225,7 +225,6 @@ modules=(
     bluetooth-pi
     rtpmidi
     # camera-server
-    3615-disco
 )
 # Modules install via the unified installer now (each module.ini), not a loop
 # over per-module install.sh (removed). The list above is kept as a reference.

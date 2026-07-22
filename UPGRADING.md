@@ -98,3 +98,44 @@ and snapd changes — no in-place patching needed on a freshly imaged card.
 - Wi-Fi: `setnet` prints "additive" behavior; a stray empty `wifi/` no longer wipes
   profiles; check `/boot/firmware/wifi/_legacy/` after any conflicting update.
 - rorw: `findmnt /data` shows `nofail`; a test unclean boot still reaches multi-user.
+
+## 6. Phase 2 & 3 — one-time steps on an already-deployed box
+
+The standard `git pull` + `daemon-reload` + restart (§1) covers the code, but
+these phases add a few things a plain pull can't apply. On a rorw box, wrap in
+`rw` … `ro`.
+
+```bash
+rw                                                    # rorw boxes only
+git -C /opt/Pi-tools pull --ff-only
+systemctl daemon-reload
+
+# Phase 2a — systemd hygiene: restart the services whose units changed
+for s in webconf filebrother rtpmidi bluetooth-pi tailscale-start; do
+    systemctl is-enabled "$s" >/dev/null 2>&1 && systemctl restart "$s"
+done
+systemctl is-active 'synczinc@*' >/dev/null 2>&1 && systemctl restart 'synczinc@*'
+
+# Phase 2c — time: enable the new datesync timer (installer does this on a build)
+systemctl enable --now datesync.timer
+
+# Phase 2d — extendfs growpart needs cloud-guest-utils (installer pulls it on a build)
+apt-get install -y cloud-guest-utils
+
+# Phase 3 — filebrother now needs avahi-utils; restart it under the new launcher
+apt-get install -y avahi-utils
+systemctl is-enabled filebrother >/dev/null 2>&1 && systemctl restart filebrother
+
+# Phase 3 — 3615-disco retired (folded into webconf /disco). If a box ever ran it:
+systemctl disable --now 3615-disco 2>/dev/null; systemctl mask 3615-disco 2>/dev/null
+
+ro                                                    # rorw boxes only
+```
+
+Notes:
+- Phase 2b (rorw `ro`/`rw` reference count) is live on the pull — no restart. `ro -f`
+  force-resets a leaked count; the count is on tmpfs so it clears at boot anyway.
+- Phase 2a/2e installer-engine changes only affect future `setup.sh` runs — no
+  effect on a running box, which is fine.
+- Golden image: none of the above is needed — a fresh `setup.sh` build bakes it all
+  in (the datesync timer, cloud-guest-utils, avahi-utils, the retirement).

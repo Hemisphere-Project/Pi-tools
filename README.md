@@ -113,9 +113,8 @@ xrun = no
 
 | Module | Description |
 |--------|-------------|
-| **webconf** | Browser-based system config UI (port 4038) |
+| **webconf** | Browser-based system config UI (port 4038) — includes a Zeroconf/mDNS service browser at `/disco` |
 | **filebrother** | Web file manager for `/data` (port 9000) |
-| **3615-disco** | Real-time Zeroconf/mDNS service browser (port 80) |
 
 ### Standalone
 

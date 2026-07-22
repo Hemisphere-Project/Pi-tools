@@ -1,4 +1,30 @@
 #!/bin/bash
-DIR="$(dirname "$(readlink -f "$0")")"
-node "$DIR/filebrother.js"
+# filebrowser over /data. Replaces the old node wrapper whose blocking execSync
+# left its SIGINT handler dead and whose pkill ExecStop missed the filebrowser
+# child (EADDRINUSE on the next start). Now filebrowser is exec'd as the service's
+# main process, so systemd starts/stops it cleanly.
+#
+# NOTE: still --auth.method=noauth, serving all of /data — a DEFERRED security
+# item, tracked in SECURITY-REVIEW.md (low-exposure fleet). Not changed here.
 
+DIR=/data/var/filebrother
+DB="$DIR/database.db"
+CFG="$DIR/config.json"
+PORT=9000
+ROOT=/data
+
+mkdir -p "$DIR"
+
+# First run: initialise the filebrowser config/db (idempotent — only if missing).
+if [ ! -f "$CFG" ]; then
+    rm -f "$DB"
+    filebrowser -d "$DB" config init -p "$PORT" -r "$ROOT" -a 0.0.0.0 --auth.method=noauth
+    filebrowser -d "$DB" config export "$CFG"
+fi
+
+# Advertise over mDNS; backgrounded, reaped by systemd's cgroup teardown on stop.
+if command -v avahi-publish-service >/dev/null 2>&1; then
+    avahi-publish-service -s FileBrother _http._tcp "$PORT" &
+fi
+
+exec filebrowser -c "$CFG" -d "$DB"
