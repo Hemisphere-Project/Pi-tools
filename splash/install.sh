@@ -1,6 +1,12 @@
 #!/bin/bash
 BASEPATH="$(dirname "$(readlink -f "$0")")"
 
+# x86 players have no fbdev: boot cosmetics come from plymouth, not fbi —
+# see install-x86-plymouth.sh (silent boot + bare spinner, debug-reachable).
+if [ "$(uname -m)" = "x86_64" ]; then
+    exec bash "$BASEPATH/install-x86-plymouth.sh"
+fi
+
 ## xBIAN (DEBIAN / RASPBIAN / UBUNTU)
 if [[ $(command -v apt) ]]; then
     DISTRO='xbian'
@@ -31,4 +37,3 @@ ln -sf "$BASEPATH/splash" /usr/local/bin/
 
 systemctl daemon-reload
 systemctl enable splash
-
