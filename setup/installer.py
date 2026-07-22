@@ -379,6 +379,10 @@ def setup_wifi_from_config(cfg, platinfo):
 
 
 def main():
+    # Unattended-first: a fresh install must run to completion without a prompt.
+    # Force apt/dpkg non-interactive for every subprocess spawned from here.
+    os.environ['DEBIAN_FRONTEND'] = 'noninteractive'
+
     ui.banner()
 
     auto_yes = '--yes' in sys.argv

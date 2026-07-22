@@ -16,6 +16,7 @@ LOCALSOURCE = os.path.join(BOOT_DIR, 'wifi')
 USBSOURCE = '/data/usb/wifi'
 DEST = '/etc/NetworkManager/system-connections'
 EXT = '.nmconnection'
+LEGACY = '_legacy'
 
 engageRW = False
 
@@ -35,73 +36,69 @@ def rw_off():
         engageRW = False
 
 
-def syncFolder(src, dest, ext=''):
-    global engageRW
+def syncFolder(src, dest, ext='', archive=False):
+    """Additive-only profile sync: copy new/changed files from src into dest.
+
+    Never deletes anything already in dest — a profile added in the field (or a
+    stray empty source) can never wipe the running config. When an incoming file
+    differs from an existing one and archive=True, the superseded copy is moved
+    aside into '<dest>/_legacy/' before the incoming version is applied, so the
+    boot source of truth keeps a trail of what it replaced.
+    """
     somethingChanged = False
-    
-    log("Syncing "+src+" to "+dest)
-    
+
+    log("Syncing " + src + " to " + dest)
+
     if not os.path.isdir(src):
-        print("  - Source path not found.. abort")
+        print("  - Source path not found.. skip")
         return False
-    
-    srcList     = [f[:-len(ext)] for f in os.listdir(src)  if os.path.isfile(os.path.join(src, f))  and f.endswith(ext)]
-    destList    = [f[:-len(ext)] for f in os.listdir(dest) if os.path.isfile(os.path.join(dest, f)) and f.endswith(ext)]
-    
-    print("  - Wanted files", srcList)
-    print("  - Existing files", destList)
+    if not os.path.isdir(dest):
+        print("  - Destination path not found.. skip")
+        return False
 
-    # Guard: an empty source must never mean "delete everything". A stray empty
-    # wifi/ dir (e.g. on a USB stick) would otherwise wipe every profile —
-    # including the hotspot — and brick remote access. Drop a 'WIPE' file in the
-    # source to force a full clear on purpose.
-    if not srcList and not os.path.exists(os.path.join(src, 'WIPE')):
-        print("  - Source is empty — skipping removals (add a 'WIPE' file to force a clear)")
-        log(f"Source {src} empty; refusing to delete {len(destList)} existing profile(s)")
-        return somethingChanged
+    srcList = [f for f in os.listdir(src)
+               if f.endswith(ext) and os.path.isfile(os.path.join(src, f))]
+    print("  - Incoming files", srcList)
 
-    # add/update new files
-    for c in srcList:
-        srcFile = os.path.join(src,c+ext)
-        destFile = os.path.join(dest,c+ext)
-        if not os.path.exists(srcFile):
-            print('ERROR: file not found:', c)
-        elif not os.path.exists(destFile) or not filecmp.cmp(srcFile, destFile, shallow=False):
-            rw_on()
-            copyfile(srcFile, destFile)
-            print('  File updated:', c)
-            somethingChanged = True
-        else:
-            print('  File valid:', c)
-            
-    # remove unused
-    for e in destList:
-        if not e in srcList:
-            rw_on()
-            try:
-                os.remove(os.path.join(dest,e+ext))
-            except FileNotFoundError:
-                os.remove(os.path.join(dest,e))
-            somethingChanged = True
-            print('  File removed:', e)
-            
+    for name in srcList:
+        srcFile = os.path.join(src, name)
+        destFile = os.path.join(dest, name)
+
+        if os.path.exists(destFile) and filecmp.cmp(srcFile, destFile, shallow=False):
+            print('  valid   :', name)
+            continue
+
+        rw_on()
+
+        # Archive the superseded copy before overwriting (incoming wins).
+        if archive and os.path.exists(destFile):
+            legacy_dir = os.path.join(dest, LEGACY)
+            os.makedirs(legacy_dir, exist_ok=True)
+            copyfile(destFile, os.path.join(legacy_dir, name))
+            print('  archived:', os.path.join(LEGACY, name))
+
+        copyfile(srcFile, destFile)
+        print('  applied :', name)
+        somethingChanged = True
+
     return somethingChanged
 
 
 try:
-    # copy profiles from usb
-    syncFolder(USBSOURCE, LOCALSOURCE, EXT)
+    # 1. Pull profiles from a USB stick into the boot source of truth.
+    #    Incoming wins; the superseded local copy is archived to _legacy.
+    syncFolder(USBSOURCE, LOCALSOURCE, EXT, archive=True)
     print()
 
-    # copy profiles to NM
+    # 2. Apply the boot profiles to NetworkManager (additive; never deletes).
     log("Applying profiles to NetworkManager")
     syncFolder(LOCALSOURCE, DEST, EXT)
 
     if engageRW:
         os.system('chmod 600 -R ' + DEST)
         rw_off()
-        log('Restarting NetworkManager')
-        os.system('systemctl restart NetworkManager')
+        log('Reloading NetworkManager connections')
+        os.system('nmcli connection reload')
 finally:
     rw_off()
 

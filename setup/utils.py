@@ -20,11 +20,15 @@ def run(cmd, check=True, capture=False, cwd=None):
 
 
 def apt_install(*packages):
-    """Install packages via apt. Silently skips unavailable packages."""
+    """Install packages via apt, non-interactively. Skips unavailable packages."""
     pkgs = [p for p in packages if p]
     if not pkgs:
         return
-    run(['apt', 'install', '-y'] + pkgs, check=False)
+    # apt-get (stable CLI) + keep existing config files on conflict, so a
+    # dpkg config prompt never stalls an unattended install.
+    run(['apt-get', 'install', '-y',
+         '-o', 'Dpkg::Options::=--force-confold',
+         '-o', 'Dpkg::Options::=--force-confdef'] + pkgs, check=False)
 
 
 def link_bin(src, name=None):
