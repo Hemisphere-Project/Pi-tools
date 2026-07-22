@@ -235,6 +235,15 @@ def hook_network_tools(module_dir, platinfo, cfg):
                     f.writelines(kept)
                 ui.info("x86: stripped 5GHz pin from wint-hotspot (2.4GHz fallback)")
 
+    # The parc's RTL8188FTV USB wifi dongles (0bda:f179, wall-sync wlan0)
+    # don't autoload their driver on the Ubuntu 6.8 kernels — a fresh boot
+    # with a dongle has no wlan0 until a manual modprobe (bench,
+    # 2026-07-22). Preload rtl8xxxu; harmless when no dongle is present.
+    if platinfo['is_x86']:
+        with open('/etc/modules-load.d/wlan-dongle.conf', 'w') as f:
+            f.write('rtl8xxxu\n')
+        ui.info("x86: rtl8xxxu preload for USB wifi dongles")
+
 
 def hook_bluetooth(module_dir, platinfo, cfg):
     """Enable Bluetooth auto-power-on."""
