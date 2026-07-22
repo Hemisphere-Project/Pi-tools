@@ -48,8 +48,8 @@
 # web — webconf + filebrother + 3615-disco web UIs
 # web = ask
 
-# audioselect — HDMI/analog/USB audio routing (Pi only)
-# audioselect = ask
+# audiohub — HDMI/analog/USB audio routing (Pi only)
+# audiohub = ask
 
 # xrun — X11/Openbox display server
 # xrun = no

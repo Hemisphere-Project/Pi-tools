@@ -24,7 +24,7 @@ else
         git -C "$PITOOLS_DIR" pull --ff-only
     else
         echo "Cloning Pi-tools..."
-        git clone https://github.com/Hemisphere-Project/Pi-tools.git "$PITOOLS_DIR"
+        git clone -b 2026 https://github.com/Hemisphere-Project/Pi-tools.git "$PITOOLS_DIR"
     fi
 fi
 

@@ -72,7 +72,7 @@ def check_platform(ini, platinfo):
     return True
 
 
-def install_module(name, platinfo):
+def install_module(name, platinfo, cfg):
     """Install a single module based on its module.ini."""
     module_dir, ini = discover_module(name)
     if not module_dir:
@@ -154,7 +154,7 @@ def install_module(name, platinfo):
 
     # 10. Post-install hook
     if name in POST_HOOKS:
-        POST_HOOKS[name](module_dir, platinfo)
+        POST_HOOKS[name](module_dir, platinfo, cfg)
 
     # 11. Starter entry
     if ini.has_option('starter', 'comment') and ini.has_option('starter', 'service'):
@@ -171,7 +171,7 @@ def install_module(name, platinfo):
 # ── Post-install hooks ──────────────────────────────────────────────
 
 
-def hook_starter(module_dir, platinfo):
+def hook_starter(module_dir, platinfo, cfg):
     """Create initial starter.txt if missing, enable service."""
     path = utils.starter_txt_path()
     if not os.path.isfile(path):
@@ -184,7 +184,7 @@ def hook_starter(module_dir, platinfo):
     utils.enable_service('starter.service')
 
 
-def hook_network_tools(module_dir, platinfo):
+def hook_network_tools(module_dir, platinfo, cfg):
     """Configure dnsmasq and WiFi directory."""
     dnsmasq_conf = '/etc/dnsmasq.conf'
     with open(dnsmasq_conf, 'w') as f:
@@ -198,17 +198,27 @@ def hook_network_tools(module_dir, platinfo):
     wifi_dir = os.path.join(boot_dir, 'wifi')
     os.makedirs(wifi_dir, exist_ok=True)
 
+    # Honor hotspot=no: never seed an always-on AP profile. The shipped
+    # *-hotspot.nmconnection has autoconnect=true, so copying it would bring up a
+    # hotspot (with the default PSK) even when the operator disabled it.
+    hotspot_enabled = cfg.get('network', 'hotspot', fallback='yes') == 'yes'
+
     # Copy default profiles
     profiles_dir = os.path.join(module_dir, 'profiles')
     if os.path.isdir(profiles_dir):
         for fn in os.listdir(profiles_dir):
             src = os.path.join(profiles_dir, fn)
+            if not os.path.isfile(src):
+                continue
+            if 'hotspot' in fn and not hotspot_enabled:
+                ui.skip(f"hotspot disabled — not seeding {fn}")
+                continue
             dst = os.path.join(wifi_dir, fn)
-            if os.path.isfile(src) and not os.path.exists(dst):
+            if not os.path.exists(dst):
                 shutil.copy2(src, dst)
 
 
-def hook_bluetooth(module_dir, platinfo):
+def hook_bluetooth(module_dir, platinfo, cfg):
     """Enable Bluetooth auto-power-on."""
     bt_conf = '/etc/bluetooth/main.conf'
     if os.path.isfile(bt_conf):
@@ -219,7 +229,7 @@ def hook_bluetooth(module_dir, platinfo):
                 f.write('\nAutoEnable=true\n')
 
 
-def hook_xrun(module_dir, platinfo):
+def hook_xrun(module_dir, platinfo, cfg):
     """Configure X11 environment."""
     # Create hmini user
     utils.run('id hmini &>/dev/null || useradd -m hmini', check=False)
@@ -255,7 +265,7 @@ def hook_xrun(module_dir, platinfo):
         os.remove(picom_desktop)
 
 
-def hook_filebrother(module_dir, platinfo):
+def hook_filebrother(module_dir, platinfo, cfg):
     """Download filebrowser binary."""
     if not os.path.isfile('/usr/local/bin/filebrowser'):
         utils.run('curl -fsSL https://raw.githubusercontent.com/filebrowser/get/master/get.sh | bash',
@@ -263,7 +273,7 @@ def hook_filebrother(module_dir, platinfo):
     os.makedirs('/data/var/filebrother', exist_ok=True)
 
 
-def hook_synczinc(module_dir, platinfo):
+def hook_synczinc(module_dir, platinfo, cfg):
     """Install syncthing from official repo."""
     list_file = '/etc/apt/sources.list.d/syncthing.list'
     if not os.path.isfile(list_file):
@@ -395,7 +405,10 @@ def main():
     cfg = config.load(config_path)
 
     # Interactive prompts only on first run (no config file, not yet bootstrapped)
-    if not config_path and not auto_yes and not bootstrap.is_bootstrapped():
+    # and only with a real terminal — under `curl | sudo bash` stdin is the pipe,
+    # so input() would read from the script instead of the operator.
+    if (not config_path and not auto_yes and not bootstrap.is_bootstrapped()
+            and sys.stdin.isatty()):
         hostname = ui.ask_text("Hostname", default='')
         if hostname:
             cfg.set('system', 'hostname', hostname)
@@ -421,7 +434,7 @@ def main():
         if utils.is_module_installed(mod_dir):
             ui.skip(f"{mod_name}: already installed")
         else:
-            install_module(mod_name, platinfo)
+            install_module(mod_name, platinfo, cfg)
 
     # Datesync (standalone script, not a full module)
     datesync_src = os.path.join(PITOOLS_DIR, 'datesync')
@@ -456,9 +469,12 @@ def main():
             ui.skip(f"{group_desc}: disabled")
             continue
         elif setting == 'ask':
-            if auto_yes:
-                # --yes treats 'ask' as 'no' for optional modules
-                ui.skip(f"{group_desc}: skipped (--yes mode)")
+            # 'ask' needs a human. With --yes, or with no TTY (piped
+            # `curl | bash`), treat it as skip instead of silently accepting the
+            # input() default — which would install without consent.
+            if auto_yes or not sys.stdin.isatty():
+                reason = '--yes mode' if auto_yes else 'non-interactive'
+                ui.skip(f"{group_desc}: skipped ({reason})")
                 continue
             if not ui.ask_yn(f"Install {group_desc}?"):
                 ui.skip(f"{group_desc}: skipped")
@@ -469,7 +485,7 @@ def main():
             if utils.is_module_installed(os.path.join(PITOOLS_DIR, mod_name)):
                 ui.skip(f"  {mod_name}: already installed")
             else:
-                install_module(mod_name, platinfo)
+                install_module(mod_name, platinfo, cfg)
 
     # ── Done ──
     ui.header("Setup Complete")

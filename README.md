@@ -27,7 +27,7 @@ web management, and file sync — from fresh OS image to running system.
 SSH into the machine, then run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Hemisphere-Project/Pi-tools/main/setup.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/Hemisphere-Project/Pi-tools/2026/setup.sh | sudo bash
 ```
 
 Or manually:
@@ -35,7 +35,7 @@ Or manually:
 ```bash
 sudo su root
 apt update && apt install -y git
-git clone https://github.com/Hemisphere-Project/Pi-tools.git /opt/Pi-tools
+git clone -b 2026 https://github.com/Hemisphere-Project/Pi-tools.git /opt/Pi-tools
 cd /opt/Pi-tools
 ./setup.sh
 ```
@@ -78,7 +78,7 @@ wifi_1 = GalleryWifi=secret123
 system = yes
 network = yes
 web = yes
-audioselect = yes
+audiohub = yes
 xrun = no
 ```
 
@@ -121,7 +121,7 @@ xrun = no
 
 | Module | Group key | Description |
 |--------|-----------|-------------|
-| **audioselect** | `audioselect` | HDMI/analog/USB audio routing (Pi only) |
+| **audiohub** | `audiohub` | HDMI/analog/USB audio routing (Pi only) |
 | **xrun** | `xrun` | X11/Openbox display server with rotation support |
 | **synczinc** | `synczinc` | Syncthing wrapper for `/data/sync` replication |
 | **bluetooth** | `bluetooth` | Bluetooth UART controller attachment (Pi only) |
@@ -154,7 +154,7 @@ Data partition (ext4, always writable)
 
 1. System boots → `starter.service` runs
 2. Starter reads `starter.txt` → starts each uncommented service
-3. Services run independently (webconf, setnet, audioselect, etc.)
+3. Services run independently (webconf, setnet, audiohub, etc.)
 
 ---
 

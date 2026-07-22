@@ -50,7 +50,16 @@ def syncFolder(src, dest, ext=''):
     
     print("  - Wanted files", srcList)
     print("  - Existing files", destList)
-    
+
+    # Guard: an empty source must never mean "delete everything". A stray empty
+    # wifi/ dir (e.g. on a USB stick) would otherwise wipe every profile —
+    # including the hotspot — and brick remote access. Drop a 'WIPE' file in the
+    # source to force a full clear on purpose.
+    if not srcList and not os.path.exists(os.path.join(src, 'WIPE')):
+        print("  - Source is empty — skipping removals (add a 'WIPE' file to force a clear)")
+        log(f"Source {src} empty; refusing to delete {len(destList)} existing profile(s)")
+        return somethingChanged
+
     # add/update new files
     for c in srcList:
         srcFile = os.path.join(src,c+ext)
