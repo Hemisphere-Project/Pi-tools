@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic HTTP clock sync
+
+[Timer]
+OnBootSec=30
+OnUnitActiveSec=30min
+# no Persistent= : on a no-RTC box the "missed" wall-clock is meaningless, and
+# the timer fires 30s after boot anyway.
+
+[Install]
+WantedBy=timers.target

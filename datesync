@@ -1,2 +1,27 @@
 #!/bin/bash
-date -s "$(curl -s --head http://google.com | grep ^Date: | sed 's/Date: //g')"
+# One-shot clock set from an HTTP Date header — for no-RTC boxes where NTP
+# (udp/123) is blocked but HTTPS passes. fake-clock is the boot-time floor; this
+# nudges the clock forward whenever a network is reachable. Run by datesync.timer.
+
+# -f fail on HTTP errors, -s silent, -m 5 hard 5s timeout (never hang a boot),
+# -I head only. HTTPS so a plain on-path box can't trivially set our clock.
+header=$(curl -fsm 5 -I https://www.google.com 2>/dev/null | grep -i '^date:' | head -1)
+remote=$(printf '%s' "${header#[Dd]ate:}" | tr -d '\r' | sed 's/^ *//')
+
+if [ -z "$remote" ]; then
+    echo "[datesync] no Date header (offline or blocked) — leaving clock as-is"
+    exit 0
+fi
+
+# Sanity floor: reject a clearly bogus year (epoch reset, captive-portal garbage).
+year=$(date -d "$remote" +%Y 2>/dev/null)
+if [ -z "$year" ] || [ "$year" -lt 2025 ]; then
+    echo "[datesync] rejecting implausible date: '$remote'"
+    exit 1
+fi
+
+if date -s "$remote" >/dev/null; then
+    echo "[datesync] clock set to $remote"
+    # Persist as the fake-clock floor so a later offline boot keeps this time.
+    command -v fake-clock >/dev/null 2>&1 && fake-clock save 2>/dev/null || true
+fi

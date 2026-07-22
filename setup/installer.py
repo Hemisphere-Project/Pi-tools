@@ -469,16 +469,20 @@ def main():
         else:
             install_module(mod_name, platinfo, cfg)
 
-    # Datesync (standalone script, not a full module)
+    # Datesync (standalone HTTP time sync: script + timer, not a full module).
+    # fake-clock (rorw) is the boot-time floor; the timer nudges the clock forward
+    # from an HTTP Date header whenever a network is reachable (NTP-blocked LANs).
     datesync_src = os.path.join(PITOOLS_DIR, 'datesync')
-    datesync_dst = '/usr/local/bin/datesync'
     if os.path.isfile(datesync_src):
-        if os.path.lexists(datesync_dst):
-            ui.skip("datesync: already linked")
-        else:
-            os.chmod(datesync_src, 0o755)
-            utils.link_bin(datesync_src)
-            ui.success("datesync linked")
+        os.chmod(datesync_src, 0o755)
+        utils.link_bin(datesync_src)
+        for unit in ('datesync.service', 'datesync.timer'):
+            unit_src = os.path.join(PITOOLS_DIR, unit)
+            if os.path.isfile(unit_src):
+                utils.install_service(unit_src)
+        utils.daemon_reload()
+        utils.enable_service('datesync.timer')
+        ui.success("datesync linked + timer enabled")
 
     # ── Optional module groups ──
     ui.header("Optional Modules")

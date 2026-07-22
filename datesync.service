@@ -1,0 +1,8 @@
+[Unit]
+Description=One-shot HTTP clock sync (no-RTC boxes)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/datesync
