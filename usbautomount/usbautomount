@@ -143,8 +143,14 @@ if [ "$1" = add ]; then
 
 		# Symlink last mounted
 		if [ -n "$MOUNTLAST" ]; then
-			rm -rf "$MOUNTLAST"
-			ln -sfn "$mountpoint" "$MOUNTLAST"
+			# Never rm -rf a real /data/usb directory (that would delete user
+			# data). ln -sfn atomically replaces a symlink; if it's a real
+			# dir/file, leave it and warn instead.
+			if [ -L "$MOUNTLAST" ] || [ ! -e "$MOUNTLAST" ]; then
+				ln -sfn "$mountpoint" "$MOUNTLAST"
+			else
+				echo "$MOUNTLAST is not a symlink — not replacing (won't rm real data)" >&2
+			fi
 		fi
 
 		# Determine vendor and model.

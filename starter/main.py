@@ -3,7 +3,6 @@
 
 import os
 import subprocess
-import time
 
 CONFIG_PATHS = [
     '/boot/firmware/starter.txt',
@@ -30,18 +29,21 @@ def parse_services(config_path):
 
 
 def start_service(name):
-    svc = f"{name}.service"
-    print(f"Starting {svc}...")
-    t0 = time.monotonic()
+    # Honor an explicit unit type (foo.timer / foo.target); default to .service.
+    unit = name if '.' in name else f"{name}.service"
+    print(f"Starting {unit}...")
+    # --no-block: starter is a boot oneshot that multi-user.target waits on, so a
+    # slow or long-running unit must not stall boot — and a listed unit that itself
+    # orders After=multi-user.target would otherwise deadlock. Fire-and-forget;
+    # systemd supervises each unit from there.
     result = subprocess.run(
-        ['systemctl', 'start', svc],
+        ['systemctl', 'start', '--no-block', unit],
         capture_output=True, text=True
     )
-    elapsed = time.monotonic() - t0
     if result.returncode != 0:
         print(f"  FAILED ({result.stderr.strip()})")
     else:
-        print(f"  OK ({elapsed:.1f}s)")
+        print(f"  queued")
 
 
 def main():

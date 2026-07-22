@@ -4,6 +4,9 @@ Description=Starter launch services based on /boot/starter.txt
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/starter
+# stay "active" after the one-shot so an accidental `systemctl start starter`
+# doesn't re-fire every listed service
+RemainAfterExit=yes
 
 [Install]
 WantedBy=multi-user.target
