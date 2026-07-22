@@ -375,6 +375,18 @@ def _bootstrap_pi(platinfo, cfg):
 
     # config.txt
     resolution = cfg.get('display', 'resolution', fallback='1920x1080@30')
+    # Buster runs the 32-bit legacy/mmal stack (the RastaOS-7.1 lineage):
+    # arm_64bit=1 would boot the 64-bit kernel under it (Thomas,
+    # 2026-07-22). Bullseye+ gets the 64-bit kernel.
+    codename = ''
+    try:
+        with open('/etc/os-release') as f:
+            for line in f:
+                if line.startswith('VERSION_CODENAME='):
+                    codename = line.strip().split('=', 1)[1].strip('"')
+    except OSError:
+        pass
+    arm_64bit = 0 if codename == 'buster' else 1
     config_txt = os.path.join(platinfo['boot_dir'], 'config.txt')
     if os.path.isfile(config_txt):
         import shutil
@@ -392,7 +404,7 @@ dtparam=audio=on
 dtparam=i2c_arm=on
 
 # Global settings
-arm_64bit=1
+arm_64bit={arm_64bit}
 arm_boost=1
 force_turbo=1
 camera_auto_detect=1
