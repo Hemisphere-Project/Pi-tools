@@ -38,7 +38,7 @@ while [[ $# -gt 0 ]]; do
       echo "  -c, --nocursor         Hide cursor"
       echo "  -h, --help             Show this help"
       echo " "
-      shift # past argument
+      exit 0
       ;;
     *)
       echo "Unknown argument $1"
@@ -71,9 +71,8 @@ esac
 echo " "
 echo ".:: XRUN ::."
 echo " "
-chmod 777 /tmp
+chmod 1777 /tmp   # ensure /tmp perms without stripping the sticky bit
 XAUTHORITY=/tmp/.Xauthority XROTATE=$ROTATE XREFLECT=$REFLECT startx -- vt7 $NOCURSOR
-logout
 
 
 
