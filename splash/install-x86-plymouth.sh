@@ -77,9 +77,14 @@ set timeout=2
 GRUBCFG
 EOF
 chmod +x /etc/grub.d/06_pitools_silent
-sed -i '/^GRUB_CMDLINE_LINUX=/ s/console=ttyS[0-9]*\(,[0-9]*\)\?/console=tty1/' "$G"
+# console on tty3, the Pi-fleet convention: boot residue and runtime
+# console text land on an invisible VT instead of behind the video —
+# any mpv gap then flashes BLACK, not systemd lines (mini-01,
+# 2026-07-22). Debug stays reachable: Ctrl+Alt+F3 is kernel-level VT
+# switching and works even in emergency mode (sulogin binds tty3).
+sed -i '/^GRUB_CMDLINE_LINUX=/ s/console=ttyS[0-9]*\(,[0-9]*\)\?/console=tty3/; /^GRUB_CMDLINE_LINUX=/ s/console=tty1/console=tty3/' "$G"
 grep -q '^GRUB_CMDLINE_LINUX=.*console=' "$G" \
-    || sed -i 's/^GRUB_CMDLINE_LINUX="\(.*\)"/GRUB_CMDLINE_LINUX="\1 console=tty1"/' "$G"
+    || sed -i 's/^GRUB_CMDLINE_LINUX="\(.*\)"/GRUB_CMDLINE_LINUX="\1 console=tty3"/' "$G"
 # silence systemd status lines (the 2024 images shipped =auto)
 sed -i '/^GRUB_CMDLINE_LINUX_DEFAULT=/ s/rd.systemd.show_status=auto/rd.systemd.show_status=false/' "$G"
 grep -q 'systemd.show_status=false' "$G" \
