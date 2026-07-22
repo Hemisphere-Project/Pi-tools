@@ -227,11 +227,9 @@ modules=(
     # camera-server
     3615-disco
 )
-for i in "${modules[@]}"; do
-    cd "$i"
-    ./install.sh
-    cd /opt/Pi-tools
-done
+# Modules install via the unified installer now (each module.ini), not a loop
+# over per-module install.sh (removed). The list above is kept as a reference.
+./setup.sh --yes
 
 # HPlayer2
 cd /opt

@@ -216,11 +216,9 @@ modules=(
     rtpmidi         ## todo
     # 3615-disco    ## flask broken.. 
 )
-for i in "${modules[@]}"; do
-    cd "$i"
-    ./install.sh
-    cd /opt/Pi-tools
-done
+# Modules install via the unified installer now (each module.ini), not a loop
+# over per-module install.sh (removed). The list above is kept as a reference.
+./setup.sh --yes
 
 # Intel GPU drivers
 add-apt-repository -y ppa:kobuk-team/intel-graphics
