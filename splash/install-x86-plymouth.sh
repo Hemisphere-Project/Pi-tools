@@ -55,13 +55,28 @@ fi
 mkdir -p /etc/plymouth
 printf '[Daemon]\nTheme=spinner\n' > /etc/plymouth/plymouthd.conf
 
-# grub: hidden-but-reachable menu, visible recordfail, console on tty1
+# grub: hidden-but-reachable menu, console on tty1
 G=/etc/default/grub
 sed -i 's/^GRUB_TIMEOUT_STYLE=.*/GRUB_TIMEOUT_STYLE=hidden/' "$G"
 sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=2/' "$G"
 grep -q '^GRUB_RECORDFAIL_TIMEOUT=' "$G" \
-    && sed -i 's/^GRUB_RECORDFAIL_TIMEOUT=.*/GRUB_RECORDFAIL_TIMEOUT=5/' "$G" \
-    || echo 'GRUB_RECORDFAIL_TIMEOUT=5' >> "$G"
+    && sed -i 's/^GRUB_RECORDFAIL_TIMEOUT=.*/GRUB_RECORDFAIL_TIMEOUT=2/' "$G" \
+    || echo 'GRUB_RECORDFAIL_TIMEOUT=2' >> "$G"
+
+# recordfail trap on ro rootfs: grub sets recordfail=1 at every boot and
+# the userspace clear (grub-common) can never write on ro — so Ubuntu's
+# "failed boot" logic showed the MENU (plus grub's Loading… lines) at
+# EVERY boot. Variables set after 00_header win at menu time: re-hide.
+# Rescue path unchanged — Esc during the 2s hidden window.
+cat > /etc/grub.d/06_pitools_silent <<'EOF'
+#!/bin/sh
+cat <<'GRUBCFG'
+# pitools: ro rootfs never clears recordfail — keep the menu hidden anyway
+set timeout_style=hidden
+set timeout=2
+GRUBCFG
+EOF
+chmod +x /etc/grub.d/06_pitools_silent
 sed -i '/^GRUB_CMDLINE_LINUX=/ s/console=ttyS[0-9]*\(,[0-9]*\)\?/console=tty1/' "$G"
 grep -q '^GRUB_CMDLINE_LINUX=.*console=' "$G" \
     || sed -i 's/^GRUB_CMDLINE_LINUX="\(.*\)"/GRUB_CMDLINE_LINUX="\1 console=tty1"/' "$G"

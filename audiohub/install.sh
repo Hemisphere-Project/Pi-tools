@@ -16,7 +16,18 @@ fi
 
 # ALSA graph per platform — see each file's header for the design
 case "$(uname -m)" in
-    armv*)   cp "$BASEPATH/asound.conf-pi3" /etc/asound.conf ;;
+    armv*)   cp "$BASEPATH/asound.conf-pi3" /etc/asound.conf
+             # asound.conf-pi3 names the LEGACY firmware cards
+             # (Headphones/b1 = bcm2835 stack, the RastaOS-7.1 golden).
+             # A KMS Pi (vc4-kms-v3d — what setup's own config.txt
+             # writes) exposes vc4hdmi* cards instead: hdmiout would
+             # dangle. No pi-kms graph exists yet — warn loudly.
+             if grep -q "vc4hdmi" /proc/asound/cards 2>/dev/null; then
+                 echo "WARNING: KMS audio stack detected (vc4hdmi*):"
+                 echo "  asound.conf-pi3 targets the legacy bcm2835 cards"
+                 echo "  (Headphones/b1) — hdmiout will NOT match. An"
+                 echo "  asound.conf-pi-kms variant is needed (TODO)."
+             fi ;;
     x86_64)  cp "$BASEPATH/asound.conf-x86" /etc/asound.conf ;;
     *)       echo "WARNING: no hub graph for $(uname -m) yet, /etc/asound.conf untouched" ;;
 esac

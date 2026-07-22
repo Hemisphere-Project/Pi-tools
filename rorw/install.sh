@@ -99,6 +99,14 @@ elif (lsblk -o uuid /dev/nvme0n1p3 > /dev/null 2>&1); then
 else
     echo ""
     echo "Can't find third partition or detect partition system..."
+    echo ""
+    echo "rorw needs a 3-partition layout BEFORE install (it does not"
+    echo "repartition): 1=boot(vfat) 2=root(ext4) 3=data(ext4), on"
+    echo "mmcblk0 (Pi), sda or nvme0n1 (x86). Fresh Raspbian images ship"
+    echo "2 partitions and fresh Ubuntu Server depends on the autoinstall"
+    echo "layout — create the data partition first (e.g. shrink root or"
+    echo "use the remaining space), then re-run."
+    echo ""
     echo "RORW install FAILED"
     echo ""
     exit 1
@@ -229,6 +237,13 @@ systemctl enable fake-clock
 systemctl enable fake-clock-autosave.timer
 
 fake-clock save
+
+# /var/log lives on tmpfs and /var/backups on the ro root: log rotation
+# and dpkg db backups can only fail (found failing on both the N100 minis
+# and the RPi golden, 2026-07-22) — mask them.
+systemctl mask logrotate.service logrotate.timer 2>/dev/null
+systemctl disable --now dpkg-db-backup.timer 2>/dev/null
+systemctl mask dpkg-db-backup.service dpkg-db-backup.timer 2>/dev/null
 
 echo 'if [ "$(id -u)" -eq 0 ]; then
 rw

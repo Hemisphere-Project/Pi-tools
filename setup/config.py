@@ -47,29 +47,18 @@ def load(path=None):
     # Load file if exists
     if path and os.path.isfile(path):
         cfg.read(path)
-        _apply_legacy_aliases(cfg, path)
+
+    # Legacy alias: 'audioselect' (the module audiohub absorbed) used to be
+    # the config key — the installer group is 'audiohub', so a stale
+    # pitools.txt saying audioselect=yes silently installed NOTHING.
+    # DEFAULTS no longer define audioselect: its presence means the file
+    # set it; it fills audiohub unless the file moved audiohub off the
+    # default itself.
+    if cfg.has_option('modules', 'audioselect') and \
+       cfg.get('modules', 'audiohub') == DEFAULTS['modules']['audiohub']:
+        cfg.set('modules', 'audiohub', cfg.get('modules', 'audioselect'))
 
     return cfg
-
-
-# Legacy module-key aliases: {canonical: [old names]}. An old key present in the
-# config file is honored for the new group, unless the new key is set explicitly.
-_MODULE_ALIASES = {'audiohub': ['audioselect']}
-
-
-def _apply_legacy_aliases(cfg, path):
-    """Honor renamed module keys in older pitools.txt files."""
-    raw = configparser.ConfigParser()
-    raw.read(path)
-    if not raw.has_section('modules'):
-        return
-    for canonical, olds in _MODULE_ALIASES.items():
-        if raw.has_option('modules', canonical):
-            continue  # explicit new key wins over any alias
-        for old in olds:
-            if raw.has_option('modules', old):
-                cfg.set('modules', canonical, raw.get('modules', old))
-                break
 
 
 def get_wifi_networks(cfg):

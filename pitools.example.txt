@@ -12,6 +12,11 @@
 #  All options have sensible defaults.
 #  Uncomment and edit as needed.
 #
+#  PREREQUISITE for the 'system' group (ro rootfs): a 3-partition
+#  layout must exist BEFORE setup — 1=boot 2=root 3=data(ext4) —
+#  the installer does not repartition. Player apps (HPlayer2…) are a
+#  separate second step after Pi-tools (their own install.sh).
+#
 # ============================================
 
 [system]
@@ -48,7 +53,8 @@
 # web — webconf + filebrother + 3615-disco web UIs
 # web = ask
 
-# audiohub — HDMI/analog/USB audio routing (Pi only)
+# audiohub — always-on multi-output audio hub (jack/HDMI/USB, absorbs
+#            the old audioselect; that legacy key is still honored)
 # audiohub = ask
 
 # xrun — X11/Openbox display server
