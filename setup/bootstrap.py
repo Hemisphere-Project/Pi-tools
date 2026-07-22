@@ -5,6 +5,7 @@ into a single Python-driven bootstrap that auto-detects platform.
 """
 
 import os
+import platform as platform_mod
 import re
 import subprocess
 
@@ -77,6 +78,14 @@ def run_bootstrap(platinfo, cfg):
 
 def _update_system():
     ui.info("Updating system packages...")
+    # Dedicated ro-rootfs players never want background apt: on dormant
+    # images unattended-upgrades wakes with the full backlog and holds
+    # the dpkg lock for ages (biennale mini-07, 2026-07-22). All
+    # platforms, not just x86.
+    utils.run('systemctl stop unattended-upgrades', check=False)
+    for svc in ('unattended-upgrades.service', 'apt-daily.timer',
+                'apt-daily-upgrade.timer'):
+        utils.run(f'systemctl disable --now {svc}', check=False)
     utils.run('apt update')
     utils.run('DEBIAN_FRONTEND=noninteractive apt upgrade -y', check=False)
 
@@ -149,7 +158,14 @@ def _install_nodejs():
     ui.info("Installing Node.js...")
     utils.apt_install('nodejs', 'npm')
     utils.run('npm i -g n', check=False)
-    utils.run('n lts', check=False)
+    # nodejs.org stopped shipping armv7l/armv6l binaries after the 18.x
+    # line: `n lts` (>=20) finds nothing there and the distro node stays
+    # (Buster: node 10 — too old for webconf). Pin 18 on 32-bit ARM;
+    # everything else gets the real LTS.
+    if platform_mod.machine() in ('armv7l', 'armv6l'):
+        utils.run('n 18', check=False)
+    else:
+        utils.run('n lts', check=False)
     # Ensure new node is found
     os.environ['PATH'] = '/usr/local/bin:' + os.environ.get('PATH', '')
     utils.run('npm install -g npm pm2 nodemon', check=False)
@@ -159,7 +175,14 @@ def _install_nodejs():
 def _install_uv():
     ui.info("Installing uv (Python package manager)...")
     utils.run('curl -LsSf https://astral.sh/uv/install.sh | sh', check=False)
-    ui.success("uv installed")
+    # The installer drops uv in /root/.local/bin — invisible to systemd
+    # units (HPlayer2's launcher does `command -v uv` under the default
+    # service PATH and never starts without this link).
+    for tool in ('uv', 'uvx'):
+        src = os.path.expanduser(f'~/.local/bin/{tool}')
+        if os.path.isfile(src):
+            utils.run(f'ln -sf "{src}" /usr/local/bin/{tool}', check=False)
+    ui.success("uv installed (linked into /usr/local/bin)")
 
 
 def _install_mosquitto():
@@ -196,8 +219,11 @@ def _setup_network_manager(platinfo):
     ui.info("Setting up NetworkManager + dnsmasq...")
     utils.apt_install('network-manager', 'dnsmasq')
 
-    # Disable systemd-networkd
-    for svc in ['systemd-networkd.socket', 'systemd-resolved', 'systemd-networkd']:
+    # Disable competing network managers. dhcpcd is the Raspbian
+    # Buster/Bullseye default and fights NetworkManager for the
+    # interfaces (and rewrites resolv.conf) if left enabled.
+    for svc in ['systemd-networkd.socket', 'systemd-resolved', 'systemd-networkd',
+                'dhcpcd', 'dhcpcd5']:
         utils.run(f'systemctl stop {svc}', check=False)
         utils.disable_service(svc)
 
@@ -425,9 +451,10 @@ def _bootstrap_x86(platinfo):
     """x86 specific bootstrap."""
     ui.info("Applying x86 settings...")
 
-    # Disable unnecessary services
+    # Disable unnecessary services (unattended-upgrades handled in
+    # _update_system for all platforms)
     for svc in ['iscsid.socket', 'iscsid.service', 'open-iscsi.service',
-                'systemd-networkd-wait-online.service', 'unattended-upgrades.service']:
+                'systemd-networkd-wait-online.service']:
         utils.run(f'systemctl disable --now {svc}', check=False)
 
     # Internal WiFi rename to wint

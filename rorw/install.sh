@@ -96,6 +96,14 @@ elif (lsblk -o uuid /dev/nvme0n1 > /dev/null 2>&1); then
 else
     echo ""
     echo "Can't find third partition or detect partition system..."
+    echo ""
+    echo "rorw needs a 3-partition layout BEFORE install (it does not"
+    echo "repartition): 1=boot(vfat) 2=root(ext4) 3=data(ext4), on"
+    echo "mmcblk0 (Pi), sda or nvme0n1 (x86). Fresh Raspbian images ship"
+    echo "2 partitions and fresh Ubuntu Server depends on the autoinstall"
+    echo "layout — create the data partition first (e.g. shrink root or"
+    echo "use the remaining space), then re-run."
+    echo ""
     echo "RORW install FAILED"
     echo ""
     exit 1

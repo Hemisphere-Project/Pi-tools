@@ -19,7 +19,7 @@ DEFAULTS = {
         'system': 'yes',
         'network': 'yes',
         'web': 'ask',
-        'audioselect': 'ask',
+        'audiohub': 'ask',
         'xrun': 'no',
         'synczinc': 'no',
         'bluetooth': 'no',
@@ -47,6 +47,16 @@ def load(path=None):
     # Load file if exists
     if path and os.path.isfile(path):
         cfg.read(path)
+
+    # Legacy alias: 'audioselect' (the module audiohub absorbed) used to be
+    # the config key — the installer group is 'audiohub', so a stale
+    # pitools.txt saying audioselect=yes silently installed NOTHING.
+    # DEFAULTS no longer define audioselect: its presence means the file
+    # set it; it fills audiohub unless the file moved audiohub off the
+    # default itself.
+    if cfg.has_option('modules', 'audioselect') and \
+       cfg.get('modules', 'audiohub') == DEFAULTS['modules']['audiohub']:
+        cfg.set('modules', 'audiohub', cfg.get('modules', 'audioselect'))
 
     return cfg
 
