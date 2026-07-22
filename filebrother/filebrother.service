@@ -1,11 +1,12 @@
 [Unit]
 Description=Web Files Manager
-           
+StartLimitIntervalSec=0
+
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/filebrother
-ExecStop=/usr/bin/pkill filebrother
 Restart=always
-           
+RestartSec=5
+
 [Install]
 WantedBy=default.target

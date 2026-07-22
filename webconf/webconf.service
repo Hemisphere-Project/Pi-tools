@@ -1,12 +1,14 @@
 [Unit]
 Description=Web configuration
-           
+# keep recovering on a 24/7 box instead of latching failed after 5 quick restarts
+StartLimitIntervalSec=0
+
 [Service]
 Type=simple
 WorkingDirectory=/opt/Pi-tools/webconf
 ExecStart=/usr/local/bin/webconf
-ExecStop=/bin/pkill webconf
 Restart=always
-           
+RestartSec=5
+
 [Install]
 WantedBy=default.target

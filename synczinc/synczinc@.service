@@ -1,6 +1,7 @@
 [Unit]
 Description=Syncthing automated master introducer
 RequiresMountsFor=/data
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple

@@ -2,6 +2,10 @@
 Description=Tailscale daemon (RO-filesystem safe)
 After=network-online.target data.mount
 Wants=network-online.target
+# state lives on /data (bind mount); without /data, tailscaled can't write its
+# state and would restart-loop forever — don't start at all until it's there.
+ConditionPathIsMountPoint=/data
+StartLimitIntervalSec=0
 
 [Service]
 ExecStart=/usr/local/bin/tailscale-start

@@ -1,12 +1,18 @@
 [Unit]
 Description=Bluetooth enable and attach controller
 Wants=bluetooth.service
+After=bluetooth.service
+# Only where the Broadcom UART actually exists — absent/renamed on Pi 5, and
+# where pi-bluetooth's own hciuart already owns it — else btattach crash-loops.
+ConditionPathExists=/dev/ttyAMA0
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 ExecStartPre=/bin/sleep 1s
-ExecStart=/usr/bin/btattach -B /dev/ttyAMA0 -P bcm -S 3000000 
+ExecStart=/usr/bin/btattach -B /dev/ttyAMA0 -P bcm -S 3000000
 Restart=always
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
