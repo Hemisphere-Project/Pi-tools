@@ -220,6 +220,21 @@ def hook_network_tools(module_dir, platinfo, cfg):
             if not os.path.exists(dst):
                 shutil.copy2(src, dst)
 
+    # x86: the wint-hotspot template pins 5GHz (band=a/chan36 — tuned on the Pi's
+    # Broadcom). Intel iwlwifi refuses AP on 5GHz until LAR regulatory settles and
+    # NM then fails the whole hotspot (N100 pilot 2026-07-21); strip the pin so NM
+    # falls back to 2.4GHz — the proven 2024 behaviour.
+    if platinfo['is_x86']:
+        hotspot_file = os.path.join(wifi_dir, 'wint-hotspot.nmconnection')
+        if os.path.isfile(hotspot_file):
+            with open(hotspot_file) as f:
+                lines = f.readlines()
+            kept = [l for l in lines if l.strip() not in ('band=a', 'channel=36')]
+            if len(kept) != len(lines):
+                with open(hotspot_file, 'w') as f:
+                    f.writelines(kept)
+                ui.info("x86: stripped 5GHz pin from wint-hotspot (2.4GHz fallback)")
+
 
 def hook_bluetooth(module_dir, platinfo, cfg):
     """Enable Bluetooth auto-power-on."""

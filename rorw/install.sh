@@ -156,6 +156,9 @@ tmpfs                                           /tmp            tmpfs   defaults
 # If snapd is installed, persist its state to /data. Seed the persistent copy
 # with the existing content FIRST — binding an empty dir over /var/lib/snapd
 # wipes the seeded snaps and breaks snapd after reboot (Ubuntu ships it seeded).
+# The bind also carries `nofail` (below): if snapd is later purged its mount
+# point vanishes, and a required bind would otherwise drop boot to emergency
+# mode (N100 pilot 2026-07-21) — an optional bind must never brick the machine.
 if [ -d /var/lib/snapd ]; then
     mkdir -p /data/var/snapd
     cp -a /var/lib/snapd/. /data/var/snapd/ 2>/dev/null

@@ -1,0 +1,197 @@
+# audiohub-graph-v2 — always-on multi-output audio hub, x86 HDA (Intel PCH)
+#
+# Same design as asound.conf-pi3 (see that header for the full rationale):
+# the player application plays pcm.hplayer (plug pinned to snd-aloop at
+# 8ch/48k), every physical output is an alsaloop forwarder reading the
+# shared dsnoop capture:
+#
+#   app --> plug --> hw:Loopback,0,0             (fixed 8ch / 48k / S16)
+#                        |
+#                 hw:Loopback,1,0 --> dsnoop "aloopcap"
+#                        |-- alsaloop --> jackout   (PCH,0 analog, DOWNMIX, always)
+#                        |-- alsaloop --> hdmiout   (PCH,3 HDMI 0, ch 0/1, always)
+#                        `-- alsaloop --> usbout<N>:CARD=<id>  (hotplug, STRAIGHT)
+#
+# x86 twist vs the Pi: one HDA card ("PCH") carries every firmware output as
+# PCM DEVICES — analog ALC897 = device 0, HDMI = devices 3/7/8/9 (one per
+# port; only a connected port has an ELD and accepts opens). hdmiout targets
+# device 3 (HDMI 0, the first physical port on the Beelink MINI S): move the
+# cable or edit here if an installation uses another port. The forwarder's
+# flow-watch reads the matching pcm3p status (audiohub-fwd resolves this
+# per-platform).
+#
+# The bcm2835 dmix/multi breakage that motivated the hub does not exist on
+# HDA, but the hub is kept identical for parity: same failure isolation,
+# same latency contract, same app-facing PCM on both fleets.
+
+# resampler for plug conversions (USB cards stuck at 44.1k): alsa-lib's
+# default linear converter audibly aliases — speexrate is clean. Needs
+# libasound2-plugins (a module dep). 48k-capable cards convert nothing.
+defaults.pcm.rate_converter "speexrate_medium"
+
+# ---- app-facing playback PCM ---------------------------------------------
+# The slave is pinned so the loopback cable always carries 8ch/48k/S16
+# whatever the media layout: the app negotiates its side freely and the
+# plug pads/converts. A pinned cable means the dsnoop side below can never
+# hit a parameter conflict.
+
+pcm.hplayer {
+    type plug
+    slave {
+        pcm "hw:Loopback,0,0"
+        channels 8
+        rate 48000
+        format S16_LE
+    }
+}
+
+pcm.!default hplayer
+ctl.!default {
+    type hw
+    card PCH
+}
+
+# ---- shared capture side for the forwarders ------------------------------
+# Small periods (delivery granularity), DEEP buffer (stall absorption) —
+# see asound.conf-pi3 for the measured rationale.
+
+# NOTE: dsnoop's shared-memory instance outlives its readers — geometry
+# edits below are IGNORED by a live system until the ipc_key changes.
+# Bump the key together with any period/buffer change.
+pcm.aloopcap {
+    type dsnoop
+    ipc_key 6202
+    slave {
+        pcm "hw:Loopback,1,0"
+        channels 8
+        rate 48000
+        format S16_LE
+        period_size 256
+        buffer_size 16384
+    }
+}
+
+# ---- per-output egress PCMs ----------------------------------------------
+
+# jack: ch0/1 unity + all other channels folded at 0.5 (monitoring output,
+# not a mix bus — sums clip rather than wrap)
+pcm.jackout {
+    type route
+    slave.pcm {
+        type plug
+        slave.pcm "hw:PCH,0"
+    }
+    slave.channels 2
+    ttable.0.0 1
+    ttable.1.1 1
+    ttable.2.0 0.5
+    ttable.3.1 0.5
+    ttable.4.0 0.5
+    ttable.5.1 0.5
+    ttable.6.0 0.5
+    ttable.7.1 0.5
+}
+
+# hdmi: ch0/1 straight (device 3 = HDMI 0, first physical port)
+pcm.hdmiout {
+    type route
+    slave.pcm {
+        type plug
+        slave.pcm "hw:PCH,3"
+    }
+    slave.channels 2
+    ttable.0.0 1
+    ttable.1.1 1
+}
+
+# usb: STRAIGHT identity routes, one per card width — the wrapper picks.
+# (plug's automatic 8->2 conversion would DOWNMIX, folding zones into the
+# stereo pair: exactly what these explicit identity tables prevent.)
+
+pcm.usbout2 {
+    @args [ CARD ]
+    @args.CARD { type string }
+    type route
+    slave.pcm {
+        type plug
+        slave.pcm { type hw; card $CARD }
+    }
+    slave.channels 2
+    ttable.0.0 1
+    ttable.1.1 1
+}
+
+pcm.usbout4 {
+    @args [ CARD ]
+    @args.CARD { type string }
+    type route
+    slave.pcm {
+        type plug
+        slave.pcm { type hw; card $CARD }
+    }
+    slave.channels 4
+    ttable.0.0 1
+    ttable.1.1 1
+    ttable.2.2 1
+    ttable.3.3 1
+}
+
+pcm.usbout6 {
+    @args [ CARD ]
+    @args.CARD { type string }
+    type route
+    slave.pcm {
+        type plug
+        slave.pcm { type hw; card $CARD }
+    }
+    slave.channels 6
+    ttable.0.0 1
+    ttable.1.1 1
+    ttable.2.2 1
+    ttable.3.3 1
+    ttable.4.4 1
+    ttable.5.5 1
+}
+
+pcm.usbout8 {
+    @args [ CARD ]
+    @args.CARD { type string }
+    type route
+    slave.pcm {
+        type plug
+        slave.pcm { type hw; card $CARD }
+    }
+    slave.channels 8
+    ttable.0.0 1
+    ttable.1.1 1
+    ttable.2.2 1
+    ttable.3.3 1
+    ttable.4.4 1
+    ttable.5.5 1
+    ttable.6.6 1
+    ttable.7.7 1
+}
+
+# ---- legacy names kept for hand tools (aplay -D jack ...) ----------------
+
+pcm.jack {
+    type hw
+    card PCH
+    device 0
+}
+
+ctl.jack {
+    type hw
+    card PCH
+}
+
+pcm.hdmi0 {
+    type hw
+    card PCH
+    device 3
+}
+
+ctl.hdmi0 {
+    type hw
+    card PCH
+}
