@@ -1,6 +1,12 @@
 const fs = require('fs');
+const path = require('path');
 const { networkInterfaces } = require('os');
 const { execSync } = require('child_process');
+
+// Boot (FAT) partition: /boot/firmware on modern Pi OS (Bookworm), /boot on
+// older images and x86. Resolve once so every panel reads the right files.
+const BOOT_DIR = fs.existsSync('/boot/firmware') ? '/boot/firmware' : '/boot';
+function bootPath(...parts) { return path.join(BOOT_DIR, ...parts); }
 
 function exec(command) {
     try {
@@ -37,7 +43,8 @@ function getLine(string, file) {
             }
         }
     } catch (err) {
-        console.error(err);
+        // A missing boot file is a normal "not found -> null", not an error.
+        if (err.code !== 'ENOENT') console.error(`[getLine] ${file}: ${err.message}`);
     }
     return null;
 }
@@ -100,5 +107,7 @@ module.exports = {
     getLine,
     replaceLine,
     commentLine,
-    uncommentLine
+    uncommentLine,
+    BOOT_DIR,
+    bootPath
 };

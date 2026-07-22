@@ -1,17 +1,20 @@
-const { getLine, replaceLine } = require('../utils');
+const { getLine, replaceLine, bootPath } = require('../utils');
 
 const settings = {
     'title': 'NAME',
     'elements': {}
 };
 
-if (getLine('hostrename@', '/boot/starter.txt')[0] !== '#') {
+const starterTxt = bootPath('starter.txt');
+const hostLine = getLine('hostrename@', starterTxt);
+
+if (hostLine && hostLine[0] !== '#') {
     settings.elements['hostname'] = {
         label: 'Name',
         field: 'text|15',
         legend: '<br /><br />',
-        value: () => { return getLine('hostrename@', '/boot/starter.txt').split('@')[1].split('#')[0].trim() },
-        apply: (value) => replaceLine('hostrename@', 'hostrename@' + value.trim(), '/boot/starter.txt')
+        value: () => { const l = getLine('hostrename@', starterTxt); return l ? l.split('@')[1].split('#')[0].trim() : ''; },
+        apply: (value) => replaceLine('hostrename@', 'hostrename@' + value.trim(), starterTxt)
     };
 }
 

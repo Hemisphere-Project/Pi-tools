@@ -1,13 +1,15 @@
-const { getLine, replaceLine, exec } = require('../utils');
+const { getLine, replaceLine, exec, bootPath } = require('../utils');
 const fs = require('fs');
+const path = require('path');
 
 var syncIface;
 
+const wifiDir = bootPath('wifi');
 const wlan0Files = [
-    '/boot/wifi/wlan0-sync-AP.nmconnection',
-    '/boot/wifi/wlan0-sync-STA.nmconnection',
-    '/boot/wifi/_disabled/wlan0-sync-AP.nmconnection',
-    '/boot/wifi/_disabled/wlan0-sync-STA.nmconnection'
+    path.join(wifiDir, 'wlan0-sync-AP.nmconnection'),
+    path.join(wifiDir, 'wlan0-sync-STA.nmconnection'),
+    path.join(wifiDir, '_disabled', 'wlan0-sync-AP.nmconnection'),
+    path.join(wifiDir, '_disabled', 'wlan0-sync-STA.nmconnection')
 ];
 
 const settings = {
@@ -19,7 +21,7 @@ settings.elements['synciface'] = {
     label: 'SYNC interface',
     field: 'select|eth0[0],wlan0[1]',
     legend: 'eth0: wired / wlan0: wifi usb dongle',
-    value: () => { return fs.existsSync('/boot/wifi/eth0-sync-STA.nmconnection') || fs.existsSync('/boot/wifi/eth0-sync-AP.nmconnection') ? 0 : 1; },
+    value: () => { return fs.existsSync(path.join(wifiDir, 'eth0-sync-STA.nmconnection')) || fs.existsSync(path.join(wifiDir, 'eth0-sync-AP.nmconnection')) ? 0 : 1; },
     apply: (value) => syncIface = parseInt(value)
 };
 
@@ -28,9 +30,9 @@ settings.elements['syncmode'] = {
     field: 'select|disable[0],slave[1],master[2]',
     legend: '',
     value: () => {
-        if (fs.existsSync('/boot/wifi/wlan0-sync-AP.nmconnection') || fs.existsSync('/boot/wifi/eth0-sync-AP.nmconnection')) {
+        if (fs.existsSync(path.join(wifiDir, 'wlan0-sync-AP.nmconnection')) || fs.existsSync(path.join(wifiDir, 'eth0-sync-AP.nmconnection'))) {
             return 2;
-        } else if (fs.existsSync('/boot/wifi/wlan0-sync-STA.nmconnection') || fs.existsSync('/boot/wifi/eth0-sync-STA.nmconnection')) {
+        } else if (fs.existsSync(path.join(wifiDir, 'wlan0-sync-STA.nmconnection')) || fs.existsSync(path.join(wifiDir, 'eth0-sync-STA.nmconnection'))) {
             return 1;
         } else {
             return 0;
@@ -38,16 +40,16 @@ settings.elements['syncmode'] = {
     },
     apply: (mode) => {
         mode = parseInt(mode);
-        exec('rm /boot/wifi/wlan0-*');
-        exec('rm /boot/wifi/eth0-*');
+        exec(`rm ${wifiDir}/wlan0-*`);
+        exec(`rm ${wifiDir}/eth0-*`);
         if (syncIface === 0) {
-            if (mode === 1) exec('cp /boot/wifi/_disabled/eth0-sync-STA.nmconnection /boot/wifi/eth0-sync-STA.nmconnection');
-            else if (mode === 2) exec('cp /boot/wifi/_disabled/eth0-sync-AP.nmconnection /boot/wifi/eth0-sync-AP.nmconnection');
-            else exec('cp /boot/wifi/_disabled/eth0-dhcp.nmconnection /boot/wifi/eth0-dhcp.nmconnection');
+            if (mode === 1) exec(`cp ${wifiDir}/_disabled/eth0-sync-STA.nmconnection ${wifiDir}/eth0-sync-STA.nmconnection`);
+            else if (mode === 2) exec(`cp ${wifiDir}/_disabled/eth0-sync-AP.nmconnection ${wifiDir}/eth0-sync-AP.nmconnection`);
+            else exec(`cp ${wifiDir}/_disabled/eth0-dhcp.nmconnection ${wifiDir}/eth0-dhcp.nmconnection`);
         } else if (syncIface === 1) {
-            if (mode === 1) exec('cp /boot/wifi/_disabled/wlan0-sync-STA.nmconnection /boot/wifi/wlan0-sync-STA.nmconnection');
-            else if (mode === 2) exec('cp /boot/wifi/_disabled/wlan0-sync-AP.nmconnection /boot/wifi/wlan0-sync-AP.nmconnection');
-            exec('cp /boot/wifi/_disabled/eth0-dhcp.nmconnection /boot/wifi/eth0-dhcp.nmconnection');
+            if (mode === 1) exec(`cp ${wifiDir}/_disabled/wlan0-sync-STA.nmconnection ${wifiDir}/wlan0-sync-STA.nmconnection`);
+            else if (mode === 2) exec(`cp ${wifiDir}/_disabled/wlan0-sync-AP.nmconnection ${wifiDir}/wlan0-sync-AP.nmconnection`);
+            exec(`cp ${wifiDir}/_disabled/eth0-dhcp.nmconnection ${wifiDir}/eth0-dhcp.nmconnection`);
         }
     }
 };
@@ -56,11 +58,12 @@ settings.elements['syncchannel'] = {
     label: 'SYNC channel',
     field: 'text|3',
     legend: 'channel alias for Wifi Sync (allows distinct sync network, wifi only)<br /><br />',
-    value: () =>{
+    value: () => {
         let ssid = '';
         for (const file of wlan0Files) {
             if (fs.existsSync(file)) {
-                ssid = getLine('ssid=', file).split('=')[1].split('#')[0].trim();
+                const l = getLine('ssid=', file);
+                ssid = l ? l.split('=')[1].split('#')[0].trim() : '';
                 break;
             }
         }

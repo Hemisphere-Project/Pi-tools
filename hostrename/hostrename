@@ -5,6 +5,9 @@ log() { echo "[$TAG] $1"; logger -t "$TAG" "$1"; }
 # Source with_rw if available
 [ -f /usr/local/lib/pitools/with_rw.sh ] && source /usr/local/lib/pitools/with_rw.sh
 
+# Boot (FAT) partition: /boot/firmware on modern Pi OS (Bookworm), /boot otherwise
+BOOTDIR=$([ -d /boot/firmware ] && echo /boot/firmware || echo /boot)
+
 if [ "$#" -eq  "0" ]; then
  	name=rastapi-unknown
 else
@@ -28,7 +31,7 @@ fi
 with_rw "
 systemctl restart systemd-hostnamed
 sed -i -E 's/^127.0.1.1.*/127.0.1.1\t$name/' /etc/hosts
-for file in /boot/wifi/*-hotspot.nmconnection /boot/wifi/_disabled/*-hotspot.nmconnection; do
+for file in $BOOTDIR/wifi/*-hotspot.nmconnection $BOOTDIR/wifi/_disabled/*-hotspot.nmconnection; do
 	if [ -f \"\$file\" ]; then
 		sed -i -E 's/^ssid=.*/ssid=$name/' \"\$file\"
 		echo \"updated \$(basename \"\$file\") name\"
