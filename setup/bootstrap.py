@@ -280,6 +280,9 @@ def _disable_ipv6(platinfo):
 
     with open('/etc/sysctl.d/40-ipv6.conf', 'w') as f:
         f.write('\n'.join(lines) + '\n')
+    # Apply now — without this the setting only takes effect on the next reboot,
+    # during which avahi/NM already came up with IPv6 on.
+    utils.run('sysctl --system', check=False)
     ui.success("IPv6 disabled")
 
 

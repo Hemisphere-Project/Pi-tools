@@ -103,17 +103,30 @@ def starter_txt_path():
 
 
 def append_starter(entries):
-    """Append entries to starter.txt if not already present."""
+    """Append entries to starter.txt, de-duplicated by their service name.
+
+    Compares each candidate to the existing lines with leading '#'/whitespace
+    stripped, so an entry the user has UN-commented (e.g. `setnet`) is not
+    re-appended in its commented form (`# setnet`) on the next install — the old
+    substring check re-added it and left both lines.
+    """
     path = starter_txt_path()
-    existing = ''
+    existing_lines = []
     if os.path.isfile(path):
         with open(path) as f:
-            existing = f.read()
+            existing_lines = f.read().splitlines()
+
+    def norm(s):
+        return s.lstrip('#').strip()
+
+    seen = {norm(l) for l in existing_lines if norm(l)}
 
     to_add = []
     for line in entries.strip().split('\n'):
-        if line.strip() and line.strip() not in existing:
+        n = norm(line)
+        if n and n not in seen:
             to_add.append(line)
+            seen.add(n)  # also de-dup within this same batch
 
     if to_add:
         with open(path, 'a') as f:
@@ -121,7 +134,13 @@ def append_starter(entries):
 
 
 def is_module_installed(module_dir):
-    """Check if a module is already installed by verifying its primary symlinks exist."""
+    """True only if EVERY declared bin/service/timer symlink exists.
+
+    Stricter than "the first declared symlink is present": adding a new service
+    to a module.ini now makes the module read as not-fully-installed, so a
+    re-run re-applies it (module installs are idempotent). Modules with no
+    [files] entries (e.g. script-only) return False and are re-run each time.
+    """
     ini_path = os.path.join(module_dir, 'module.ini')
     if not os.path.isfile(ini_path):
         return False
@@ -129,22 +148,19 @@ def is_module_installed(module_dir):
     cfg = configparser.ConfigParser()
     cfg.read(ini_path)
 
-    # Check bins
+    checked_any = False
+
     if cfg.has_option('files', 'bins'):
-        bins = cfg.get('files', 'bins').split()
-        for b in bins:
+        for b in cfg.get('files', 'bins').split():
+            checked_any = True
             if not os.path.lexists(f'/usr/local/bin/{b}'):
                 return False
-        if bins:
-            return True
 
-    # Check services (for modules without bins)
-    if cfg.has_option('files', 'services'):
-        services = cfg.get('files', 'services').split()
-        for s in services:
-            if not os.path.lexists(f'/etc/systemd/system/{s}'):
-                return False
-        if services:
-            return True
+    for key in ('services', 'timers'):
+        if cfg.has_option('files', key):
+            for s in cfg.get('files', key).split():
+                checked_any = True
+                if not os.path.lexists(f'/etc/systemd/system/{s}'):
+                    return False
 
-    return False
+    return checked_any
