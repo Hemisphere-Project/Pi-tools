@@ -1,15 +1,27 @@
 [Unit]
 Description=audiohub output forwarder (%i)
 After=sound.target
+# Restart=always IS the recovery/hotplug mechanism (bench 2026-07-21): a wedged
+# or unplugged forwarder exits and the unit recycles. Never let systemd's default
+# start-limit turn a burst of recycles into a permanent failure on a 24/7 box.
+StartLimitIntervalSec=0
 
 [Service]
 ExecStartPre=/sbin/modprobe snd-aloop
 ExecStart=/usr/local/bin/audiohub-fwd %i
 Restart=always
 RestartSec=2
-# a wedged alsaloop spins at RT priority and ignores SIGTERM (bench
-# 2026-07-21): don't let a stop wait the default 90s before the SIGKILL
-TimeoutStopSec=5
+# KillMode=mixed: on stop, SIGTERM goes to the wrapper ONLY — so its trap runs the
+# staggered bcm2835 close (hdmi waits 2s). The default control-group would SIGTERM
+# alsaloop directly and defeat the stagger; closing both firmware PCMs at once on
+# reboot/shutdown races the VCHI close and oopses the kernel (vchiq-slot). See the
+# hplayer2 hardening notes: "SEQUENTIAL STOPS ONLY". (Needs a reboot-torture
+# bench-test on player-000; the watchdog-sleep phase offset can still narrow the
+# gap — revisit a shared kill-lock if the bench shows it.)
+KillMode=mixed
+# a wedged alsaloop spins at RT priority and ignores SIGTERM (bench 2026-07-21);
+# give the trap's staggered kill -9 room to run before systemd's final SIGKILL.
+TimeoutStopSec=10
 CPUSchedulingPolicy=fifo
 CPUSchedulingPriority=10
 

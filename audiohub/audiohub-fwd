@@ -113,7 +113,8 @@ esac
 # service close and oops the kernel (snd_pcm_pre_stop NULL deref in
 # vchiq-slot/0, 6.18.38-v7+, bench 2026-07-21 — audio dead until reboot).
 # hdmi always waits 2s before killing its alsaloop so the closes serialize;
-# stays well under the unit's TimeoutStopSec=5.
+# stays under the unit's TimeoutStopSec=10 (and only works because the unit is
+# KillMode=mixed — otherwise systemd TERMs alsaloop directly and skips this).
 case "$SINK" in
     jack) SINKCARD="Headphones"; STAGGER=0 ;;
     hdmi) SINKCARD="b1"; STAGGER=2 ;;
