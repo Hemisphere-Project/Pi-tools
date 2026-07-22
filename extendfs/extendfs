@@ -15,12 +15,21 @@ reset_clone_identity() {
         if [[ -d /var/lib/tailscale ]]; then
                 log "Removing Tailscale state for cloned drive"
                 systemctl stop tailscaled tailscale-start 2>/dev/null || true
-                rm -rf /var/lib/tailscale/
+                # /var/lib/tailscale may be a bind MOUNTPOINT (tailscale module):
+                # wipe its contents, never the dir itself — rm -rf on the mountpoint
+                # EBUSYs and, under set -e, would abort before the SSH keys below are
+                # regenerated (leaving the clone on the donor's host keys).
+                # TODO: this cross-module wipe belongs in tailscale's own clone
+                #       handling — split per module later.
+                find /var/lib/tailscale -mindepth 1 -delete 2>/dev/null || true
         fi
 
         log "Regenerating SSH host keys for cloned drive"
         rm -f /etc/ssh/ssh_host_*
         ssh-keygen -A
+        # Load the new host keys into the running sshd, or clients keep seeing the
+        # donor identity until an unrelated reboot.
+        systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || true
 }
 
 # Detect whether we can toggle the read-only root (rorw module). We switch to
@@ -85,6 +94,14 @@ fi
 STATE_DIR="/data/var"
 STATE_FILE="$STATE_DIR/drive-id"
 STATE_FILE_STAGE1="$STATE_DIR/drive-id-stage1"
+
+# extendfs tracks the drive fingerprint in /data; without /data mounted (a
+# degraded boot) there is no safe persistent store — skip rather than fail the
+# unit (and its set -e) on every boot.
+if ! mountpoint -q /data; then
+        echo "/data is not mounted — skipping extendfs (no persistent drive-id store)"
+        exit 0
+fi
 mkdir -p "$STATE_DIR"
 
 # If force flag is set, remove drive-id files to trigger expansion
@@ -251,20 +268,20 @@ if [[ -n "$CURRENT_SIZE" ]] && (( CURRENT_SIZE >= NEW_SIZE )); then
                         MIN_EXPECTED=$((CURRENT_SIZE * 99 / 100))
                         if [[ -n "$FS_SIZE" ]] && (( FS_SIZE >= MIN_EXPECTED )); then
                                 echo "Filesystem is also fully expanded"
+                                reset_clone_identity
                                 echo "$DRIVE_ID" > "$STATE_FILE"
                                 rm -f "$STATE_FILE_STAGE1"
                                 touch /tmp/new-drive
-                                reset_clone_identity
                                 exit 0
                         else
                                 echo "Filesystem needs resize (partition: $CURRENT_SIZE sectors, filesystem: $FS_SIZE sectors)"
                                 STAGE2_MODE=true
                         fi
                 else
+                        reset_clone_identity
                         echo "$DRIVE_ID" > "$STATE_FILE"
                         rm -f "$STATE_FILE_STAGE1"
                         touch /tmp/new-drive
-                        reset_clone_identity
                         exit 0
                 fi
         fi
@@ -408,6 +425,10 @@ fi
 
 echo "Filesystem resized successfully"
 
+# Reset identity FIRST, then persist the drive-id — if the reset fails the marker
+# isn't written and the next boot retries (never a half-reset clone).
+reset_clone_identity
+
 # Mark the drive ID so we do not rerun until hardware changes again.
 echo "$DRIVE_ID" > "$STATE_FILE"
 
@@ -416,7 +437,6 @@ rm -f "$STATE_FILE_STAGE1"
 
 # Drop a flag for other services if needed.
 touch /tmp/new-drive
-reset_clone_identity
 
 echo "New partition size:"
 df -h "$LAST_PART" 2>/dev/null || lsblk "$LAST_PART"
