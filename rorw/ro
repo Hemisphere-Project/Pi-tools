@@ -1,38 +1,62 @@
 #!/bin/bash
+# Remount the root (and boot) filesystem read-only, reference-counted.
+# See `rw` for the model. `ro` drops the count and only actually remounts
+# read-only when it reaches 0 (no other holder still needs read-write).
+#
+#   ro        drop one holder; remount read-only if that was the last
+#   ro -f     force: reset the count to 0 and remount read-only now
+#             (admin escape hatch for a leaked count)
 
+COUNT=/run/pitools-rw.count
+LOCK=/run/pitools-rw.lock
 TESTFILE="/root/.readonly"
 
-sync
+FORCE=false
+if [ "$1" = "-f" ] || [ "$1" = "--force" ]; then
+    FORCE=true
+fi
 
-# Remount root filesystem as read-only, retry 5 times
-for i in {1..5}; do
-    echo "Attempt $i:"
+do_remount_ro() {
+    sync
+    for i in {1..5}; do
+        mount -o remount,ro /
+        if mountpoint -q /boot/firmware; then
+            mount -o remount,ro /boot/firmware
+        elif mountpoint -q /boot/efi; then
+            mount -o remount,ro /boot/efi
+        elif mountpoint -q /boot; then
+            mount -o remount,ro /boot
+        fi
+        if touch "$TESTFILE" 2>/dev/null; then
+            echo "RO - attempt $i: still writable, retrying..."
+            # fuser -vm / 2>/dev/null   # uncomment to see who holds it
+            sleep 1
+        else
+            echo "=> RO ok!"
+            return 0
+        fi
+    done
+    echo "=> RO Failed after 5 attempts."
+    return 1
+}
 
-    # Try to remount the root filesystem as read-only
-    mount -o remount,ro /
+exec 9>"$LOCK"
+flock 9
 
-    # Try to remount the boot partition as read-only.
-    # Mountpoint-driven: covers Pi (/boot or /boot/firmware) and any EFI
-    # system (/boot/efi on mmc, sda, nvme — the old device probe missed
-    # x86).
-    if mountpoint -q /boot/firmware; then
-        mount -o remount,ro /boot/firmware
-    elif mountpoint -q /boot/efi; then
-        mount -o remount,ro /boot/efi
-    elif mountpoint -q /boot; then
-        mount -o remount,ro /boot
-    fi
-    
-    if touch "$TESTFILE" 2>/dev/null; then
-        echo "RO Failed.. still able to touch file, trying again..."
-        # lsof / | grep -E '(w|u)'
-        sleep 1  # Wait a second before the next attempt
-    else
-        echo "=> RO ok!"
-        exit 0
-    fi
-done
-echo "=> RO Failed after 5 attempts. Exiting."
-exit 1
+if $FORCE; then
+    echo 0 > "$COUNT"
+    do_remount_ro
+    exit $?
+fi
 
+count=$(cat "$COUNT" 2>/dev/null)
+[[ "$count" =~ ^[0-9]+$ ]] || count=0
+[ "$count" -gt 0 ] && count=$((count - 1))
+echo "$count" > "$COUNT"
 
+if [ "$count" -eq 0 ]; then
+    do_remount_ro
+    exit $?
+fi
+echo "=> staying RW ($count holder(s) still need it)"
+exit 0

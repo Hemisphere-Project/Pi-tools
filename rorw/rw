@@ -1,34 +1,52 @@
 #!/bin/bash
+# Remount the root (and boot) filesystem read-write, reference-counted.
+#
+# Concurrent holders — services doing with_rw, the bash logout hook, setnet,
+# extendfs, an admin at a shell — used to race: whoever called `ro` first
+# remounted read-only under everyone else's writes (dpkg/db corruption). Now
+# `rw`/`ro` share a flock-guarded counter: `rw` remounts read-write only on the
+# 0->1 transition and bumps the count; `ro` drops it and only remounts read-only
+# at 0. The counter lives on tmpfs (/run) so it resets to 0 (=read-only) at every
+# boot — a leaked count self-heals on reboot, or `ro -f` forces it.
 
+COUNT=/run/pitools-rw.count
+LOCK=/run/pitools-rw.lock
 TESTFILE="/root/.readonly"
 
-sync
-for i in {1..5}; do
-	echo "RW - Attempt $i:"
-	
-    # Try to remount the root filesystem as read-write
-    mount -o remount,rw /
+do_remount_rw() {
+    sync
+    for i in {1..5}; do
+        mount -o remount,rw /
+        # Boot partition, mountpoint-driven: Pi (/boot or /boot/firmware) and any
+        # EFI system (/boot/efi on mmc/sda/nvme).
+        if mountpoint -q /boot/firmware; then
+            mount -o remount,rw /boot/firmware
+        elif mountpoint -q /boot/efi; then
+            mount -o remount,rw /boot/efi
+        elif mountpoint -q /boot; then
+            mount -o remount,rw /boot
+        fi
+        if touch "$TESTFILE" 2>/dev/null; then
+            echo "=> RW ok!"
+            sync
+            return 0
+        fi
+        echo "RW - attempt $i failed, retrying..."
+        sleep 1
+    done
+    echo "=> RW Failed after 5 attempts."
+    return 1
+}
 
-    # Try to remount the boot partition as read-write.
-    # Mountpoint-driven: covers Pi (/boot or /boot/firmware) and any EFI
-    # system (/boot/efi on mmc, sda, nvme — the old device probe missed
-    # x86, leaving /boot/efi ro under `rw` and breaking grub updates).
-    if mountpoint -q /boot/firmware; then
-        mount -o remount,rw /boot/firmware
-    elif mountpoint -q /boot/efi; then
-        mount -o remount,rw /boot/efi
-    elif mountpoint -q /boot; then
-        mount -o remount,rw /boot
-    fi
+# Serialize the count update + remount against any concurrent rw/ro.
+exec 9>"$LOCK"
+flock 9
 
-	if touch "$TESTFILE" 2>/dev/null; then
-		echo "=> RW ok!"
-        sync
-        exit 0
-	else
-		echo "RW Failed. Unable to touch file /boot/VERSION, trying again..."
-		sleep 1  # Wait a second before the next attempt
-	fi
-done
-echo "=> RW Failed after 5 attempts. Exiting."
-exit 1
+count=$(cat "$COUNT" 2>/dev/null)
+[[ "$count" =~ ^[0-9]+$ ]] || count=0
+
+if [ "$count" -eq 0 ]; then
+    do_remount_rw || exit 1
+fi
+echo $((count + 1)) > "$COUNT"
+exit 0
