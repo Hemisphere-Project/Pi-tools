@@ -289,7 +289,18 @@ def hook_synczinc(module_dir, platinfo, cfg):
                     'https://apt.syncthing.net/ syncthing stable\n')
         utils.run('apt update', check=False)
     utils.apt_install('syncthing')
-    utils.run('pip3 install syncthing', check=False)
+
+    # Python 'syncthing' lib for master mode -> a uv venv on /data (RO-rootfs-safe;
+    # system pip3 is refused under PEP-668). Best-effort: peer mode needs none of
+    # this, and the wrapper falls back to peer if the venv is missing.
+    if os.path.ismount('/data'):
+        venv = '/data/var/synczinc/venv'
+        os.makedirs('/data/var/synczinc', exist_ok=True)
+        uv = shutil.which('uv') or '/root/.local/bin/uv'
+        utils.run(f'{uv} venv "{venv}"', check=False)
+        utils.run(f'{uv} pip install --python "{venv}/bin/python" syncthing', check=False)
+    else:
+        ui.warn("synczinc: /data not mounted — skipping master-mode venv (peer mode still works)")
 
 
 POST_HOOKS = {

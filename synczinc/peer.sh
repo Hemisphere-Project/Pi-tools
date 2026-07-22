@@ -4,7 +4,9 @@ CONFIG_HOME=/data/var/syncthing
 DRIVEID_PATH=/data/var/sync-id
 SYNC_PATH=/data/sync
 
-pkill syncthing
+# Boot (FAT) partition: /boot/firmware on modern Pi OS (Bookworm), /boot otherwise
+BOOTDIR=$([ -d /boot/firmware ] && echo /boot/firmware || echo /boot)
+
 cd "$(dirname "$(readlink -f "$0")")"
 
 # MODE
@@ -15,44 +17,46 @@ if [[ "$MODE" == "unsync" ]]; then
         echo ""
         echo ">>> Unsync ! <<<"
         echo ""
-        # echo "Stop synczinc service launched by /boot/starter.txt"
-        SYNCSERVICE=$(cat /boot/starter.txt | grep '^synczinc')
-        [[ ! -z "$SYNCSERVICE" ]] && systemctl stop $SYNCSERVICE
-        # echo "rm -Rf $CONFIG_HOME"
-        rm -Rf $CONFIG_HOME
-        # echo "rm -Rf $SYNC_PATH"
-        rm -Rf $SYNC_PATH
-        # echo "rm -f $DRIVEID_PATH"
-        rm -f $DRIVEID_PATH
-        # echo "Disable synczinc service in /boot/starter.txt"
-        sed -i '/^[^#]/ s/\(^.*synczinc.*$\)/#\ \1/' /boot/starter.txt
+        SYNCSERVICE=$(grep '^synczinc' "$BOOTDIR/starter.txt" 2>/dev/null)
+        [[ -n "$SYNCSERVICE" ]] && systemctl stop $SYNCSERVICE
+        pkill syncthing 2>/dev/null
+        rm -Rf "$CONFIG_HOME"
+        rm -Rf "$SYNC_PATH"
+        rm -f "$DRIVEID_PATH"
+        sed -i '/^[^#]/ s/\(^.*synczinc.*$\)/#\ \1/' "$BOOTDIR/starter.txt" 2>/dev/null
         exit 0
 fi
 
-# COMMON API KEY
+pkill syncthing 2>/dev/null
+
+# COMMON API KEY (shared, committed key — tracked in SECURITY-REVIEW.md, deferred)
 SYNC_API_KEY=$(cat key)
-echo "common API key: $SYNC_API_KEY"
 
-# CHECK IF SD HAS BEEN CLONED !
+# CLONE DETECTION — fingerprint on the BARE disk serial (stable across a
+# peer<->master mode change; the old "-$MODE" suffix false-triggered a wipe on
+# every mode switch). An empty serial means "unknown" -> skip, never mis-trigger.
 DRIVE=$(findmnt -n -o SOURCE --target /)
-DRIVE_ID=$(udevadm info --name=$DRIVE | grep ID_SERIAL= | cut -d '=' -f2)-$MODE
-LAST_DRIVE_ID=$(cat $DRIVEID_PATH)
+DRIVE_ID=$(udevadm info --name="$DRIVE" 2>/dev/null | sed -n 's/^E: ID_SERIAL=//p' | head -1)
+[ -z "$DRIVE_ID" ] && DRIVE_ID=$(lsblk -no SERIAL "$DRIVE" 2>/dev/null | head -1)
+LAST_DRIVE_ID=$(cat "$DRIVEID_PATH" 2>/dev/null)
 
-if [[ $DRIVE_ID == $LAST_DRIVE_ID ]]
-then
-        echo ""
-        echo ">>> Drive-id is valid <<<"
-        echo ""
+if [ -z "$DRIVE_ID" ]; then
+        echo ">>> Could not read a drive serial — skipping clone detection <<<"
+elif [ "$DRIVE_ID" != "$LAST_DRIVE_ID" ]; then
+        echo ">>> New drive detected (clone): regenerating syncthing identity <<<"
+        rm -Rf "$CONFIG_HOME"
+        # A master's /data/sync is the authoritative copy — NEVER auto-wipe it.
+        # A demoted-master run (wrapper) sets SYNCZINC_KEEP_DATA=1 to preserve it.
+        if [ "$MODE" == "master" ] || [ "${SYNCZINC_KEEP_DATA:-0}" == "1" ]; then
+                echo "!!! authoritative /data/sync preserved — reconfigure/re-seed deliberately !!!"
+        else
+                rm -Rf "$SYNC_PATH"     # a peer re-syncs cleanly from the master
+        fi
+        echo "$DRIVE_ID" > "$DRIVEID_PATH"
 else
-        echo ""
-        echo ">>> New drive detected, clear syncthing config and data <<<"
-        echo ""
-
-        rm -Rf $CONFIG_HOME
-        rm -Rf $SYNC_PATH
-        echo $DRIVE_ID > $DRIVEID_PATH
+        echo ">>> Drive-id is valid <<<"
 fi
 
-# Start syncthing with forced API-key
-avahi-publish-service 'SyncZinc._'$HOSTNAME '_http._tcp.' 8384 &
-STNODEFAULTFOLDER=1 syncthing -home=$CONFIG_HOME -gui-apikey="$SYNC_API_KEY" -gui-address=0.0.0.0:8384
+# Start syncthing with the forced API key
+avahi-publish-service 'SyncZinc._'"$HOSTNAME" '_http._tcp.' 8384 &
+STNODEFAULTFOLDER=1 syncthing -home="$CONFIG_HOME" -gui-apikey="$SYNC_API_KEY" -gui-address=0.0.0.0:8384

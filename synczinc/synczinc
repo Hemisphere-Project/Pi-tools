@@ -1,15 +1,45 @@
 #!/bin/bash
 DIR="$(dirname "$(readlink -f "$0")")"
-if [ "$#" -eq  "0" ]; then
- 	mode=peer
-else
- 	mode=$1
-fi
+VENV=/data/var/synczinc/venv
+DEMOTE_MARKER=/data/var/synczinc-demoted
+DRIVEID_PATH=/data/var/sync-id
 
+mode=${1:-peer}
 echo "[synczinc] starting as $mode"
 
+# Demote a cloned master to peer — a clone must never act as a SECOND master.
+# The demotion is persistent (a marker on /data): once demoted it stays a peer
+# across reboots, until an operator deliberately reconfigures a master.
 if [ "$mode" == "master" ]; then
-    poetry run python -u "$DIR/master.py"
+    demote=0
+    [ -f "$DEMOTE_MARKER" ] && demote=1
+    if [ "$demote" -eq 0 ]; then
+        DRIVE=$(findmnt -n -o SOURCE --target /)
+        DRIVE_ID=$(udevadm info --name="$DRIVE" 2>/dev/null | sed -n 's/^E: ID_SERIAL=//p' | head -1)
+        [ -z "$DRIVE_ID" ] && DRIVE_ID=$(lsblk -no SERIAL "$DRIVE" 2>/dev/null | head -1)
+        LAST_DRIVE_ID=$(cat "$DRIVEID_PATH" 2>/dev/null)
+        # only a real, non-empty serial change is a clone
+        [ -n "$DRIVE_ID" ] && [ -n "$LAST_DRIVE_ID" ] && [ "$DRIVE_ID" != "$LAST_DRIVE_ID" ] && demote=1
+    fi
+    if [ "$demote" -eq 1 ]; then
+        echo "[synczinc] cloned master detected — demoting to peer (persistent; /data/sync preserved)"
+        mkdir -p "$(dirname "$DEMOTE_MARKER")"
+        touch "$DEMOTE_MARKER"
+        export SYNCZINC_KEEP_DATA=1
+        mode=peer
+    fi
+fi
+
+if [ "$mode" == "master" ]; then
+    # master mode needs the python 'syncthing' lib from the uv venv (installed by
+    # the setup hook). If it's missing, fall back to a plain peer rather than
+    # crash-looping — master introduction is optional; data sync is not.
+    if [ -x "$VENV/bin/python" ]; then
+        exec "$VENV/bin/python" -u "$DIR/master.py"
+    else
+        echo "[synczinc] master venv missing ($VENV) — running as peer instead"
+        exec "$DIR/peer.sh" peer
+    fi
 else
-    "$DIR/peer.sh" "$mode"
+    exec "$DIR/peer.sh" "$mode"
 fi

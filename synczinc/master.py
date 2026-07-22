@@ -65,8 +65,13 @@ def connect(ip):
 
     return m
 
-# LOCAL connect
+# LOCAL connect — this is our OWN syncthing; if it never comes up there is
+# nothing to introduce, so exit cleanly and let systemd restart us.
 LOCAL = connect('127.0.0.1')
+if LOCAL is None:
+    print('[synczinc] local syncthing unreachable — exiting for restart')
+    syncClient.terminate()
+    exit(1)
 
 # SERVER configuration
 # compare Common key and Local key => if different, server must be reconfigured !
@@ -195,7 +200,7 @@ def autoconfremote(ip):
     if configUpdated:
         r.system.set_config(rconfig)
         time.sleep(5)
-        r.system.reset()
+        r.system.restart()   # apply config; reset() would ERASE the peer's index DB
         configUpdated = False        
         print("\tDevice", ip, " Config applied ")
     else:    
@@ -270,10 +275,21 @@ while True:
                         
                 LOCAL.system.set_config(config)
                 
-    except requests.exceptions.ConnectionError as e:
-        print('requests end')
+    except requests.exceptions.ConnectionError:
+        # local syncthing went away (restart/crash): back off and reconnect
+        # instead of busy-spinning at 100% CPU on a fanless box.
+        print('[synczinc] lost connection to local syncthing, reconnecting...')
+        time.sleep(2)
+        LOCAL = connect('127.0.0.1')
+        if LOCAL is None:
+            print('[synczinc] local syncthing unreachable — exiting for restart')
+            break
 
     except Exception as e:
-        if str(e): raise(e)     #ignore empty Exception (mostly connections timeouts)
+        # never crash the loop on a transient error: a raise here -> Restart
+        # storm -> start-limit -> sync permanently dead.
+        if str(e):
+            print('[synczinc] event loop error:', e)
+        time.sleep(2)
                 
     
