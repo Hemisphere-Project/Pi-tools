@@ -1,4 +1,4 @@
-# Upgrading a running device (Pi-tools 2026-2)
+# Upgrading a running device (Pi-tools, branch 2026)
 
 How to roll the Phase 0/1 improvements onto an **already-deployed** machine. Most
 of it is a `git pull` (modules are symlinked from `/opt/Pi-tools`), but some
@@ -16,7 +16,7 @@ NOT applied by a pull** and needs the complementary step in §3.
 ```bash
 rw                                                    # rorw boxes only
 git -C /opt/Pi-tools fetch
-git -C /opt/Pi-tools checkout 2026-2                  # first time only
+git -C /opt/Pi-tools checkout 2026                    # only if on another branch
 git -C /opt/Pi-tools pull --ff-only
 systemctl daemon-reload                               # pick up changed unit files
 
