@@ -288,21 +288,26 @@ if [[ -n "$CURRENT_SIZE" ]] && (( CURRENT_SIZE >= NEW_SIZE )); then
 fi
 
 if [[ "$STAGE2_MODE" == false ]]; then
-        echo "Deleting and recreating partition $PART_NUM to use all remaining space..."
-        
-        # Set backup directory for sfdisk (needed when running via systemd without $HOME)
-        export SFDISK_BACKUP_DIR=/tmp
-        
-        sfdisk --backup --no-reread --delete "$DISK_DEV" "$PART_NUM"
+        echo "Growing partition $PART_NUM to fill the disk (growpart, non-destructive)..."
 
-        PART_SPEC="start=$PART_START, size=$NEW_SIZE"
-        if [[ -n "$PART_TYPE" ]]; then
-                PART_SPEC+=", type=$PART_TYPE"
+        if ! command -v growpart >/dev/null 2>&1; then
+                echo "ERROR: growpart not found — install cloud-guest-utils"
+                exit 1
         fi
 
-        printf '%s\n' "$PART_SPEC" | sfdisk --force --no-reread -N "$PART_NUM" "$DISK_DEV"
+        # growpart only moves the END sector — no delete+recreate, so there is no
+        # window where the last partition is gone if power is cut mid-resize — and
+        # it computes the safe maximum itself, including the GPT backup header that
+        # the old "$DISK_SIZE - $PART_START" math overshot. It exits non-zero with
+        # NOCHANGE when the partition is already at the maximum.
+        GP_OUT=$(growpart "$DISK_DEV" "$PART_NUM" 2>&1); GP_RC=$?
+        echo "$GP_OUT"
+        if [[ "$GP_RC" -ne 0 ]] && ! echo "$GP_OUT" | grep -qi 'NOCHANGE'; then
+                echo "ERROR: growpart failed (rc=$GP_RC)"
+                exit 1
+        fi
 
-        echo "Partition table updated successfully"
+        echo "Partition table updated"
 else
         echo "Skipping partition table update (stage 2 mode)"
 fi
