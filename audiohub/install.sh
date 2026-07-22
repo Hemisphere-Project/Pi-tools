@@ -15,8 +15,10 @@ else
 fi
 
 # ALSA graph per platform — see each file's header for the design
+GRAPH_OK=false
 case "$(uname -m)" in
     armv*)   cp "$BASEPATH/asound.conf-pi3" /etc/asound.conf
+             GRAPH_OK=true
              # asound.conf-pi3 names the LEGACY firmware cards
              # (Headphones/b1 = bcm2835 stack, the RastaOS-7.1 golden).
              # A KMS Pi (vc4-kms-v3d — what setup's own config.txt
@@ -28,7 +30,7 @@ case "$(uname -m)" in
                  echo "  (Headphones/b1) — hdmiout will NOT match. An"
                  echo "  asound.conf-pi-kms variant is needed (TODO)."
              fi ;;
-    x86_64)  cp "$BASEPATH/asound.conf-x86" /etc/asound.conf ;;
+    x86_64)  cp "$BASEPATH/asound.conf-x86" /etc/asound.conf; GRAPH_OK=true ;;
     *)       echo "WARNING: no hub graph for $(uname -m) yet, /etc/asound.conf untouched" ;;
 esac
 
@@ -63,7 +65,7 @@ ln -sf "$BASEPATH/audiohub@.service" /etc/systemd/system/
 
 # ── absorb audioselect: its udev rule rewrites /etc/asound.conf on every
 # sound event and would clobber the hub graph on USB hotplug ──
-if [ -e /etc/udev/rules.d/70-audioselect.rules ]; then
+if [ -e /etc/udev/rules.d/70-audioselect.rules ] || [ -L /etc/udev/rules.d/70-audioselect.rules ]; then
     echo "removing audioselect (absorbed by audiohub)"
     rm -f /etc/udev/rules.d/70-audioselect.rules
     udevadm control --reload 2>/dev/null
@@ -76,7 +78,15 @@ systemctl stop alsa-state 2>/dev/null
 systemctl mask alsa-state 2>/dev/null
 
 systemctl daemon-reload
-systemctl enable audiohub@jack audiohub@hdmi audiohub@usb
-systemctl restart audiohub@jack audiohub@hdmi audiohub@usb
-
-echo "audiohub installed: $(head -1 /etc/asound.conf | cut -c3-22), forwarders enabled"
+if [ "$GRAPH_OK" = true ]; then
+    systemctl enable audiohub@jack audiohub@hdmi audiohub@usb
+    systemctl restart audiohub@jack audiohub@hdmi audiohub@usb
+    echo "audiohub installed: $(head -1 /etc/asound.conf | cut -c3-22), forwarders enabled"
+else
+    # No ALSA graph for this arch (e.g. aarch64 / pi-kms): enabling the forwarders
+    # would just crash-loop them (alsaloop on missing PCMs). Leave them disabled
+    # until a graph exists for this platform.
+    systemctl disable audiohub@jack audiohub@hdmi audiohub@usb 2>/dev/null
+    echo "audiohub: NO hub graph for $(uname -m) — forwarders left DISABLED (would"
+    echo "          crash-loop). Provide an asound.conf hub graph and re-run."
+fi

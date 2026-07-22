@@ -2,6 +2,8 @@
 # audiohub — control CLI for the platform audio hub.
 #
 #   audiohub status              merged config + forwarder health + USB card
+#   audiohub status --json       the same, machine-readable (for HPlayer3)
+#   audiohub get <key>           print one merged value, no source prefix
 #   audiohub set key=value ...   write overrides to /data/audiohub.conf
 #   audiohub apply               restart the forwarders (after config edits)
 #   audiohub test [jack|hdmi|usb]
@@ -22,9 +24,26 @@ merged() {
     done
 }
 
+# Final effective key=value (later file wins), machine-readable, no source prefix.
+finalcfg() {
+    for f in /etc/audiohub.conf /data/audiohub.conf; do
+        [ -f "$f" ] && sed -n 's/^\([a-z_]\+\)=\(.*\)/\1 \2/p' "$f"
+    done | awk '{v[$1]=$2} END{for (k in v) print k"="v[k]}' | sort
+}
+
 case "${1:-status}" in
 
 status)
+    if [ "${2:-}" = "--json" ]; then
+        cfg=$(finalcfg | awk -F= '{printf "%s\"%s\":\"%s\"", (NR>1?",":""), $1, $2}')
+        fwd=""
+        for u in $UNITS; do
+            fwd="$fwd${fwd:+,}\"${u#audiohub@}\":\"$(systemctl is-active "$u" 2>/dev/null)\""
+        done
+        usb=$(grep -m1 'USB-Audio' /proc/asound/cards | sed -n 's/^ *[0-9]* *\[\([^ ]*\) *\].*/\1/p')
+        printf '{"config":{%s},"forwarders":{%s},"usb_card":"%s"}\n' "$cfg" "$fwd" "$usb"
+        exit 0
+    fi
     echo "== config (later wins):"
     merged
     echo "== forwarders:"
@@ -89,7 +108,15 @@ test)
     fi
     ;;
 
+get)
+    K="${2:-}"
+    [ -n "$K" ] || { echo "usage: audiohub get <key>"; exit 2; }
+    v=$(finalcfg | sed -n "s/^$K=//p")
+    [ -n "$v" ] && { printf '%s\n' "$v"; exit 0; }
+    exit 1
+    ;;
+
 *)
-    sed -n '2,15p' "$0" | sed 's/^# \?//'
+    sed -n '2,17p' "$0" | sed 's/^# \?//'
     ;;
 esac
