@@ -91,7 +91,10 @@ def install_module(name, platinfo, cfg):
     if use_script:
         script = os.path.join(module_dir, 'install.sh')
         if os.path.isfile(script):
-            utils.run(f'bash "{script}"', cwd=module_dir)
+            result = utils.run(f'bash "{script}"', cwd=module_dir, check=False)
+            if result.returncode != 0:
+                ui.error(f"{name}: install.sh failed (exit {result.returncode}) — not installed")
+                return False
             ui.success(f"{name} installed (via install.sh)")
             return True
 
