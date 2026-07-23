@@ -189,6 +189,21 @@ def hook_starter(module_dir, platinfo, cfg):
 
 def hook_network_tools(module_dir, platinfo, cfg):
     """Configure dnsmasq and WiFi directory."""
+    # DNS must match the bootstrap design: a STATIC /etc/resolv.conf on
+    # public resolvers, dns=none, dnsmasq serving hotspot clients only.
+    # Images upgraded from older bases (AnnaTV) can carry openresolv,
+    # which points resolv.conf at 127.0.0.1 where nothing listens: DNS
+    # dead by configuration -> datesync never syncs (the 'wrong clocks'
+    # fleets), no apt, no git. Heal it here so the upgrade path fixes
+    # what bootstrap already does on fresh installs.
+    for pkg in ('openresolv', 'resolvconf'):
+        utils.run(f'apt-get purge -y {pkg}', check=False)
+    resolv = '/etc/resolv.conf'
+    if os.path.islink(resolv):
+        os.remove(resolv)
+    with open(resolv, 'w') as f:
+        f.write("nameserver 1.1.1.1\nnameserver 1.0.0.1\n")
+
     dnsmasq_conf = '/etc/dnsmasq.conf'
     with open(dnsmasq_conf, 'w') as f:
         f.write("listen-address=10.0.0.1\n"
