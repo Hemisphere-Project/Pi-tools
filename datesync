@@ -6,6 +6,19 @@
 # -f fail on HTTP errors, -s silent, -m 5 hard 5s timeout (never hang a boot),
 # -I head only. HTTPS so a plain on-path box can't trivially set our clock.
 header=$(curl -fsm 5 -I https://www.google.com 2>/dev/null | grep -i '^date:' | head -1)
+
+# Bogus-clock escape: a VIRGIN RTC hands the kernel 2000-01-01 at boot
+# (hctosys runs after fake-clock and clobbers its floor), and from year
+# 2000 TLS validation can never succeed ("certificate not yet valid") —
+# datesync would deadlock forever. When the local clock is plainly
+# implausible, retry without cert validation: TLS trust is void under a
+# wrong clock anyway, and the plausibility floor below still rejects
+# garbage answers.
+if [ -z "$header" ] && [ "$(date +%Y)" -lt 2021 ]; then
+    header=$(curl -ksm 5 -I https://www.google.com 2>/dev/null | grep -i '^date:' | head -1)
+    [ -n "$header" ] && echo "[datesync] local clock implausible — accepted Date without cert validation"
+fi
+
 remote=$(printf '%s' "${header#[Dd]ate:}" | tr -d '\r' | sed 's/^ *//')
 
 if [ -z "$remote" ]; then
@@ -24,4 +37,7 @@ if date -s "$remote" >/dev/null; then
     echo "[datesync] clock set to $remote"
     # Persist as the fake-clock floor so a later offline boot keeps this time.
     command -v fake-clock >/dev/null 2>&1 && fake-clock save 2>/dev/null || true
+    # Program the RTC: a virgin module keeps reporting 2000 at every boot
+    # until someone writes it — make any online moment permanent.
+    [ -e /dev/rtc0 ] && hwclock -w 2>/dev/null || true
 fi
