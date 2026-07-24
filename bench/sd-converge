@@ -114,10 +114,29 @@ VERIFY_MARKERS=(
 
 # ---- per-card work --------------------------------------------------------
 
+resolve_card_path() {  # <mnt> <abs path on card> -> host path, symlinks
+    local mnt="$1" cur="$mnt$2" hops=0 t   # rebased INTO the mount (an
+    while [ -L "$cur" ] && [ $hops -lt 5 ]; do  # absolute link like
+        t=$(readlink "$cur")                    # /opt/Pi-tools -> /data/x
+        case "$t" in                            # must never resolve against
+            /*) cur="$mnt$t" ;;                 # the bench machine's root)
+            *)  cur="$(dirname "$cur")/$t" ;;
+        esac
+        hops=$((hops+1))
+    done
+    echo "$cur"
+}
+
 sync_repo() {   # sync_repo <mnt> <name> <src> <cardpath>  -> sets R_STATUS
-    local mnt="$1" name="$2" src="$3" dst="$mnt$4"
+    local mnt="$1" name="$2" src="$3" dst
+    dst=$(resolve_card_path "$mnt" "$4")
     R_STATUS="error"
-    [ -d "$dst/.git" ] || { err "$name: no checkout at $4"; return 1; }
+    if [ ! -d "$dst/.git" ]; then
+        err "$name: no checkout at $4 (resolved: ${dst#$mnt} on card)"
+        say "diagnostic — parent listing:"
+        ls -la "$(dirname "$dst")" 2>/dev/null | sed 's/^/    /' | head -15
+        return 1
+    fi
 
     local branch before target owner
     branch=$(GIT -C "$dst" rev-parse --abbrev-ref HEAD 2>/dev/null)
@@ -231,11 +250,12 @@ process_device() {  # process_device <disk>  (e.g. sdb / mmcblk0)
         | while read -r mp; do umount "$mp" 2>/dev/null; done
 
     mnt=$(mktemp -d /tmp/sd-converge.XXXXXX)
-    for part in $(lsblk -ln -o NAME,FSTYPE "$dev" | awk '$2=="ext4"{print "/dev/"$1}'); do
+    for part in $(lsblk -ln -o NAME,TYPE "$dev" | awk '$2=="part"{print "/dev/"$1}'); do
         if probe_rootfs "$part" "$mnt"; then found="$part"; break; fi
     done
     if [ -z "$found" ]; then
-        err "$dev: no player rootfs signature on any ext4 partition — untouched"
+        err "$dev: no player rootfs signature on any partition — untouched"
+        lsblk -ln -o NAME,FSTYPE,SIZE,LABEL "$dev" | sed 's/^/    /'
         rmdir "$mnt"; return 1
     fi
     say "rootfs: $found"
@@ -247,8 +267,10 @@ process_device() {  # process_device <disk>  (e.g. sdb / mmcblk0)
 
     sync
     umount "$mnt" && rmdir "$mnt"
-    udisksctl power-off -b "$dev" >/dev/null 2>&1 \
-        || eject "$dev" >/dev/null 2>&1 || true
+    # eject marks the MEDIUM removed but keeps the reader alive for the
+    # next card (udisksctl power-off would kill the whole multi-slot
+    # reader until physically replugged)
+    eject "$dev" >/dev/null 2>&1 || true
     printf '\a'
     if [ $rc -eq 0 ]; then
         ok ">> safe to remove the card <<"
@@ -259,6 +281,19 @@ process_device() {  # process_device <disk>  (e.g. sdb / mmcblk0)
 }
 
 list_disks() { ls /sys/block 2>/dev/null | grep -E '^(sd|mmcblk)' || true; }
+
+# a multi-slot USB reader exposes EVERY slot as a disk, empty ones at 0
+# bytes, and the node never leaves when a card is pulled — so the carousel
+# must track MEDIUM presence (size > 0), not device-node appearance
+disks_with_medium() {
+    local d s
+    for d in $(list_disks); do
+        s=$(cat "/sys/block/$d/size" 2>/dev/null || echo 0)
+        [ "${s:-0}" -gt 0 ] 2>/dev/null && echo "$d"
+    done
+}
+
+has_medium() { [ "$(cat "/sys/block/$1/size" 2>/dev/null || echo 0)" -gt 0 ] 2>/dev/null; }
 
 if [ -n "$APPLY_TO" ]; then
     [ -d "$APPLY_TO/etc" ] || { err "$APPLY_TO does not look like a mounted rootfs"; exit 1; }
@@ -274,18 +309,19 @@ done
 [ "$DRY" = 1 ] && warn "DRY RUN — nothing will be written"
 echo "log: $LOG"
 
-BASELINE=$(list_disks)
+BASELINE=$(disks_with_medium)
 echo
-echo "waiting for a card... (Ctrl-C to quit; disks present now are ignored:" \
+echo "waiting for a card... (Ctrl-C to quit; cards present now are ignored:" \
      "$(echo $BASELINE | tr '\n' ' '))"
 while true; do
     sleep 1
-    for d in $(list_disks); do
+    for d in $(disks_with_medium); do
         echo "$BASELINE" | grep -qx "$d" && continue
         sleep 2                     # let the kernel settle partitions
         process_device "$d"
-        # wait for THIS card to leave before accepting the next one
-        while [ -e "/sys/block/$d" ]; do sleep 1; done
+        # wait for THIS card to leave (medium out or node gone) before
+        # accepting the next one
+        while [ -e "/sys/block/$d" ] && has_medium "$d"; do sleep 1; done
         [ "$ONCE" = 1 ] && exit 0
         echo
         echo "waiting for the next card..."
