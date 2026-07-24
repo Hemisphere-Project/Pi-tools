@@ -145,7 +145,11 @@ sync_repo() {   # sync_repo <mnt> <name> <src> <cardpath>  -> sets R_STATUS
         err "$name: detached or unreadable HEAD — FLAGGED, untouched"; return 1
     fi
     if [ -n "$(GIT -C "$dst" status --porcelain 2>/dev/null)" ]; then
-        err "$name: dirty working tree on branch $branch — FLAGGED, untouched"; return 1
+        err "$name: dirty working tree on branch $branch — FLAGGED, untouched"
+        say "the dirt (M=modified ?=untracked):"
+        GIT -C "$dst" status --porcelain 2>/dev/null | sed 's/^/    /' | head -20
+        GIT -C "$dst" diff --stat 2>/dev/null | tail -3 | sed 's/^/    /'
+        return 1
     fi
     if ! target=$(GIT -C "$src" rev-parse --short --verify "refs/heads/$branch" 2>/dev/null); then
         err "$name: card is on '$branch', no such local branch here — FLAGGED"; return 1
