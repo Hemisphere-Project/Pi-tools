@@ -97,9 +97,10 @@ pcm.jackout {
 # softvol mute stage — same design as asound.conf-pi3: control "Audiohub
 # HDMI" anchored on the always-present Loopback card, materialized + restored
 # by audiohub-fwd at unit start (mute=hdmi in /data/audiohub.conf, toggled
-# with `audiohub mute|unmute hdmi`). 0dB = passthrough; muted, silence keeps
-# streaming so the display sees a live audio stream and hw_ptr flow-watching
-# stays valid.
+# with `audiohub mute|unmute hdmi`). resolution 2 = a SWITCH (on =
+# passthrough, off = hard-zeroed samples; drive with on/off, never
+# percentages); muted, silence keeps streaming so the display sees a live
+# audio stream and hw_ptr flow-watching stays valid.
 pcm.hdmiout {
     type route
     slave.pcm {
@@ -112,7 +113,6 @@ pcm.hdmiout {
             name "Audiohub HDMI"
             card Loopback
         }
-        min_dB -90.0
         resolution 2
     }
     slave.channels 2

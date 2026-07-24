@@ -113,10 +113,11 @@ pcm.jackout {
 # (hw cards come and go, the anchor doesn't) and only materializes at the
 # first hdmiout open: audiohub-fwd opens the PCM at unit start and applies
 # the persisted state (mute=hdmi in /data/audiohub.conf, toggled with
-# `audiohub mute|unmute hdmi`) BEFORE any audio can flow. At 0dB softvol is
-# a straight passthrough; muted, alsaloop keeps streaming zeros, so the
-# display keeps its audio stream (no OSD popup, no renegotiation) and
-# hw_ptr flow-watching stays valid through the mute.
+# `audiohub mute|unmute hdmi`) BEFORE any audio can flow. resolution 2
+# makes it a SWITCH (on = untouched passthrough, off = hard-zeroed
+# samples — drive it with on/off, never percentages); muted, alsaloop
+# keeps streaming zeros, so the display keeps its audio stream (no OSD
+# popup, no renegotiation) and hw_ptr flow-watching stays valid.
 pcm.hdmiout {
     type route
     slave.pcm {
@@ -129,7 +130,6 @@ pcm.hdmiout {
             name "Audiohub HDMI"
             card Loopback
         }
-        min_dB -90.0
         resolution 2
     }
     slave.channels 2

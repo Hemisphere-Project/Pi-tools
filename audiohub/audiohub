@@ -129,7 +129,9 @@ mute|unmute)
     [ "$SINK" = "hdmi" ] || { echo "no softvol stage on '$SINK' (hdmi only)"; exit 2; }
     # live toggle: instant, no unit restart, no PCM close (the control lives
     # on the Loopback card and exists once the forwarder has opened hdmiout)
-    if [ "$1" = "mute" ]; then V="0%"; else V="100%"; fi
+    # resolution 2 makes the control a SWITCH (pswitch): drive it with
+    # off/on — percentage values address volumes and no-op on a switch
+    if [ "$1" = "mute" ]; then V="off"; else V="on"; fi
     amixer -q -c Loopback sset 'Audiohub HDMI' "$V" 2>/dev/null \
         || echo "softvol control not up yet (old graph, or forwarder not started):" \
                 "persisted anyway, the forwarder applies it at unit start"

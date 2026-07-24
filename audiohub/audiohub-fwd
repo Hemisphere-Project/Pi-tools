@@ -136,13 +136,19 @@ fi
 # materializes at the first hdmiout open — open it NOW with silence, then
 # apply the persisted state, so a muted player can never leak a burst of
 # audio between forwarder start and mute restore. Restore BOTH ways: the
-# conf is the single source of truth across recycles and reboots.
+# conf is the single source of truth across recycles and reboots. The
+# control is a SWITCH (softvol resolution 2): drive it with off/on —
+# percentage values address volumes and silently no-op on a switch
+# (found live on player-000, 2026-07-24).
+hdmi_restore() {
+    local V="on"
+    grep -qs '^mute=.*hdmi' /etc/audiohub.conf /data/audiohub.conf && V="off"
+    amixer -q -c Loopback sset 'Audiohub HDMI' "$V" 2>/dev/null
+}
 if [ "$SINK" = "hdmi" ]; then
     timeout 2 aplay -q -D hdmiout -t raw -f S16_LE -r 48000 -c 2 /dev/zero 2>/dev/null
-    V="100%"
-    grep -qs '^mute=.*hdmi' /etc/audiohub.conf /data/audiohub.conf && V="0%"
-    amixer -q -c Loopback sset 'Audiohub HDMI' "$V" 2>/dev/null \
-        || echo "hdmi softvol control unavailable (pre-v2.1 graph in /etc/asound.conf?)"
+    hdmi_restore \
+        || echo "hdmi softvol restore pending (control not up yet — retrying after spawn)"
 fi
 
 wait_cable
@@ -150,6 +156,14 @@ wait_cable
 /usr/bin/alsaloop -C aloopcap -P "$DEV" -r 48000 -f S16_LE -c 8 -t "$LAT" -S auto &
 LOOP=$!
 trap "sleep $STAGGER; kill -9 $LOOP 2>/dev/null" TERM INT
+
+# late-restore net: at early boot the firmware sink may not be ready when
+# the unit starts (seen on player-000: the pre-spawn materialization lost
+# the race and the restore was silently dropped) — the control appears as
+# soon as alsaloop opens the sink, so keep trying briefly after spawn.
+if [ "$SINK" = "hdmi" ]; then
+    ( for _ in $(seq 1 15); do hdmi_restore && exit 0; sleep 1; done ) &
+fi
 STALL=0 LASTPTR=-1
 while kill -0 "$LOOP" 2>/dev/null; do
     sleep 3
