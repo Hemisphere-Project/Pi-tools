@@ -90,6 +90,15 @@ sed -i '/^GRUB_CMDLINE_LINUX_DEFAULT=/ s/rd.systemd.show_status=auto/rd.systemd.
 grep -q 'systemd.show_status=false' "$G" \
     || sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT="\(.*\)"/GRUB_CMDLINE_LINUX_DEFAULT="\1 systemd.show_status=false"/' "$G"
 
+# early renderer: plymouth starts from the initramfs at ~2s but i915 only
+# loaded from the rootfs at ~3s — no DRM device means plymouth falls back
+# to TEXT mode (a flash of console instead of the spinner; mini-08,
+# 2026-07-24). Pull the KMS stack into the initramfs so the spinner has a
+# screen from the start. Costs some initrd size, buys an actual splash.
+echo "FRAMEBUFFER=y" > /etc/initramfs-tools/conf.d/splash
+grep -qx i915 /etc/initramfs-tools/modules 2>/dev/null \
+    || echo i915 >> /etc/initramfs-tools/modules
+
 update-grub
 update-initramfs -u
 
