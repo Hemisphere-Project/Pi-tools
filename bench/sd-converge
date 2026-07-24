@@ -15,9 +15,10 @@
 #      /opt/Pi-tools/.git + /opt/HPlayer2/.git + /etc/hostname
 #   2. fast-forwards each on-card checkout from this machine's local repo,
 #      SAME branch as the card is on (a card on `biennale` follows this
-#      machine's `biennale`). Diverged, dirty, or detached cards are
-#      FLAGGED and left untouched — that's how a hand-edited card
-#      surfaces instead of being silently mangled.
+#      machine's `biennale`). Diverged, ahead, or detached cards are
+#      FLAGGED and left untouched. Local changes (runtime droppings like a
+#      device-regenerated package-lock) are shown and carried over; git
+#      refuses the update itself if one would collide (-> FLAGGED).
 #   3. runs the campaign hook post_apply() below (currently: install the
 #      audiohub graph from the card's own Pi-tools checkout when the
 #      marker is outdated). FUTURE UPGRADES: extend post_apply(), keep
@@ -144,23 +145,27 @@ sync_repo() {   # sync_repo <mnt> <name> <src> <cardpath>  -> sets R_STATUS
     if [ -z "$branch" ] || [ "$branch" = "HEAD" ]; then
         err "$name: detached or unreadable HEAD — FLAGGED, untouched"; return 1
     fi
+    # local changes (runtime droppings like a device-regenerated
+    # package-lock are fleet-wide and harmless): show them and PROCEED —
+    # git itself refuses the merge if the update would overwrite one, and
+    # that failure lands in the flagged path below. Real hand edits that
+    # don't collide simply ride along, still visible here on every pass.
+    local dirt=""
     if [ -n "$(GIT -C "$dst" status --porcelain 2>/dev/null)" ]; then
-        err "$name: dirty working tree on branch $branch — FLAGGED, untouched"
-        say "the dirt (M=modified ?=untracked):"
-        GIT -C "$dst" status --porcelain 2>/dev/null | sed 's/^/    /' | head -20
-        GIT -C "$dst" diff --stat 2>/dev/null | tail -3 | sed 's/^/    /'
-        return 1
+        dirt="+dirt"
+        warn "$name: local changes on card (kept; git refuses if they collide):"
+        GIT -C "$dst" status --porcelain 2>/dev/null | sed 's/^/    /' | head -10
     fi
     if ! target=$(GIT -C "$src" rev-parse --short --verify "refs/heads/$branch" 2>/dev/null); then
         err "$name: card is on '$branch', no such local branch here — FLAGGED"; return 1
     fi
 
     if [ "$before" = "$target" ]; then
-        say "$name: already at $target ($branch)"; R_STATUS="$target"; return 0
+        say "$name: already at $target ($branch)"; R_STATUS="$target$dirt"; return 0
     fi
     if [ "$DRY" = 1 ]; then
         warn "$name: WOULD fast-forward $branch $before -> $target"
-        R_STATUS="dry:$before->$target"; return 0
+        R_STATUS="dry:$before->$target$dirt"; return 0
     fi
 
     owner=$(stat -c '%u:%g' "$dst")
@@ -169,7 +174,7 @@ sync_repo() {   # sync_repo <mnt> <name> <src> <cardpath>  -> sets R_STATUS
         err "$name: fetch failed:"; echo "$out" | sed 's/^/    /'; return 1
     fi
     if ! out=$(GIT -C "$dst" merge --ff-only -q FETCH_HEAD 2>&1); then
-        err "$name: NOT fast-forwardable from $before — diverged card, FLAGGED"
+        err "$name: update refused from $before (diverged card, or a local change collides) — FLAGGED"
         echo "$out" | sed 's/^/    /'; return 1
     fi
     # a card AHEAD of us "ff-merges" as a no-op (ancestor): that's unknown
@@ -183,7 +188,7 @@ sync_repo() {   # sync_repo <mnt> <name> <src> <cardpath>  -> sets R_STATUS
     GIT -C "$dst" diff --name-only -z "$before" HEAD 2>/dev/null \
         | while IFS= read -r -d '' f; do chown "$owner" "$dst/$f" 2>/dev/null; done
     ok "$name: $branch $before -> $(GIT -C "$dst" rev-parse --short HEAD)"
-    R_STATUS="$before->$target"
+    R_STATUS="$before->$target$dirt"
 }
 
 apply_card() {  # apply_card <mnt> <devlabel>
