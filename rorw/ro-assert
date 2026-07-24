@@ -1,0 +1,24 @@
+#!/bin/bash
+# ro-assert — self-heal a silently-writable root (run by ro-assert.timer).
+#
+# A venue box must never sit rw unnoticed: a lost ro busy-race, a stray
+# remount, or an unattributed flip (mini-07, 2026-07-24: root rw at 5min
+# uptime with the rw helper never invoked) all strand the box writable
+# until someone looks. This oneshot checks the invariant instead: if /
+# is rw while the pitools rw counter holds no one, nothing legitimate is
+# writing — log it (forensics: the journal line marks WHEN it happened)
+# and re-assert ro. A genuinely-busy remount just fails; the timer
+# retries a few minutes later.
+
+OPTS=$(findmnt -n -o OPTIONS / 2>/dev/null)
+case "$OPTS" in rw*) ;; *) exit 0 ;; esac    # already ro: nothing to do
+
+COUNT=$(cat /run/pitools-rw.count 2>/dev/null)
+[[ "$COUNT" =~ ^[0-9]+$ ]] || COUNT=0
+if [ "$COUNT" -gt 0 ]; then
+    echo "root is rw with $COUNT registered holder(s) — legitimate, leaving it"
+    exit 0
+fi
+
+echo "root is rw with NO registered holder — re-asserting read-only"
+exec /usr/local/bin/ro

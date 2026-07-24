@@ -1,0 +1,9 @@
+[Unit]
+Description=Periodic read-only root re-assert
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target

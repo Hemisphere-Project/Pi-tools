@@ -252,13 +252,42 @@ systemctl mask dpkg-db-backup.service dpkg-db-backup.timer 2>/dev/null
 # last re-asserts /tmp after rsyslog's.
 echo "z /tmp 1777 root root -" > /etc/tmpfiles.d/zz-pitools-tmp.conf
 
-echo 'if [ "$(id -u)" -eq 0 ]; then
-rw
+# Root shell history lives on /data so `history -a` works on a read-only
+# root — the logout hook then needs NO rw/ro bracket. The old bracket was
+# the only runtime rw excursion in the stack, and its `ro` could lose the
+# transient remount-busy race and strand the box silently writable
+# (mini fleet, 2026-07-24). Never again: logout only appends history
+# (through the /data symlink) and saves the fake clock (/data too).
+mkdir -p /data/var
+if [ -f /root/.bash_history ] && [ ! -L /root/.bash_history ]; then
+    cat /root/.bash_history >> /data/var/root.bash_history 2>/dev/null
+    rm -f /root/.bash_history
+fi
+touch /data/var/root.bash_history
+ln -sf /data/var/root.bash_history /root/.bash_history
+
+# drop any previously-installed rw/ro logout bracket, then append the
+# marker-delimited hook (idempotent across reinstalls)
+if [ -f /etc/bash.bash_logout ]; then
+    sed -i '/^if \[ "\$(id -u)" -eq 0 \]; then$/,/^fi$/d' /etc/bash.bash_logout
+    sed -i '/^# >>> pitools rorw >>>$/,/^# <<< pitools rorw <<<$/d' /etc/bash.bash_logout
+fi
+echo '# >>> pitools rorw >>>
+if [ "$(id -u)" -eq 0 ]; then
 history -a
-ro
 fake-clock save
 fi
+# <<< pitools rorw <<<
 ' >> /etc/bash.bash_logout
+
+# self-heal: any stray rw with no registered holder is remounted ro by
+# the ro-assert timer (3min after boot, then every 5min)
+ln -sf "$BASEPATH/ro-assert" /usr/local/bin/
+ln -sf "$BASEPATH/ro-assert.service" /etc/systemd/system/
+ln -sf "$BASEPATH/ro-assert.timer" /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable ro-assert.timer
+systemctl start ro-assert.timer 2>/dev/null
 
 
 #

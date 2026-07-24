@@ -1,0 +1,6 @@
+[Unit]
+Description=Re-assert read-only root when no rw holder remains
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/ro-assert
