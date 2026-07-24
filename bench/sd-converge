@@ -1,0 +1,293 @@
+#!/bin/bash
+# sd-converge — bench-side SD carousel: converge player cards to THIS
+# machine's checkouts, one card at a time, no network, no reflash.
+#
+#   sudo ./sd-converge                 carousel: wait for a card, apply,
+#                                      sync, eject, wait for the next one
+#   sudo ./sd-converge --once          process a single card, then exit
+#   sudo ./sd-converge --dry-run       report what WOULD change, write nothing
+#   sudo ./sd-converge --apply-to DIR  treat DIR as an already-mounted player
+#                                      rootfs (loop-mounted golden image,
+#                                      manual mount, tests) — no eject
+#
+# What it does per card (all idempotent):
+#   1. finds the rootfs partition by SIGNATURE (never by device name):
+#      /opt/Pi-tools/.git + /opt/HPlayer2/.git + /etc/hostname
+#   2. fast-forwards each on-card checkout from this machine's local repo,
+#      SAME branch as the card is on (a card on `biennale` follows this
+#      machine's `biennale`). Diverged, dirty, or detached cards are
+#      FLAGGED and left untouched — that's how a hand-edited card
+#      surfaces instead of being silently mangled.
+#   3. runs the campaign hook post_apply() below (currently: install the
+#      audiohub graph from the card's own Pi-tools checkout when the
+#      marker is outdated). FUTURE UPGRADES: extend post_apply(), keep
+#      everything else.
+#   4. verifies (git heads + declared markers), logs one CSV line, syncs,
+#      unmounts, powers the reader off, rings the bell. Swap cards.
+#
+# Pure file-content changes only: nothing executes on the Pi. Anything
+# that needs on-device execution (apt, systemctl enable, venv sync) does
+# NOT belong here — that's setup.sh / module install territory.
+#
+# Repos are synced as GIT FAST-FORWARDS, not file copies, so the fleet
+# stays convergence-trackable by commit and a later on-device `git pull`
+# finds a clean tree. Ownership is restored after each sync (we run as
+# root, the card's repos usually belong to uid 1000).
+
+set -u
+
+SELF="$(dirname "$(readlink -f "$0")")"
+
+# ---- targets: name | local source repo | path on the card -----------------
+# The source for Pi-tools is the checkout this script lives in; HPlayer2
+# defaults to its sibling. Override with SDCONVERGE_HPLAYER2_SRC.
+PITOOLS_SRC="$(readlink -f "$SELF/..")"
+HPLAYER2_SRC="${SDCONVERGE_HPLAYER2_SRC:-$(readlink -f "$SELF/../../HPlayer2")}"
+REPOS=(
+    "Pi-tools|$PITOOLS_SRC|/opt/Pi-tools"
+    "HPlayer2|$HPLAYER2_SRC|/opt/HPlayer2"
+)
+
+LOG="${SDCONVERGE_LOG:-$(getent passwd "${SUDO_USER:-$USER}" | cut -d: -f6)/sd-converge.csv}"
+
+DRY=0; ONCE=0; APPLY_TO=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --dry-run)  DRY=1 ;;
+        --once)     ONCE=1 ;;
+        --apply-to) APPLY_TO="${2:?--apply-to needs a directory}"; shift ;;
+        *) sed -n '2,20p' "$0" | sed 's/^# \?//'; exit 2 ;;
+    esac
+    shift
+done
+
+C_OK=$'\033[1;32m'; C_ERR=$'\033[1;31m'; C_WARN=$'\033[1;33m'; C_END=$'\033[0m'
+say()  { echo "  $*"; }
+ok()   { echo "${C_OK}  $*${C_END}"; }
+warn() { echo "${C_WARN}  $*${C_END}"; }
+err()  { echo "${C_ERR}  $*${C_END}"; }
+
+GIT() { git -c safe.directory='*' "$@"; }
+
+# the carousel mounts devices: root only. --apply-to works unprivileged on
+# trees you own (chown becomes a no-op); use root for a real card mount.
+if [ "$(id -u)" != 0 ] && [ -z "$APPLY_TO" ]; then
+    echo "run me as root (sudo) — mounting and chown need it"; exit 1
+fi
+
+for spec in "${REPOS[@]}"; do
+    src="${spec#*|}"; src="${src%|*}"
+    [ -d "$src/.git" ] || { err "source repo missing: $src"; exit 1; }
+done
+
+# ---- campaign hook --------------------------------------------------------
+# 2026-07-24: audiohub graph v2.1 (HDMI softvol mute). Installs the graph
+# from the CARD's Pi-tools checkout (never from this machine directly) so
+# graph and scripts can't skew. Extend or replace for the next campaign.
+post_apply() {
+    local mnt="$1" cur="$mnt/etc/asound.conf" variant="pi3"
+    if [ ! -f "$cur" ] || ! head -1 "$cur" | grep -q "audiohub-graph"; then
+        err "no audiohub graph marker in /etc/asound.conf — pre-7.1 card? (reflash-only)"
+        return 1
+    fi
+    case "$(head -1 "$cur")" in
+        *x86*) variant="x86" ;;
+    esac
+    # normally from the CARD's just-fast-forwarded checkout; a dry run hasn't
+    # touched it, so preview against what the checkout will become
+    local src="$mnt/opt/Pi-tools/audiohub/asound.conf-$variant"
+    [ "$DRY" = 1 ] && src="$PITOOLS_SRC/audiohub/asound.conf-$variant"
+    if cmp -s "$src" "$cur"; then
+        say "asound.conf: already $(head -1 "$cur" | awk '{print $2}')"
+    elif [ "$DRY" = 1 ]; then
+        warn "asound.conf: WOULD install $(head -1 "$src" | awk '{print $2}')"
+    else
+        cp "$src" "$cur" && { chown 0:0 "$cur" 2>/dev/null || true; }
+        say "asound.conf: installed $(head -1 "$cur" | awk '{print $2}')"
+    fi
+}
+
+# markers verified after apply: "file|must contain"
+VERIFY_MARKERS=(
+    "/etc/asound.conf|audiohub-graph-v2.1"
+)
+
+# ---- per-card work --------------------------------------------------------
+
+sync_repo() {   # sync_repo <mnt> <name> <src> <cardpath>  -> sets R_STATUS
+    local mnt="$1" name="$2" src="$3" dst="$mnt$4"
+    R_STATUS="error"
+    [ -d "$dst/.git" ] || { err "$name: no checkout at $4"; return 1; }
+
+    local branch before target owner
+    branch=$(GIT -C "$dst" rev-parse --abbrev-ref HEAD 2>/dev/null)
+    before=$(GIT -C "$dst" rev-parse --short HEAD 2>/dev/null)
+    if [ -z "$branch" ] || [ "$branch" = "HEAD" ]; then
+        err "$name: detached or unreadable HEAD — FLAGGED, untouched"; return 1
+    fi
+    if [ -n "$(GIT -C "$dst" status --porcelain 2>/dev/null)" ]; then
+        err "$name: dirty working tree on branch $branch — FLAGGED, untouched"; return 1
+    fi
+    if ! target=$(GIT -C "$src" rev-parse --short --verify "refs/heads/$branch" 2>/dev/null); then
+        err "$name: card is on '$branch', no such local branch here — FLAGGED"; return 1
+    fi
+
+    if [ "$before" = "$target" ]; then
+        say "$name: already at $target ($branch)"; R_STATUS="$target"; return 0
+    fi
+    if [ "$DRY" = 1 ]; then
+        warn "$name: WOULD fast-forward $branch $before -> $target"
+        R_STATUS="dry:$before->$target"; return 0
+    fi
+
+    owner=$(stat -c '%u:%g' "$dst")
+    local out
+    if ! out=$(GIT -C "$dst" fetch -q "$src" "$branch" 2>&1); then
+        err "$name: fetch failed:"; echo "$out" | sed 's/^/    /'; return 1
+    fi
+    if ! out=$(GIT -C "$dst" merge --ff-only -q FETCH_HEAD 2>&1); then
+        err "$name: NOT fast-forwardable from $before — diverged card, FLAGGED"
+        echo "$out" | sed 's/^/    /'; return 1
+    fi
+    # a card AHEAD of us "ff-merges" as a no-op (ancestor): that's unknown
+    # local commits, not convergence — flag it, nothing was changed
+    if [ "$(GIT -C "$dst" rev-parse --short HEAD)" != "$target" ]; then
+        err "$name: card is AHEAD of local $branch ($before vs $target) — FLAGGED, untouched"
+        return 1
+    fi
+    # root wrote objects + worktree files: give them back to the card's user
+    chown -R "$owner" "$dst/.git"
+    GIT -C "$dst" diff --name-only -z "$before" HEAD 2>/dev/null \
+        | while IFS= read -r -d '' f; do chown "$owner" "$dst/$f" 2>/dev/null; done
+    ok "$name: $branch $before -> $(GIT -C "$dst" rev-parse --short HEAD)"
+    R_STATUS="$before->$target"
+}
+
+apply_card() {  # apply_card <mnt> <devlabel>
+    local mnt="$1" dev="$2" host="?" status="ok" line
+    [ -f "$mnt/etc/hostname" ] && host=$(tr -d ' \n' < "$mnt/etc/hostname")
+    echo
+    echo "== card: $host ($dev)"
+
+    local results=""
+    for spec in "${REPOS[@]}"; do
+        local name="${spec%%|*}" rest="${spec#*|}"
+        local src="${rest%|*}" cardpath="${rest#*|}"
+        if sync_repo "$mnt" "$name" "$src" "$cardpath"; then
+            results="$results$name=$R_STATUS "
+        else
+            results="$results$name=FLAGGED "; status="flagged"
+        fi
+    done
+
+    if [ "$status" = "ok" ]; then
+        post_apply "$mnt" || status="flagged"
+    else
+        warn "skipping post_apply (a repo was flagged)"
+    fi
+
+    if [ "$status" = "ok" ] && [ "$DRY" != 1 ]; then
+        for m in "${VERIFY_MARKERS[@]}"; do
+            local f="${m%%|*}" want="${m#*|}"
+            if grep -q "$want" "$mnt$f" 2>/dev/null; then
+                say "verify: $f has $want"
+            else
+                err "verify FAILED: $f lacks $want"; status="verify-failed"
+            fi
+        done
+    fi
+
+    line="$(date -Is),$host,$dev,$status,$results"
+    [ "$DRY" = 1 ] || { echo "$line" >> "$LOG" 2>/dev/null && chown "${SUDO_USER:-$USER}" "$LOG" 2>/dev/null; }
+    if [ "$status" = "ok" ]; then
+        ok "card $host: DONE  ($results)"
+    else
+        err "card $host: $status  ($results)"
+    fi
+    [ "$status" = "ok" ]
+}
+
+# ---- device carousel ------------------------------------------------------
+
+probe_rootfs() {  # probe_rootfs <partition-dev> <tmpmnt> -> 0 if signature matches
+    local part="$1" mnt="$2"
+    mount -o ro "$part" "$mnt" 2>/dev/null || return 1
+    if [ -d "$mnt/opt/Pi-tools/.git" ] && [ -d "$mnt/opt/HPlayer2/.git" ] \
+       && [ -f "$mnt/etc/hostname" ]; then
+        return 0
+    fi
+    umount "$mnt" 2>/dev/null
+    return 1
+}
+
+process_device() {  # process_device <disk>  (e.g. sdb / mmcblk0)
+    local disk="$1" dev="/dev/$1" found="" part mnt rc=1
+    if [ "$(cat "/sys/block/$disk/removable" 2>/dev/null)" != "1" ] \
+       && [[ "$disk" != mmcblk* ]]; then
+        warn "$dev is not removable — ignored"; return 1
+    fi
+    # desktop automounts get in the way: take the partitions over
+    lsblk -ln -o NAME,MOUNTPOINT "$dev" | awk '$2!=""{print $2}' \
+        | while read -r mp; do umount "$mp" 2>/dev/null; done
+
+    mnt=$(mktemp -d /tmp/sd-converge.XXXXXX)
+    for part in $(lsblk -ln -o NAME,FSTYPE "$dev" | awk '$2=="ext4"{print "/dev/"$1}'); do
+        if probe_rootfs "$part" "$mnt"; then found="$part"; break; fi
+    done
+    if [ -z "$found" ]; then
+        err "$dev: no player rootfs signature on any ext4 partition — untouched"
+        rmdir "$mnt"; return 1
+    fi
+    say "rootfs: $found"
+    if [ "$DRY" != 1 ]; then
+        mount -o remount,rw "$found" "$mnt" || { err "remount rw failed"; umount "$mnt"; rmdir "$mnt"; return 1; }
+    fi
+
+    apply_card "$mnt" "$found"; rc=$?
+
+    sync
+    umount "$mnt" && rmdir "$mnt"
+    udisksctl power-off -b "$dev" >/dev/null 2>&1 \
+        || eject "$dev" >/dev/null 2>&1 || true
+    printf '\a'
+    if [ $rc -eq 0 ]; then
+        ok ">> safe to remove the card <<"
+    else
+        err ">> card NOT converged (see above) — safe to remove <<"
+    fi
+    return $rc
+}
+
+list_disks() { ls /sys/block 2>/dev/null | grep -E '^(sd|mmcblk)' || true; }
+
+if [ -n "$APPLY_TO" ]; then
+    [ -d "$APPLY_TO/etc" ] || { err "$APPLY_TO does not look like a mounted rootfs"; exit 1; }
+    apply_card "$(readlink -f "$APPLY_TO")" "apply-to"
+    exit $?
+fi
+
+echo "sd-converge — sources:"
+for spec in "${REPOS[@]}"; do
+    name="${spec%%|*}"; rest="${spec#*|}"; src="${rest%|*}"
+    echo "  $name @ $src ($(GIT -C "$src" rev-parse --short HEAD) on $(GIT -C "$src" rev-parse --abbrev-ref HEAD))"
+done
+[ "$DRY" = 1 ] && warn "DRY RUN — nothing will be written"
+echo "log: $LOG"
+
+BASELINE=$(list_disks)
+echo
+echo "waiting for a card... (Ctrl-C to quit; disks present now are ignored:" \
+     "$(echo $BASELINE | tr '\n' ' '))"
+while true; do
+    sleep 1
+    for d in $(list_disks); do
+        echo "$BASELINE" | grep -qx "$d" && continue
+        sleep 2                     # let the kernel settle partitions
+        process_device "$d"
+        # wait for THIS card to leave before accepting the next one
+        while [ -e "/sys/block/$d" ]; do sleep 1; done
+        [ "$ONCE" = 1 ] && exit 0
+        echo
+        echo "waiting for the next card..."
+    done
+done
