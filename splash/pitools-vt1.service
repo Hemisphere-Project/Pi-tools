@@ -1,0 +1,14 @@
+[Unit]
+Description=Park the display on blank VT1 (log console stays hidden on tty3)
+# plymouth exits to the kernel-console VT (tty3, where the cmdline shunts
+# all boot residue) — so the display showed logs in every mpv gap. VT1 has
+# no getty: parking there makes every gap pure black (mini-01, 2026-07-24).
+After=plymouth-quit.service
+ConditionPathExists=/dev/tty1
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/chvt 1
+
+[Install]
+WantedBy=multi-user.target

@@ -93,4 +93,11 @@ grep -q 'systemd.show_status=false' "$G" \
 update-grub
 update-initramfs -u
 
-echo "splash (x86/plymouth): silent boot + bare spinner installed"
+# park the display on blank VT1 after plymouth quits — plymouth exits to
+# the kernel-console VT (tty3), which is exactly where the boot residue
+# lands, so every mpv gap showed systemd lines instead of black
+ln -sf "$(dirname "$(readlink -f "$0")")/pitools-vt1.service" /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable -q pitools-vt1.service
+
+echo "splash (x86/plymouth): silent boot + bare spinner + VT1 parking installed"
