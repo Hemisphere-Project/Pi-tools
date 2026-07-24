@@ -80,7 +80,12 @@ systemctl mask alsa-state 2>/dev/null
 systemctl daemon-reload
 if [ "$GRAPH_OK" = true ]; then
     systemctl enable audiohub@jack audiohub@hdmi audiohub@usb
-    systemctl restart audiohub@jack audiohub@hdmi audiohub@usb
+    # one at a time: concurrent restarts can wedge a sink / race the vchiq
+    # close (see README "Kernel hazard") — same rule as `audiohub apply`
+    for u in audiohub@jack audiohub@hdmi audiohub@usb; do
+        systemctl restart "$u"
+        sleep 1
+    done
     echo "audiohub installed: $(head -1 /etc/asound.conf | cut -c3-22), forwarders enabled"
 else
     # No ALSA graph for this arch (e.g. aarch64 / pi-kms): enabling the forwarders
