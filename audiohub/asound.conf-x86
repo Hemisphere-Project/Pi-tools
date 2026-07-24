@@ -1,4 +1,4 @@
-# audiohub-graph-v2 — always-on multi-output audio hub, x86 HDA (Intel PCH)
+# audiohub-graph-v2.1 — always-on multi-output audio hub, x86 HDA (Intel PCH)
 #
 # Same design as asound.conf-pi3 (see that header for the full rationale):
 # the player application plays pcm.hplayer (plug pinned to snd-aloop at
@@ -9,7 +9,8 @@
 #                        |
 #                 hw:Loopback,1,0 --> dsnoop "aloopcap"
 #                        |-- alsaloop --> jackout   (PCH,0 analog, DOWNMIX, always)
-#                        |-- alsaloop --> hdmiout   (PCH,3 HDMI 0, ch 0/1, always)
+#                        |-- alsaloop --> hdmiout   (PCH,3 HDMI 0, ch 0/1, always,
+#                        |                           softvol mute)
 #                        `-- alsaloop --> usbout<N>:CARD=<id>  (hotplug, STRAIGHT)
 #
 # x86 twist vs the Pi: one HDA card ("PCH") carries every firmware output as
@@ -92,12 +93,27 @@ pcm.jackout {
     ttable.7.1 0.5
 }
 
-# hdmi: ch0/1 straight (device 3 = HDMI 0, first physical port)
+# hdmi: ch0/1 straight (device 3 = HDMI 0, first physical port), through a
+# softvol mute stage — same design as asound.conf-pi3: control "Audiohub
+# HDMI" anchored on the always-present Loopback card, materialized + restored
+# by audiohub-fwd at unit start (mute=hdmi in /data/audiohub.conf, toggled
+# with `audiohub mute|unmute hdmi`). 0dB = passthrough; muted, silence keeps
+# streaming so the display sees a live audio stream and hw_ptr flow-watching
+# stays valid.
 pcm.hdmiout {
     type route
     slave.pcm {
-        type plug
-        slave.pcm "hw:PCH,3"
+        type softvol
+        slave.pcm {
+            type plug
+            slave.pcm "hw:PCH,3"
+        }
+        control {
+            name "Audiohub HDMI"
+            card Loopback
+        }
+        min_dB -90.0
+        resolution 2
     }
     slave.channels 2
     ttable.0.0 1

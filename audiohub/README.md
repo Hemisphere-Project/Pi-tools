@@ -8,7 +8,7 @@ loopback; every physical output is an independent `alsaloop` forwarder:
 app --> pcm.hplayer (plug, pinned 8ch/48k) --> hw:Loopback
              hw:Loopback capture --> dsnoop "aloopcap"
                   |-- audiohub@jack --> jackout   (Headphones, downmix, always)
-                  |-- audiohub@hdmi --> hdmiout   (b1, ch0/1, always)
+                  |-- audiohub@hdmi --> hdmiout   (b1, ch0/1, always, softvol mute)
                   `-- audiohub@usb  --> usbout<N>:CARD=<id>  (hotplug, straight)
 ```
 
@@ -27,7 +27,21 @@ audio environment alone (laptop/dev case).
 
 **Control CLI** (`audiohub`): `status` · `set latency_us=25000` · `apply` ·
 `test [jack|hdmi|usb]` (plays marimba.wav on one physical output with its
-forwarder paused around the test; no argument walks all present outputs).
+forwarder paused around the test; no argument walks all present outputs) ·
+`mute|unmute [hdmi]` (see below).
+
+**HDMI mute** (graph v2.1): HDMI is the one output that can emit *unwanted*
+audio (display speakers nobody asked for), so `hdmiout` carries a softvol
+stage — control `"Audiohub HDMI"`, anchored on the always-present Loopback
+card. `audiohub mute hdmi` / `unmute hdmi` toggles it instantly: no unit
+restart, no PCM close (no vchiq exposure), and while muted alsaloop keeps
+streaming zeros, so the display keeps a live audio stream (no OSD popups)
+and hw_ptr flow-watching stays valid. Persistence: `mute=hdmi` in
+`/data/audiohub.conf`; the forwarder materializes the control (first open)
+and restores the persisted state at every unit start, BEFORE any audio can
+flow. At 0dB the softvol is a straight passthrough. Jack and USB have no
+softvol on purpose: their graphs are the calibrated venue paths and stay
+byte-identical to v2.
 
 - `latency_us` (default 30000) is the ONE forwarder target for every output —
   deterministic whatever is plugged; clamped at the 20 ms bcm2835 floor
@@ -41,8 +55,10 @@ Install: via `setup.sh` (module group `audiohub`) or `sudo ./install.sh`
 (idempotent; migrates old `hplayer-audio` installs and removes audioselect).
 Smoke test without hardware: `./desktest.sh`.
 
-Health monitoring / UI: HPlayer2's `audiohub` interface watches the units and
-the USB card and shows per-output status chips in http2.
+Health monitoring / UI: HPlayer2's `audiohub` interface watches the units,
+the USB card, and per-sink hw_ptr flow, and shows per-output status chips in
+http2; its HDMI chip drives `audiohub mute|unmute hdmi` and reflects the
+`mute=` key from the merged conf.
 
 ## Known issue — parked 2026-07-21, revisit before the 02/09 install
 

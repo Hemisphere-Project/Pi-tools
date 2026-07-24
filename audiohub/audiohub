@@ -10,6 +10,10 @@
 #                                play the test sound through the whole hub
 #                                (no arg), or through ONE physical output
 #                                (its forwarder is paused around the test)
+#   audiohub mute|unmute [hdmi]  softvol-mute the HDMI output, instantly and
+#                                persistently (mute=hdmi in /data/audiohub.conf,
+#                                restored by the forwarder at unit start).
+#                                hdmi only: the other outputs have no softvol.
 #
 # This is the third-party control surface: applications (HPlayer2, HPlayer3,
 # anything) either shell out to `audiohub set ... && audiohub apply` or write
@@ -41,7 +45,8 @@ status)
             fwd="$fwd${fwd:+,}\"${u#audiohub@}\":\"$(systemctl is-active "$u" 2>/dev/null)\""
         done
         usb=$(grep -m1 'USB-Audio' /proc/asound/cards | sed -n 's/^ *[0-9]* *\[\([^ ]*\) *\].*/\1/p')
-        printf '{"config":{%s},"forwarders":{%s},"usb_card":"%s"}\n' "$cfg" "$fwd" "$usb"
+        printf '{"config":{%s},"forwarders":{%s},"usb_card":"%s","mute":"%s"}\n' \
+               "$cfg" "$fwd" "$usb" "$(finalcfg | sed -n 's/^mute=//p')"
         exit 0
     fi
     echo "== config (later wins):"
@@ -52,6 +57,9 @@ status)
     done
     echo "== usb card:"
     grep 'USB-Audio' /proc/asound/cards || echo "  (none)"
+    echo "== hdmi mute:"
+    if finalcfg | grep -q '^mute=.*hdmi'; then echo "  MUTED (mute=hdmi)"
+    else echo "  unmuted"; fi
     ;;
 
 set)
@@ -116,7 +124,28 @@ get)
     exit 1
     ;;
 
+mute|unmute)
+    SINK="${2:-hdmi}"
+    [ "$SINK" = "hdmi" ] || { echo "no softvol stage on '$SINK' (hdmi only)"; exit 2; }
+    # live toggle: instant, no unit restart, no PCM close (the control lives
+    # on the Loopback card and exists once the forwarder has opened hdmiout)
+    if [ "$1" = "mute" ]; then V="0%"; else V="100%"; fi
+    amixer -q -c Loopback sset 'Audiohub HDMI' "$V" 2>/dev/null \
+        || echo "softvol control not up yet (old graph, or forwarder not started):" \
+                "persisted anyway, the forwarder applies it at unit start"
+    # persistence: /data/audiohub.conf is the source of truth the forwarder
+    # restores at every unit start (survives reboot on a read-only rootfs)
+    if [ -d /data ]; then
+        touch /data/audiohub.conf
+        sed -i '/^mute=/d' /data/audiohub.conf
+        [ "$1" = "mute" ] && echo 'mute=hdmi' >> /data/audiohub.conf
+    else
+        echo "/data not available: this won't survive a reboot"
+    fi
+    echo "hdmi ${1}d"
+    ;;
+
 *)
-    sed -n '2,17p' "$0" | sed 's/^# \?//'
+    sed -n '2,21p' "$0" | sed 's/^# \?//'
     ;;
 esac

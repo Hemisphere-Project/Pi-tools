@@ -132,6 +132,19 @@ else
     esac
 fi
 
+# hdmi softvol mute (graph v2.1): the "Audiohub HDMI" control only
+# materializes at the first hdmiout open — open it NOW with silence, then
+# apply the persisted state, so a muted player can never leak a burst of
+# audio between forwarder start and mute restore. Restore BOTH ways: the
+# conf is the single source of truth across recycles and reboots.
+if [ "$SINK" = "hdmi" ]; then
+    timeout 2 aplay -q -D hdmiout -t raw -f S16_LE -r 48000 -c 2 /dev/zero 2>/dev/null
+    V="100%"
+    grep -qs '^mute=.*hdmi' /etc/audiohub.conf /data/audiohub.conf && V="0%"
+    amixer -q -c Loopback sset 'Audiohub HDMI' "$V" 2>/dev/null \
+        || echo "hdmi softvol control unavailable (pre-v2.1 graph in /etc/asound.conf?)"
+fi
+
 wait_cable
 
 /usr/bin/alsaloop -C aloopcap -P "$DEV" -r 48000 -f S16_LE -c 8 -t "$LAT" -S auto &
