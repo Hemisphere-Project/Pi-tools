@@ -20,7 +20,7 @@ Two responsibilities, in order:
      the interface is handed back to NM and hostapd stops.
 """
 
-import sys, os, glob, re, filecmp, syslog, subprocess
+import sys, os, glob, re, filecmp, syslog, subprocess, time
 from shutil import copyfile
 
 
@@ -311,6 +311,16 @@ def reconcile_roles():
 
     for iface in ap:
         run(f"systemctl restart hostapd@{iface}", check=False)
+        if iface not in previously:
+            # Fresh handover from NetworkManager. On the Broadcom fullmac chips the
+            # first hostapd start after wpa_supplicant's AP teardown comes up stale:
+            # AP-ENABLED and beaconing, yet every association is rejected (status 38)
+            # and the kernel logs `brcmf_vif_set_mgmt_ie: vndr ie set error : -52`.
+            # One more full stop/start cycle (hostapd@.service bounces the link in
+            # its ExecStartPre) leaves the firmware consistent. A link bounce alone
+            # does not. Seen on player-36 and player-37 (RPi 3B+), 2026-09-03.
+            time.sleep(3)
+            run(f"systemctl restart hostapd@{iface}", check=False)
 
     # dnsmasq serves the AP subnets; rebind now that the AP IPs are up.
     run("systemctl restart dnsmasq", check=False)

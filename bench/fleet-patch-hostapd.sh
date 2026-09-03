@@ -14,6 +14,11 @@
 # Because field clones can share an SSH host key (pi-tools#t-006), host-key
 # checking is disabled here — this is a trusted LAN provisioning task.
 #
+# When the SSH session rides the very hotspot being swapped, the link drops for a
+# few seconds while hostapd takes over. The remote apply ignores that HUP, journals
+# itself to /tmp/pitools-patch/apply.log, and this script re-joins to fetch the
+# outcome — so a dropped session is not a failed patch.
+#
 #   Usage: fleet-patch-hostapd.sh [-n] [-r] [target ...]
 #     -n   dry-run: preflight + show plan, change nothing
 #     -r   reboot each player after patching (default: live switch, no reboot)
@@ -27,7 +32,8 @@ NT_DIR="$REPO_DIR/network-tools"
 MODULE_FILES=(setnet 'hostapd@.service' module.ini)
 
 HOSTAPD_DEB="${HOSTAPD_DEB:-$HOME/.cache/pitools-fleet/hostapd_2%3a2.7+git20190128+0c1e29f-6+deb10u4_armhf.deb}"
-SSH_OPTS=(-o ConnectTimeout=8 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
+SSH_OPTS=(-o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3
+          -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
 DEFAULT_TARGET="root@10.0.0.1"
 
 DRY=0
@@ -61,8 +67,12 @@ STAGE=/tmp/pitools-patch
 NT=/opt/Pi-tools/network-tools
 REBOOT="${1:-0}"
 
-finish_ro() { sync; ro >/dev/null 2>&1 || true; }
-trap finish_ro EXIT
+# The session we run in usually rides the hotspot we are about to swap: outlive
+# the drop, and leave a journal + exit code the laptop can fetch once it re-joins.
+trap '' HUP PIPE
+exec > >(tee -p -a "$STAGE/apply.log") 2>&1
+finish() { local rc=$?; sync; ro >/dev/null 2>&1 || true; echo "$rc" > "$STAGE/apply.rc"; }
+trap finish EXIT
 
 command -v rw >/dev/null 2>&1 || { echo "  FAIL: no rw/ro helper — not a RastaOS player?"; exit 2; }
 [ -d "$NT" ] || { echo "  FAIL: $NT missing — Pi-tools not installed?"; exit 2; }
@@ -133,6 +143,39 @@ patch_one() {
   scp -q "${SSH_OPTS[@]}" "$NT_DIR/setnet" "$NT_DIR/hostapd@.service" "$NT_DIR/module.ini" "$HOSTAPD_DEB" "$t":/tmp/pitools-patch/ \
     || { echo "  FAIL: scp artifacts"; return 1; }
   ssh "${SSH_OPTS[@]}" "$t" "bash -s $REBOOT" <<< "$REMOTE_APPLY"
+  local rc=$?
+  [ "$rc" -ne 255 ] && return "$rc"
+
+  # Transport died — expected when we ride the hotspot being swapped to hostapd.
+  # The remote apply keeps going; re-join and fetch its outcome.
+  # Every player answers on the same hotspot address, and a laptop that knows
+  # several of them may auto-join a neighbour after the drop — so trust nothing
+  # until the hostname matches the one we started on.
+  echo "  ssh dropped (hotspot swap) — waiting for $host to come back..."
+  local deadline=$((SECONDS + 150)) out h up
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    sleep 5
+    out=$(ssh "${SSH_OPTS[@]}" "$t" 'hostname; cut -d. -f1 /proc/uptime; cat /tmp/pitools-patch/apply.rc 2>/dev/null' 2>/dev/null) || continue
+    { read -r h; read -r up; read -r rc; } <<< "$out"
+    if [ "$h" != "$host" ]; then
+      echo "  re-joined $h, not $host — re-join ${host}'s hotspot"
+      # Best effort: the laptop profile is usually named after the SSID (= hostname).
+      command -v nmcli >/dev/null 2>&1 && nmcli -t -f NAME con show 2>/dev/null | grep -qx "$host" \
+        && nmcli con up "$host" >/dev/null 2>&1
+      continue
+    fi
+    if [ -z "$rc" ]; then
+      if [ "$up" -lt 90 ] 2>/dev/null; then
+        echo "  $host rebooted (up ${up}s) — outcome lost with /tmp; re-run to VERIFY (idempotent)"
+        return 0
+      fi
+      continue                             # still applying
+    fi
+    ssh "${SSH_OPTS[@]}" "$t" 'cat /tmp/pitools-patch/apply.log' 2>/dev/null | sed -n '/running setnet/,$p' | tail -n +2
+    return "$rc"
+  done
+  echo "  FAIL: no outcome within 150s — re-run once the hotspot is back (idempotent)"
+  return 1
 }
 
 echo "== Pi-tools hostapd fleet patch =="

@@ -10,8 +10,14 @@ ConditionPathExists=/etc/hostapd/%i.conf
 
 [Service]
 Type=simple
-# Bring the interface up and apply the static AP address parsed from the profile.
-ExecStartPre=/bin/sh -c 'ip link set %i up || true; if [ -s /etc/hostapd/%i.ipaddr ]; then ip addr replace "$(cat /etc/hostapd/%i.ipaddr)" dev %i; fi'
+# Start from a clean interface, then apply the static AP address parsed from the
+# profile. The link bounce matters: after a live wpa_supplicant -> hostapd handover
+# (fleet-patch, setnet on a running player) the Broadcom fullmac firmware keeps a
+# stale AP state — hostapd reports AP-ENABLED but every association is rejected with
+# status 38 — and NetworkManager's leftover noprefixroute address would keep the AP
+# subnet unrouted (`ip addr replace` never rewrites an existing address). Both seen
+# on player-36, 2026-09-03. Harmless at boot, where the interface is down and bare.
+ExecStartPre=/bin/sh -c 'ip link set %i down 2>/dev/null; ip addr flush dev %i 2>/dev/null; sleep 1; ip link set %i up || true; if [ -s /etc/hostapd/%i.ipaddr ]; then ip addr replace "$(cat /etc/hostapd/%i.ipaddr)" dev %i; fi'
 ExecStart=/usr/sbin/hostapd /etc/hostapd/%i.conf
 ExecStopPost=/bin/sh -c 'if [ -s /etc/hostapd/%i.ipaddr ]; then ip addr del "$(cat /etc/hostapd/%i.ipaddr)" dev %i 2>/dev/null || true; fi'
 Restart=on-failure
