@@ -79,24 +79,34 @@ command -v rw >/dev/null 2>&1 || { echo "  FAIL: no rw/ro helper — not a Rasta
 
 rw >/dev/null 2>&1 || { echo "  FAIL: cannot remount rootfs read-write"; exit 2; }
 
-# 1. Role-aware network-tools module files.
-cp "$STAGE/setnet" "$STAGE/hostapd@.service" "$STAGE/module.ini" "$NT/" || { echo "  FAIL: copy module files"; exit 2; }
-chmod 755 "$NT/setnet"
-echo "  module files updated"
+# Order matters: hostapd first, the module files LAST. A failure part-way must
+# leave the player as it was — a new role-aware setnet without hostapd takes the
+# interface away from NetworkManager at the next boot and leaves NO hotspot at
+# all (oyiri-48, 2026-09-03: dpkg failed, reboot, dark player).
 
-# 2. hostapd (offline dpkg install; deps already present via wpasupplicant).
-if command -v hostapd >/dev/null 2>&1; then
+# 1. hostapd (offline dpkg install; deps already present via wpasupplicant).
+#    The stock single-instance unit is masked up front: dpkg's postinst would
+#    otherwise try to start it without a config.
+systemctl mask hostapd.service >/dev/null 2>&1 || true
+if dpkg-query -W -f='${Status}' hostapd 2>/dev/null | grep -q "install ok installed"; then
   echo "  hostapd already installed ($(hostapd -v 2>&1 | head -1))"
 else
-  dpkg -i "$STAGE"/hostapd_*.deb >/dev/null 2>&1 || { echo "  FAIL: hostapd dpkg -i"; exit 2; }
+  if ! out=$(dpkg -i "$STAGE"/hostapd_*.deb 2>&1); then
+    echo "  FAIL: hostapd dpkg -i"; echo "$out" | grep -iE "error|fail|cannot|unable|no space" | tail -4 | sed 's/^/    /'; exit 2
+  fi
   echo "  hostapd installed"
 fi
 
-# 3. Per-interface service + neutralize the stock single-instance unit.
+# 2. Per-interface service.
 ln -sf "$NT/hostapd@.service" /etc/systemd/system/hostapd@.service
-systemctl mask hostapd.service >/dev/null 2>&1 || true
 systemctl daemon-reload
 echo "  hostapd@.service installed, stock hostapd.service masked"
+
+# 3. Role-aware network-tools module files — last, setnet last of all.
+cp "$STAGE/hostapd@.service" "$STAGE/module.ini" "$NT/" && cp "$STAGE/setnet" "$NT/setnet" \
+  || { echo "  FAIL: copy module files"; exit 2; }
+chmod 755 "$NT/setnet"
+echo "  module files updated"
 
 # 4. Reconcile: mode=ap profiles -> hostapd, the rest stay on NetworkManager.
 echo "  running setnet..."
