@@ -48,11 +48,24 @@ case "$SINK" in
     jack) DEV="jackout" ;;
     hdmi) DEV="hdmiout" ;;
     usb)
+        # Only a USB-Audio card WITH a playback PCM is an output. A USB-MIDI class
+        # device enumerates as "USB-Audio" too (the Nowde AtomS3 node: card
+        # "D19268", midi0 only, no pcm*) and matched the old `grep -m1 USB-Audio`:
+        # the forwarder opened hw:D19268, failed, exited, and Restart=always
+        # recycled it every ~5 s for as long as the node stayed plugged — 363
+        # restarts in an hour on player-000 (2026-09-04) and the http2 USB chip
+        # blinking green/red on a player with no USB audio at all. Every Biennale
+        # outdoor player carries a Nowde node, so this is the parc's normal state.
+        usb_playback_card() {
+            grep 'USB-Audio' /proc/asound/cards | while read -r idx _rest; do
+                ls "/proc/asound/card$idx"/pcm*p >/dev/null 2>&1 || continue
+                echo "$idx"; break
+            done
+        }
         while true; do
-            LINE=$(grep -m1 'USB-Audio' /proc/asound/cards)
-            if [ -n "$LINE" ]; then
-                IDX=$(echo "$LINE" | awk '{print $1}')
-                CARD=$(echo "$LINE" | sed -n 's/^ *[0-9]* *\[\([^ ]*\) *\].*/\1/p')
+            IDX=$(usb_playback_card)
+            if [ -n "$IDX" ]; then
+                CARD=$(sed -n "s/^ *$IDX *\[\([^ ]*\) *\].*/\1/p" /proc/asound/cards)
                 [ -n "$CARD" ] && break
             fi
             sleep 2
