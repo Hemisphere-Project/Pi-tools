@@ -33,6 +33,26 @@ if [ -z "$year" ] || [ "$year" -lt 2025 ]; then
     exit 1
 fi
 
+# Deadband: the HTTP Date header has 1 s resolution, so every `date -s` is a
+# hard step of up to ~1 s (measured -0.24 s on player-000, 2026-09-04). A
+# Zyre/wallclock-synced parc chases every step on every slave: the peer
+# clockshift is re-sampled only every 120 s, so each run costs two speed
+# excursions per online player. The clock only needs to be right to the minute
+# (schedules, logs), so leave it alone unless it is off by more than DEADBAND
+# seconds. The fake-clock floor is still refreshed so an offline reboot keeps
+# the newest time we saw.
+DEADBAND=${DATESYNC_DEADBAND:-3}
+remote_s=$(date -d "$remote" +%s 2>/dev/null)
+local_s=$(date +%s)
+if [ -n "$remote_s" ]; then
+    delta=$((remote_s - local_s))
+    if [ "${delta#-}" -le "$DEADBAND" ]; then
+        echo "[datesync] clock within ${delta}s of remote — leaving it alone"
+        command -v fake-clock >/dev/null 2>&1 && fake-clock save 2>/dev/null || true
+        exit 0
+    fi
+fi
+
 if date -s "$remote" >/dev/null; then
     echo "[datesync] clock set to $remote"
     # Persist as the fake-clock floor so a later offline boot keeps this time.
