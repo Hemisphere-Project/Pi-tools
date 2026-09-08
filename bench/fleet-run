@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+# fleet-run — one pass over a roster of player hotspots, running YOUR command on
+# each one, and skipping the dead ones instead of stalling on them.
+#
+# Run from the laptop. For every player in the roster it switches the laptop onto
+# that player's hotspot, proves by `hostname` that it is really talking to that
+# player, runs the command you typed, records one outcome, and moves on. At the
+# end: a table with one row per player, and `--retry-misses` to re-walk only the
+# ones it never reached.
+#
+# It is deliberately GENERIC. It does not know what a deploy is, which ref you
+# want, or what "converged" means — the command is readable at the invocation,
+# which is what makes it safe to point at six players in a garden. An opinionated
+# deploy campaign fails differently (wrong content, wrong player) and is not this
+# tool.
+#
+#   Usage: fleet-run [options] <command>
+#          fleet-run [options] -- <command> [args...]
+#
+#     -r, --roster FILE      roster file (see FORMAT below)
+#     -n, --dry-run          print the plan per player; touch nothing at all
+#         --retry-misses     second pass over players that were not reached
+#         --only NAME[,...]  restrict the walk to these roster names
+#         --timeout SEC      per-player wall budget           (default 180)
+#         --join-timeout SEC association budget inside it     (default 45)
+#         --local            run the command on the LAPTOP while joined to the
+#                            player, not on the player (scp, rsync, curl…);
+#                            $FLEET_NAME/$FLEET_SSID/$FLEET_TARGET are exported
+#         --keep-joined      stay associated after the last player
+#     -h, --help
+#
+#   In the command, `%h` -> player name, `%s` -> ssid, `%t` -> ssh target.
+#
+#   Roster search order when -r is absent:
+#     ./fleet-roster · ~/.config/pitools/fleet-roster · $(dirname $0)/fleet-roster
+#
+#   FORMAT (whitespace separated, `#` comments ignored):
+#     <name> [ssid] [target]
+#   `name` is the player's hostname AND the identity assert; ssid defaults to it,
+#   target defaults to root@10.0.0.1. See fixtures/fleet-roster.example.
+#
+#   Environment: FLEET_PSK / FLEET_PSK_FILE (default ~/.config/pitools/fleet.psk)
+#                FLEET_IFACE  FLEET_SSH_KEY  FLEET_STATIC=<laptop octet>
+#
+#   Exit: 0 when every player ended `ok`, 1 otherwise.
+#
+#   Examples:
+#     fleet-run --dry-run -r fixtures/fleet-roster.example 'uptime'
+#     fleet-run --retry-misses 'cd /opt/HPlayer2 && git pull --ff-only'
+#     fleet-run --local -- scp ./media.mp4 root@10.0.0.1:/data/
+#
+# NOT PROVEN ON RADIO YET: bench smoke is pi-tools#t-025. Until that runs, the
+# fallback is the by-hand procedure of 2026-09-08 — a slow day, not a broken one.
+set -uo pipefail
+
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=bench/fleet-lib.sh
+. "$SELF_DIR/fleet-lib.sh"
+
+usage() { sed -n '2,53p' "$0" | sed 's/^# \?//'; }
+
+ROSTER=""; DRY=0; RETRY=0; ONLY=""; BUDGET=180; JOINB=45; RUNLOCAL=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -r|--roster)     ROSTER="${2:?--roster needs a file}"; shift ;;
+    -n|--dry-run)    DRY=1 ;;
+    --retry-misses)  RETRY=1 ;;
+    --only)          ONLY="${2:?--only needs a name list}"; shift ;;
+    --timeout)       BUDGET="${2:?--timeout needs seconds}"; shift ;;
+    --join-timeout)  JOINB="${2:?--join-timeout needs seconds}"; shift ;;
+    --local)         RUNLOCAL=1 ;;
+    --keep-joined)   FLEET_KEEP=1 ;;
+    -h|--help)       usage; exit 0 ;;
+    --)              shift; break ;;
+    -*)              fleet_say "unknown option: $1"; usage >&2; exit 2 ;;
+    *)               break ;;
+  esac
+  shift
+done
+
+CMD="$*"
+[ -n "$CMD" ] || { fleet_say "ERROR: no command given"; usage >&2; exit 2; }
+case "$BUDGET$JOINB" in *[!0-9]*) fleet_say "ERROR: timeouts must be integers"; exit 2 ;; esac
+
+if [ -z "$ROSTER" ]; then
+  for c in "./fleet-roster" "$HOME/.config/pitools/fleet-roster" "$SELF_DIR/fleet-roster"; do
+    [ -r "$c" ] && { ROSTER="$c"; break; }
+  done
+fi
+[ -n "$ROSTER" ] || { fleet_say "ERROR: no roster found — pass -r FILE"; exit 2; }
+
+# --dry-run works on a machine with no radio and no nmcli: that is the point of
+# it, and it is what pi-tools#t-024 ① asks for.
+[ "$DRY" = 1 ] || fleet_require_tools || exit 2
+
+mapfile -t ROWS < <(fleet_roster_read "$ROSTER") || exit 2
+[ "${#ROWS[@]}" -gt 0 ] || exit 2
+
+# --only filter, applied to the roster and reported, never silent.
+if [ -n "$ONLY" ]; then
+  keep=(); IFS=',' read -r -a wanted <<< "$ONLY"
+  for row in "${ROWS[@]}"; do
+    n="${row%%$'\t'*}"
+    for w in "${wanted[@]}"; do [ "$n" = "$w" ] && { keep+=("$row"); break; }; done
+  done
+  [ "${#keep[@]}" -gt 0 ] || { fleet_say "ERROR: --only '$ONLY' matched no roster name"; exit 2; }
+  [ "${#keep[@]}" -eq "${#wanted[@]}" ] \
+    || fleet_say "note: --only matched ${#keep[@]} of ${#wanted[@]} names"
+  ROWS=("${keep[@]}")
+fi
+
+ORDER=(); for row in "${ROWS[@]}"; do ORDER+=("${row%%$'\t'*}"); done
+
+fleet_say "== pi-tools fleet-run =="
+fleet_say "   roster : $ROSTER  (${#ROWS[@]} player/s)"
+fleet_say "   command: $CMD    [$([ "$RUNLOCAL" = 1 ] && echo laptop-side || echo on-player)]"
+fleet_say "   budget : ${BUDGET}s per player (join ${JOINB}s)  dry-run=$DRY retry-misses=$RETRY"
+fleet_say ""
+
+expand() { local s="$1"; s="${s//%h/$2}"; s="${s//%s/$3}"; s="${s//%t/$4}"; printf '%s' "$s"; }
+
+walk() {                       # walk <row>...
+  local row name ssid target cmd
+  for row in "$@"; do
+    IFS=$'\t' read -r name ssid target <<< "$row"
+    cmd="$(expand "$CMD" "$name" "$ssid" "$target")"
+    if [ "$DRY" = 1 ]; then
+      fleet_say "== $name  (ssid=$ssid target=$target)"
+      fleet_step "would ensure profile '$ssid' (autoconnect no, never-default, ignore-auto-dns)"
+      fleet_step "would join '$ssid', then assert hostname == '$name' before acting"
+      fleet_step "would run $([ "$RUNLOCAL" = 1 ] && echo 'HERE' || echo "on $target"): $cmd"
+      fleet_step "would leave '$ssid'; budget ${BUDGET}s (join ${JOINB}s)"
+      fleet_record "$name" dry - 0 "plan only — nothing touched"
+    else
+      fleet_walk_one "$name" "$ssid" "$target" "$cmd" "$BUDGET" "$JOINB" "$RUNLOCAL"
+    fi
+  done
+}
+
+walk "${ROWS[@]}"
+
+# Second pass: only the players we never reached. `fail` is NOT retried — the
+# command ran and said no, and re-running someone else's command is a decision,
+# not a retry.
+if [ "$RETRY" = 1 ] && [ "$DRY" = 0 ]; then
+  mapfile -t AGAIN < <(fleet_retry_names)
+  if [ "${#AGAIN[@]}" -gt 0 ]; then
+    fleet_say ""
+    fleet_say "== retry pass: ${#AGAIN[@]} player/s not reached (${AGAIN[*]}) =="
+    retry_rows=()
+    for name in "${AGAIN[@]}"; do
+      for row in "${ROWS[@]}"; do
+        [ "${row%%$'\t'*}" = "$name" ] && { retry_rows+=("$row"); fleet_forget "$name"; break; }
+      done
+    done
+    walk "${retry_rows[@]}"
+    fleet_reorder "${ORDER[@]}"
+  else
+    fleet_say ""
+    fleet_say "== retry pass: nothing to retry =="
+  fi
+fi
+
+fleet_say ""
+fleet_table
+ok="$(fleet_count_state ok)"; dry="$(fleet_count_state dry)"
+fleet_say ""
+fleet_say "== ${ok} ok · $(fleet_count_state fail) fail · $(fleet_count_state miss) miss · $(fleet_count_state unreachable) unreachable · $(fleet_count_state wrong-host) wrong-host · $(fleet_count_state timeout) timeout =="
+
+[ "$DRY" = 1 ] && { [ "$dry" -eq "${#ROWS[@]}" ]; exit $?; }
+[ "$ok" -eq "${#ROWS[@]}" ]

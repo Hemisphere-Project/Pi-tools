@@ -1,0 +1,40 @@
+# fleet-roster.example — a roster for bench/fleet-run.
+#
+# Copy it next to where you work (./fleet-roster) or to
+# ~/.config/pitools/fleet-roster, and put the real player names in it. This file
+# is an EXAMPLE and is deliberately not a real fleet: it exists so `fleet-run
+# --dry-run -r bench/fixtures/fleet-roster.example 'uptime'` runs the whole loop
+# on a machine with no radio, no nmcli and no players in earshot.
+#
+# Columns, whitespace separated. `#` starts a comment, blank lines are ignored:
+#
+#     <name> [ssid] [target]
+#
+#   name    the player's HOSTNAME. This is the identity fleet-run asserts before
+#           it runs anything, and it is the one column that must be right —
+#           every player answers on 10.0.0.1, so the address proves nothing.
+#           It is the `hostrename@<name>` line in the card's /boot/starter.txt.
+#   ssid    defaults to name. Renaming a player renames its SSID, so they match
+#           unless someone has diverged them on purpose.
+#   target  defaults to root@10.0.0.1. Give it something else to reach a player
+#           over ethernet instead of its own hotspot.
+
+# --- the bench player, real (pi-tools#t-025 smoke-tests against this one) -----
+player-000
+
+# --- example fleet rows: name only, ssid and target defaulted -----------------
+player-066
+player-067
+player-068
+
+# --- an SSID that diverged from the hostname ---------------------------------
+player-069        biennale-069
+
+# --- a player reached over ethernet instead of its hotspot -------------------
+oyiri-48          oyiri-48        root@192.168.1.48
+
+# --- a deliberate MISS: this hotspot is not on air, and never will be. --------
+# Keep a row like this in a bench roster: it is how you see, in seconds rather
+# than in a stall, that an absent player costs the pass nothing. It is also the
+# second half of the pi-tools#t-025 smoke test.
+player-absent
