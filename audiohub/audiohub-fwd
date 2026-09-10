@@ -104,16 +104,31 @@ case "$SINK" in
             [ -n "$V" ] && USBVOL="$V"
         done
         USBVOL=${USBVOL:-0dB}
+        CTL=""; WANT=""
+        usb_level() { amixer -c "$CARD" sget "$CTL" 2>/dev/null | sed -n 's/.*Playback \([0-9]\+\) \[.*/\1/p' | head -1; }
         if [ "$USBVOL" != "keep" ]; then
             CTL=$(amixer -c "$CARD" scontrols 2>/dev/null \
                   | sed -n "s/^Simple mixer control '\([^']*\)',0$/\1/p" \
                   | grep -m1 -E '^(Speaker|PCM|Headphone|Master)$')
             if [ -n "$CTL" ] && amixer -q -c "$CARD" sset "$CTL" "$USBVOL" unmute 2>/dev/null; then
-                echo "usb volume: $CTL = $USBVOL"
+                WANT=$(usb_level)
+                echo "usb volume: $CTL = $USBVOL (raw $WANT)"
             else
                 echo "usb volume: no settable playback control on $CARD (left as is)"
+                CTL=""
             fi
         fi
+        # The chip re-applies its own remembered level shortly after enumeration: at boot the
+        # set above landed 100 ms after snd-usb-audio registered and S05-55-L was back at
+        # -20 dB minutes later (2026-09-10). Re-assert from the supervision loop below whenever
+        # the raw value drifts from what we set — also covers anything else touching it.
+        usb_volume_pin() {
+            [ -n "$CTL" ] && [ -n "$WANT" ] || return 0
+            local cur; cur=$(usb_level)
+            [ -n "$cur" ] && [ "$cur" != "$WANT" ] || return 0
+            amixer -q -c "$CARD" sset "$CTL" "$USBVOL" unmute 2>/dev/null \
+                && echo "usb volume: $CTL was raw $cur, re-pinned to $USBVOL"
+        }
         wait_cable
 
         # alsaloop does NOT exit when its device vanishes (it error-loops or
@@ -130,6 +145,7 @@ case "$SINK" in
                 wait "$LOOP" 2>/dev/null
                 exit 1
             fi
+            usb_volume_pin
             sleep 2
         done
         wait "$LOOP"
