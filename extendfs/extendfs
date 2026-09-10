@@ -300,7 +300,13 @@ if [[ "$STAGE2_MODE" == false ]]; then
         # it computes the safe maximum itself, including the GPT backup header that
         # the old "$DISK_SIZE - $PART_START" math overshot. It exits non-zero with
         # NOCHANGE when the partition is already at the maximum.
-        GP_OUT=$(growpart "$DISK_DEV" "$PART_NUM" 2>&1); GP_RC=$?
+        # `set -e` aborts on a failing command substitution in a plain assignment, so
+        # the `|| GP_RC=$?` is load-bearing: without it growpart's NOCHANGE exit (1)
+        # killed the script here on every card whose /data had been grown off-device
+        # before first boot — identity never reset, drive-id never written, and the
+        # whole LEA fleet shared the golden's machine-id and SSH host keys (2026-09-10).
+        GP_RC=0
+        GP_OUT=$(growpart "$DISK_DEV" "$PART_NUM" 2>&1) || GP_RC=$?
         echo "$GP_OUT"
         if [[ "$GP_RC" -ne 0 ]] && ! echo "$GP_OUT" | grep -qi 'NOCHANGE'; then
                 echo "ERROR: growpart failed (rc=$GP_RC)"
