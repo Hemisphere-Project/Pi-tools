@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# verify — what "green" means for Pi-tools, checked from a keyboard.
+#
+#   ./bench/verify        (from anywhere inside the checkout)
+#
+# This repo has no test suite and cannot have much of one: its product is shell
+# installers that run as root, on a Pi or an N100, against real audio cards and
+# real radios. So this is deliberately a FLOOR, not a proof — two layers, each
+# catching a class of break that is otherwise found by a player, at boot, in a
+# garden.
+#
+#   1. SYNTAX FLOOR — every tracked shell script parses (`bash -n`) and every
+#      tracked python file compiles. Shebang-detected, because most scripts here
+#      are extensionless (`rorw/ro`, `datesync`, `audiohub/audiohub`) and at
+#      least one `.sh` is prose with no shebang.
+#
+#   2. module.ini REFERENTIAL INTEGRITY — every file a module.ini names must
+#      exist. `setup/installer.py` links bins and installs services, timers and
+#      udev rules under `if os.path.isfile(src):` with NO else branch: a
+#      module.ini naming a file that is not there installs nothing, says
+#      nothing, and reports success. Layer 2 is the else branch the installer
+#      does not have. Details in bench/verify-modules.py.
+#
+# WHAT A GREEN DOES NOT PROVE — read this before trusting one:
+#
+#   * that any script DOES the right thing. `bash -n` parses; it never runs.
+#   * anything at all about hardware. No Pi, no N100, no sound card, no radio,
+#     no card reader is involved. The tools that need those are in this same
+#     directory, and none of them runs here.
+#   * that an install SUCCEEDS. Layer 2 proves a module's files are present in
+#     the repo — not that installing them onto a box works.
+#
+# Green is "nothing is obviously broken", which is exactly what a commit gate
+# should mean. It is not "it works".
+#
+# Exit 0 green, 1 red, 2 could not run. Warnings never fail the gate.
+
+set -uo pipefail
+
+cd "$(git rev-parse --show-toplevel 2>/dev/null)" || {
+    echo "verify: not inside a git checkout" >&2
+    exit 2
+}
+
+red=0
+fail() { printf 'FAIL  %s\n' "$*"; red=1; }
+ok()   { printf 'ok    %s\n' "$*"; }
+
+# ── layer 1 — syntax floor ──────────────────────────────────────────
+
+echo "── syntax floor"
+
+mapfile -d '' -t tracked < <(git ls-files -z)
+
+shell=() python=()
+for f in "${tracked[@]}"; do
+    [ -f "$f" ] || continue
+    IFS= read -r shebang < "$f" 2>/dev/null || shebang=''
+    case "$f" in *.py) python+=("$f"); continue ;; esac
+    case "$shebang" in
+        '#!'*python*) python+=("$f") ;;
+        '#!'*sh)      shell+=("$f") ;;
+    esac
+done
+
+for f in "${shell[@]}"; do
+    bash -n "$f" || fail "bash -n: $f"
+done
+[ "$red" -eq 0 ] && ok "${#shell[@]} shell script(s) parse"
+
+# py_compile drops __pycache__ next to the source; keep it out of the tree.
+pycache=$(mktemp -d)
+trap 'rm -rf "$pycache"' EXIT
+export PYTHONPYCACHEPREFIX="$pycache"
+
+pyred=0
+for f in "${python[@]}"; do
+    python3 -m py_compile "$f" || { fail "py_compile: $f"; pyred=1; }
+done
+[ "$pyred" -eq 0 ] && ok "${#python[@]} python file(s) compile"
+
+# ── layer 2 — module.ini referential integrity ──────────────────────
+
+echo
+echo "── module.ini referential integrity"
+python3 bench/verify-modules.py || red=1
+
+echo
+if [ "$red" -ne 0 ]; then
+    echo "verify: RED"
+    exit 1
+fi
+echo "verify: green — syntax and module refs only (the header says what that leaves unproven)"

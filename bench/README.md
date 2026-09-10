@@ -8,9 +8,56 @@ here.
 
 | tool | what it is for |
 |---|---|
+| `verify` + `verify-modules.py` | the commit-time floor: every script parses, every file a `module.ini` names exists |
 | `fleet-run` + `fleet-lib.sh` | walk a roster of player **hotspots**, run one command on each, skip the dead ones |
 | `fleet-patch-hostapd.sh` | one-off: convert existing players from the NM/wpa_supplicant AP to hostapd, no reflash |
 | `sd-converge` | bench SD carousel: converge player **cards** to this machine's checkouts, no network |
+
+---
+
+## `verify` — what "green" means here
+
+```sh
+./bench/verify        # exit 0 green, 1 red, 2 could not run
+```
+
+This repo has no test suite and cannot have much of one: its product is shell
+installers that run as root, on a Pi or an N100, against real cards and real
+radios. So `verify` is a **floor**, and it is worth being exact about where that
+floor sits.
+
+**Layer 1 — syntax.** Every tracked shell script parses (`bash -n`), every
+tracked python file compiles. Scripts are found by **shebang**, not extension:
+most of them are extensionless (`rorw/ro`, `datesync`, `audiohub/audiohub`), and
+`bootstrap/bootstrap-ubuntu-server-x86.sh` is the inverse — a `.sh` file that is
+prose. This catches the unclosed `fi` and the stray paren, i.e. the class of
+break otherwise found by a player, at boot, in a garden.
+
+**Layer 2 — `module.ini` referential integrity.** `setup/installer.py` links
+bins and installs services, timers and udev rules under `if os.path.isfile(src):`
+**with no else**. A `module.ini` naming a file that is not in the repo installs
+nothing, prints nothing, and reports success: the box comes up missing a unit
+and the install log is clean. Layer 2 is that missing else branch — plus
+`script = yes` without an `install.sh`, `npm = yes` without a `package.json`, a
+`platforms` token `check_platform()` does not know, and a module the installer
+lists but which has no `module.ini`.
+
+A `module.ini` reachable from neither `MODULE_GROUPS` nor `CORE_MODULES` is a
+**warning**, not a failure — unreachable-from-the-installer is a real finding,
+but it is a judgement about intent, and a gate that refuses every commit until
+someone resolves it would freeze the repo over a question nobody asked.
+
+### What a green does not prove
+
+* That any script **does** the right thing. `bash -n` parses; it never runs.
+* Anything at all about **hardware** — no Pi, no N100, no sound card, no radio,
+  no card reader is involved. The tools that need those are in this directory,
+  and none of them runs here.
+* That an **install succeeds**. Layer 2 proves a module's files are present in
+  the repo, not that installing them onto a box works.
+
+Green means "nothing is obviously broken", which is what a commit gate should
+mean. It is not "it works". Everything past it is still a bench.
 
 ---
 
