@@ -259,6 +259,16 @@ def hook_network_tools(module_dir, platinfo, cfg):
             f.write('rtl8xxxu\n')
         ui.info("x86: rtl8xxxu preload for USB wifi dongles")
 
+    # The RPi 7.x line inherited /etc/modprobe.d/blacklist-rtl8xxxu.conf from an image
+    # that shipped a vendor 8192eu driver; 7.3 ships none, so the blacklist left every
+    # RTL8192EU dongle (TP-Link WN823N, the KARIKIS wlan0 sync) with NO driver: the
+    # master never had a wlan0 and HPlayer2 crash-looped (2026-09-10). The in-tree
+    # rtl8xxxu drives them fine, AP mode included — drop the blacklist wherever we run.
+    for stale in ('/etc/modprobe.d/blacklist-rtl8xxxu.conf',):
+        if os.path.isfile(stale):
+            os.remove(stale)
+            ui.info("removed %s (in-tree rtl8xxxu is the dongle driver)" % stale)
+
 
 def hook_bluetooth(module_dir, platinfo, cfg):
     """Enable Bluetooth auto-power-on."""
