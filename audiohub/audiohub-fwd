@@ -91,6 +91,29 @@ case "$SINK" in
             [ "$CH" -lt 8 ] && echo "WARNING: card is ${CH}ch and not 48k-capable: direct open may fail"
         fi
         echo "usb card: $CARD (${CH}ch) -> $DEV"
+
+        # USB DAC output level: the card's own playback mixer ('Speaker' on the
+        # C-Media class devices, 'PCM'/'Headphone'/'Master' on others) comes up at
+        # whatever the chip remembers — two LEA players booted at -5 dB and -20 dB
+        # from the same image (2026-09-10). Pin it from the conf at every forwarder
+        # start, like the hdmi mute: usb_volume= (default 0dB = unity; 'keep' = don't).
+        USBVOL=""
+        for f in /etc/audiohub.conf /data/audiohub.conf; do
+            [ -f "$f" ] || continue
+            V=$(sed -n 's/^usb_volume=\([^ #]\+\).*/\1/p' "$f" | head -1)
+            [ -n "$V" ] && USBVOL="$V"
+        done
+        USBVOL=${USBVOL:-0dB}
+        if [ "$USBVOL" != "keep" ]; then
+            CTL=$(amixer -c "$CARD" scontrols 2>/dev/null \
+                  | sed -n "s/^Simple mixer control '\([^']*\)',0$/\1/p" \
+                  | grep -m1 -E '^(Speaker|PCM|Headphone|Master)$')
+            if [ -n "$CTL" ] && amixer -q -c "$CARD" sset "$CTL" "$USBVOL" unmute 2>/dev/null; then
+                echo "usb volume: $CTL = $USBVOL"
+            else
+                echo "usb volume: no settable playback control on $CARD (left as is)"
+            fi
+        fi
         wait_cable
 
         # alsaloop does NOT exit when its device vanishes (it error-loops or
