@@ -1,0 +1,12 @@
+[Unit]
+Description=Re-negotiate the HDMI link with explicit settings before the player starts
+DefaultDependencies=no
+After=local-fs.target
+Before=starter.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/hdmi-rehandshake 3
+
+[Install]
+WantedBy=multi-user.target
