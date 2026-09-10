@@ -1,0 +1,31 @@
+#!/bin/bash
+# hdmi-rehandshake — re-negotiate the HDMI link with the EXPLICIT mode from config.txt.
+#
+#   hdmi-rehandshake [delay-seconds]      (default 3; the unit runs it before starter)
+#
+# Why: with hdmi_force_hotplug=1 the firmware drives the link the instant it boots. A TV
+# powered at the same moment (the venue's morning switch-on) can fail its first evaluation
+# and latch "Mode non pris en charge" — Samsung SyncMasters did, on a mode they accept, and
+# the only thing that cleared them was `tvservice -e` with explicit settings, which powers
+# the output off and on with the mode spelled out (KARIKIS + LEA, 2026-09-10). Doing that
+# once at boot, before the player starts, cures the boot path the same way.
+#
+# Reads hdmi_group / hdmi_mode from the [pi3] block first (falls back to the first global
+# ones); hdmi_drive=1 -> DVI signalling. No explicit mode in config.txt -> nothing to do.
+CFG=/boot/config.txt; [ -f /boot/firmware/config.txt ] && CFG=/boot/firmware/config.txt
+blk=$(awk '/^\[pi3\]/{p=1;next} /^\[/{p=0} p' "$CFG" 2>/dev/null)
+g=$(echo "$blk" | sed -n 's/^hdmi_group=\([0-9]*\).*/\1/p' | head -1)
+m=$(echo "$blk" | sed -n 's/^hdmi_mode=\([0-9]*\).*/\1/p' | head -1)
+[ -n "$g" ] || g=$(sed -n 's/^hdmi_group=\([0-9]*\).*/\1/p' "$CFG" | head -1)
+[ -n "$m" ] || m=$(sed -n 's/^hdmi_mode=\([0-9]*\).*/\1/p' "$CFG" | head -1)
+case "$g" in 1) G=CEA ;; 2) G=DMT ;; *) echo "hdmi-rehandshake: no explicit hdmi_group/hdmi_mode in $CFG, nothing to do"; exit 0 ;; esac
+[ -n "$m" ] || { echo "hdmi-rehandshake: hdmi_group without hdmi_mode, nothing to do"; exit 0; }
+d=$(grep -m1 '^hdmi_drive=' "$CFG" | cut -d= -f2); [ "$d" = 1 ] && D=DVI || D=HDMI
+command -v tvservice >/dev/null || { echo "hdmi-rehandshake: no tvservice (KMS stack?), nothing to do"; exit 0; }
+sleep "${1:-3}"
+echo "hdmi-rehandshake: tvservice -e \"$G $m $D\""
+tvservice -e "$G $m $D"
+sleep 1
+# wake the framebuffer so what draws on it next lands on the fresh link
+fbset -depth 8 >/dev/null 2>&1; fbset -depth 32 >/dev/null 2>&1
+tvservice -s
