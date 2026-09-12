@@ -1,0 +1,280 @@
+# audiohub-graph-v2.1 — always-on multi-output audio hub, Raspberry Pi (KMS)
+#
+# ⚠ UNTESTED — THIS GRAPH HAS NEVER BEEN PLAYED. Written at the desk on
+# 2026-09-12 (pi-tools#t-009) because no KMS Pi exists on the bench to hear it
+# on, and shipped anyway on an explicit call: a missing file costs more than an
+# unverified one, since without it a KMS Pi gets asound.conf-pi3 and a
+# DANGLING hdmiout. Treat every line below as a PROPOSAL derived from
+# asound.conf-pi3, not as a verified config. The first person to reach a KMS Pi
+# should read "What to check first" at the bottom before debugging anything.
+#
+# WHEN THIS FILE IS THE RIGHT ONE: a Pi booted with `dtoverlay=vc4-kms-v3d`
+# (what setup/bootstrap.py's own config.txt writes) — `/proc/asound/cards`
+# shows a `vc4hdmi*` card. The RastaOS 7.x golden image is NOT this: it stays
+# on the legacy dispmanx/mmal stack (`arm_64bit=0`, no vc4-kms — KMS performs
+# badly there) and uses asound.conf-pi3. This graph serves hand-installed KMS
+# Pis only; install.sh picks between the two from the cards it finds.
+#
+# Same design as asound.conf-pi3 (see that header for the full rationale):
+# the player application plays pcm.hplayer (plug pinned to snd-aloop at
+# 8ch/48k), every physical output is an alsaloop forwarder reading the shared
+# dsnoop capture:
+#
+#   app --> plug --> hw:Loopback,0,0             (fixed 8ch / 48k / S16)
+#                        |
+#                 hw:Loopback,1,0 --> dsnoop "aloopcap"
+#                        |-- alsaloop --> jackout   (Headphones, DOWNMIX, always)
+#                        |-- alsaloop --> hdmiout   (vc4hdmi0, ch 0/1, always,
+#                        |                           softvol mute)
+#                        `-- alsaloop --> usbout<N>:CARD=<id>  (hotplug, STRAIGHT)
+#
+# WHAT CHANGES vs asound.conf-pi3 — the KMS split, and nothing else:
+#
+#   * HDMI is no longer bcm2835. The legacy firmware stack registered one card
+#     per HDMI port (`b1` = HDMI0, `b2` = HDMI1); vc4-kms-v3d registers the
+#     vc4-hdmi driver instead, as `vc4hdmi0`/`vc4hdmi1` on a two-port Pi 4/5
+#     and as plain `vc4hdmi` on a single-port Pi 3. hdmiout targets
+#     **vc4hdmi0** — the first physical port, which is also the one
+#     setup/bootstrap.py's config.txt drives (`video=HDMI-A-1`). House
+#     convention, same as asound.conf-x86's device-3 pick: the file hardcodes
+#     the first port, and you EDIT IT for another one. install.sh says so out
+#     loud when the card it found is not the card named here (the Pi 3 case).
+#   * The analog jack does not change. `dtparam=audio=on` keeps the analog
+#     half of bcm2835 under KMS, still card `Headphones` — so jackout, its
+#     fold-down ttable and ctl.!default are byte-identical to the pi3 graph.
+#     ASSUMED, not measured: if `/proc/asound/cards` names it anything else on
+#     a real box, jackout is a one-line fix here.
+#   * usbout2/4/6/8 are byte-identical. USB audio has nothing to do with the
+#     display stack.
+#
+# WHAT DOES NOT CHANGE, and why the hub shape is kept as-is: the dmix/multi
+# breakage that motivated the loopback hub was measured on the bcm2835
+# firmware devices (bench 2026-07-21, player-000), so it is not itself a
+# reason to keep the hub on a vc4 HDMI path — but failure isolation, the one
+# deterministic latency target, and one app-facing PCM across every fleet are,
+# exactly as on x86. Nothing here is ever rewritten at runtime; the
+# "audiohub-graph-v2.1" marker on line 1 is the deploy check.
+
+# resampler for plug conversions (USB cards stuck at 44.1k, e.g. ESI
+# GIGAPort HD+ whose only altset is 8ch/44100): alsa-lib's default linear
+# converter audibly aliases — speexrate is clean and ARM-friendly. Needs
+# libasound2-plugins (a module dep). 48k-capable cards convert nothing.
+defaults.pcm.rate_converter "speexrate_medium"
+
+# ---- app-facing playback PCM ---------------------------------------------
+# Unchanged from asound.conf-pi3: the slave is pinned so the loopback cable
+# always carries 8ch/48k/S16 whatever the media layout, which means the
+# dsnoop side below can never hit a parameter conflict.
+
+pcm.hplayer {
+    type plug
+    slave {
+        pcm "hw:Loopback,0,0"
+        channels 8
+        rate 48000
+        format S16_LE
+    }
+}
+
+pcm.!default hplayer
+ctl.!default {
+    type hw
+    card Headphones
+}
+
+# ---- shared capture side for the forwarders ------------------------------
+# Small periods (delivery granularity), DEEP buffer (stall absorption) —
+# see asound.conf-pi3 for the measured rationale.
+
+# NOTE: dsnoop's shared-memory instance outlives its readers — geometry
+# edits below are IGNORED by a live system until the ipc_key changes.
+# Bump the key together with any period/buffer change.
+#
+# The key is deliberately the SAME 6202 as the pi3 and x86 graphs: the
+# geometry is identical, and a box only ever has one of the three installed.
+pcm.aloopcap {
+    type dsnoop
+    ipc_key 6202
+    slave {
+        pcm "hw:Loopback,1,0"
+        channels 8
+        rate 48000
+        format S16_LE
+        period_size 256
+        buffer_size 16384
+    }
+}
+
+# ---- per-output egress PCMs ----------------------------------------------
+
+# jack: ch0/1 unity + all other channels folded at 0.5 — the only output that
+# COLLAPSES, so a multichannel piece is audible on a bench headphone. Sums
+# saturate (clip) rather than wrap: monitoring output, not a mix bus.
+# Byte-identical to asound.conf-pi3 (same bcm2835 analog card under KMS).
+pcm.jackout {
+    type route
+    slave.pcm {
+        type plug
+        slave.pcm "hw:Headphones"
+    }
+    slave.channels 2
+    ttable.0.0 1
+    ttable.1.1 1
+    ttable.2.0 0.5
+    ttable.3.1 0.5
+    ttable.4.0 0.5
+    ttable.5.1 0.5
+    ttable.6.0 0.5
+    ttable.7.1 0.5
+}
+
+# hdmi: ch0/1 straight, through a softvol mute stage — same design as
+# asound.conf-pi3, only the card changed (b1 -> vc4hdmi0). The "Audiohub HDMI"
+# control is anchored on the always-present Loopback card and only materializes
+# at the first hdmiout open: audiohub-fwd opens the PCM at unit start and
+# applies the persisted state (mute=hdmi in /data/audiohub.conf, toggled with
+# `audiohub mute|unmute hdmi`) BEFORE any audio can flow. resolution 2 makes it
+# a SWITCH (on = untouched passthrough, off = hard-zeroed samples — drive it
+# with on/off, never percentages); muted, alsaloop keeps streaming zeros, so
+# the display keeps its audio stream and hw_ptr flow-watching stays valid.
+#
+# UNVERIFIED, and the likeliest thing to bite: vc4-hdmi carries its own
+# constraints that the bcm2835 firmware device did not. Expect an open to need
+# a CONNECTED display (an unplugged or ELD-less port is the x86 HDA situation,
+# documented in asound.conf-x86 — there a port without an ELD refuses opens),
+# and expect the accepted rate/channel set to follow the sink's ELD rather
+# than being fixed. The plug + route pair below is what absorbs that: the
+# forwarder always writes 8ch/48k and the route folds to 2ch, so a sink that
+# wants stereo 48k gets exactly that. If HDMI is silent on a real KMS Pi, the
+# first question is whether `hw:vc4hdmi0` opens AT ALL (see the bottom).
+pcm.hdmiout {
+    type route
+    slave.pcm {
+        type softvol
+        slave.pcm {
+            type plug
+            slave.pcm "hw:vc4hdmi0"
+        }
+        control {
+            name "Audiohub HDMI"
+            card Loopback
+        }
+        resolution 2
+    }
+    slave.channels 2
+    ttable.0.0 1
+    ttable.1.1 1
+}
+
+# usb: STRAIGHT identity routes, one per card width — the wrapper picks.
+# (plug's automatic 8->2 conversion would DOWNMIX, folding zones into the
+# stereo pair: exactly what these explicit identity tables prevent.)
+# Byte-identical to asound.conf-pi3.
+
+pcm.usbout2 {
+    @args [ CARD ]
+    @args.CARD { type string }
+    type route
+    slave.pcm {
+        type plug
+        slave.pcm { type hw; card $CARD }
+    }
+    slave.channels 2
+    ttable.0.0 1
+    ttable.1.1 1
+}
+
+pcm.usbout4 {
+    @args [ CARD ]
+    @args.CARD { type string }
+    type route
+    slave.pcm {
+        type plug
+        slave.pcm { type hw; card $CARD }
+    }
+    slave.channels 4
+    ttable.0.0 1
+    ttable.1.1 1
+    ttable.2.2 1
+    ttable.3.3 1
+}
+
+pcm.usbout6 {
+    @args [ CARD ]
+    @args.CARD { type string }
+    type route
+    slave.pcm {
+        type plug
+        slave.pcm { type hw; card $CARD }
+    }
+    slave.channels 6
+    ttable.0.0 1
+    ttable.1.1 1
+    ttable.2.2 1
+    ttable.3.3 1
+    ttable.4.4 1
+    ttable.5.5 1
+}
+
+pcm.usbout8 {
+    @args [ CARD ]
+    @args.CARD { type string }
+    type route
+    slave.pcm {
+        type plug
+        slave.pcm { type hw; card $CARD }
+    }
+    slave.channels 8
+    ttable.0.0 1
+    ttable.1.1 1
+    ttable.2.2 1
+    ttable.3.3 1
+    ttable.4.4 1
+    ttable.5.5 1
+    ttable.6.6 1
+    ttable.7.7 1
+}
+
+# ---- legacy names kept for hand tools (aplay -D jack ...) ----------------
+
+pcm.jack {
+    type hw
+    card Headphones
+}
+
+ctl.jack {
+    type hw
+    card Headphones
+}
+
+pcm.hdmi0 {
+    type hw
+    card vc4hdmi0
+}
+
+ctl.hdmi0 {
+    type hw
+    card vc4hdmi0
+}
+
+# ---- What to check first, on the first real KMS Pi -----------------------
+#
+# In this order — each step is a fact this file had to guess:
+#
+#   1. `cat /proc/asound/cards`. Confirm the analog card really is
+#      `Headphones` and read the HDMI card's exact id. If it is `vc4hdmi`
+#      (single-port Pi 3) or `vc4hdmi1` (second port), edit the three
+#      `vc4hdmi0` occurrences above. audiohub-fwd resolves this one at
+#      runtime and does NOT need editing.
+#   2. `aplay -D hdmi0 -f S16_LE -r 48000 -c 2 /dev/zero` with a display
+#      CONNECTED. This bypasses the hub entirely: if the raw card will not
+#      open, nothing in this graph can help, and the answer is in
+#      `dmesg | grep vc4`.
+#   3. `audiohub test hdmi`, then `audiohub test jack`. That is the graph.
+#   4. `audiohub mute hdmi` / `unmute hdmi` — the softvol control is anchored
+#      on Loopback, so it should behave exactly as on the pi3 and x86 graphs.
+#   5. Then, and only then, delete the ⚠ block at the top of this file and
+#      record what you measured — the way asound.conf-pi3's header does.
+#
+# Coordinates for the record: pi-tools#t-003 is the bench task that owns this
+# verification on aarch64 hardware.

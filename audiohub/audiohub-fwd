@@ -172,10 +172,39 @@ esac
 # device 0 and HDMI as device 3 — so the flow-watch must read the matching
 # pcmNp. The STAGGER serialization is vchiq-motivated but kept on x86 too:
 # serialized closes cost nothing and keep one behavior on both fleets.
+#
+# Three platforms, resolved in this order:
+#   PCH present          -> x86 HDA (asound.conf-x86)
+#   vc4hdmi* present     -> KMS Pi  (asound.conf-pi-kms): HDMI is the vc4-hdmi
+#                           driver, the analog jack is still bcm2835
+#                           'Headphones' under dtparam=audio=on
+#   otherwise            -> legacy Pi firmware stack (asound.conf-pi3)
+#
+# The KMS HDMI card id is READ, never assumed: it is 'vc4hdmi0' on the first
+# port of a two-port Pi 4/5 and plain 'vc4hdmi' on a single-port Pi 3. Getting
+# it wrong is not a silent cosmetic miss — SINKCARD feeds the flow-watch
+# below, cardidx returns empty for a card that is not there, both status reads
+# come back empty, that reads as a stall, and three misses (~9s) recycle this
+# forwarder for as long as the cable has a writer. That is the same
+# restart-forever shape the usb branch's USB-MIDI note describes (363 restarts
+# in an hour, player-000, 2026-09-04), so it is resolved from /proc here the
+# way the usb card is.
+#
+# NOTE (pi-tools#t-009): the KMS branch has never run on real hardware — no
+# KMS Pi exists on the bench. STAGGER is kept at 2 for hdmi there even though
+# the vchiq close hazard is the LEGACY stack's (vc4-hdmi does not go through
+# vchiq; the analog jack still does): serializing costs 2s on a stop and keeps
+# one behavior across all three fleets.
+KMSHDMI=$(sed -n 's/^ *[0-9]* *\[\(vc4hdmi[0-9]*\) *\].*/\1/p' /proc/asound/cards 2>/dev/null | head -1)
 if grep -q '\[PCH ' /proc/asound/cards 2>/dev/null; then
     case "$SINK" in
         jack) SINKCARD="PCH"; SINKPCM="pcm0p"; STAGGER=0 ;;
         hdmi) SINKCARD="PCH"; SINKPCM="pcm3p"; STAGGER=2 ;;
+    esac
+elif [ -n "$KMSHDMI" ]; then
+    case "$SINK" in
+        jack) SINKCARD="Headphones"; SINKPCM="pcm0p"; STAGGER=0 ;;
+        hdmi) SINKCARD="$KMSHDMI";   SINKPCM="pcm0p"; STAGGER=2 ;;
     esac
 else
     case "$SINK" in
