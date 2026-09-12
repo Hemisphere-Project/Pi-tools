@@ -59,5 +59,25 @@ if date -s "$remote" >/dev/null; then
     command -v fake-clock >/dev/null 2>&1 && fake-clock save 2>/dev/null || true
     # Program the RTC: a virgin module keeps reporting 2000 at every boot
     # until someone writes it — make any online moment permanent.
-    [ -e /dev/rtc0 ] && hwclock -w 2>/dev/null || true
+    #
+    # --noadjfile, and why the result is now reported instead of swallowed: on a
+    # read-only rootfs hwclock writes the chip FIRST and only then fails to persist
+    # its drift file to /etc/adjtime, so a bare `hwclock -w` exits 1 on a write that
+    # actually landed (verified on the bench 2026-09-07 by reading the chip back).
+    # The old `2>/dev/null || true` hid that success, and a bench operator reading
+    # the raw error concluded the RTC write had failed — a phantom chase. Dropping
+    # the drift file makes the exit code mean what it says, which is what makes it
+    # worth printing. --utc is mandatory with --noadjfile (no adjtime file left to
+    # say which); the fleet's RTCs hold UTC.
+    #
+    # datesync's own exit status is deliberately unchanged: the system clock IS set,
+    # which is this unit's job — a dead RTC is a diagnostic line, not a failed sync.
+    if [ -e /dev/rtc0 ]; then
+        if hwclock -w --noadjfile --utc; then
+            echo "[datesync] RTC programmed from system clock"
+        else
+            rc=$?
+            echo "[datesync] RTC write FAILED (rc=$rc) — this time will not survive a power cut"
+        fi
+    fi
 fi
