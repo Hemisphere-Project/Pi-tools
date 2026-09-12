@@ -221,80 +221,21 @@ fi
 # TODO: mount with fstab !
 
 #
-# fake-hwclock
+# the re-runnable tail — fake-hwclock, the /tmp tmpfiles rule, the root history
+# symlink, the logout hook, ro-assert, and the ro/rw toggle symlinks.
 #
-
-systemctl disable systemd-timesyncd
-systemctl disable ntp
-
-ln -sf "$BASEPATH/fake-clock" /usr/local/bin/
-ln -sf "$BASEPATH/fake-clock.service" /etc/systemd/system/
-ln -sf "$BASEPATH/fake-clock-autosave.service" /etc/systemd/system/
-ln -sf "$BASEPATH/fake-clock-autosave.timer" /etc/systemd/system/
-
-systemctl daemon-reload
-systemctl enable fake-clock
-systemctl enable fake-clock-autosave.timer
-
-fake-clock save
-
-# /var/log lives on tmpfs and /var/backups on the ro root: log rotation
-# and dpkg db backups can only fail (found failing on both the N100 minis
-# and the RPi golden, 2026-07-22) — mask them.
-systemctl mask logrotate.service logrotate.timer 2>/dev/null
-systemctl disable --now dpkg-db-backup.timer 2>/dev/null
-systemctl mask dpkg-db-backup.service dpkg-db-backup.timer 2>/dev/null
-
-# /var/log is a bind of /tmp: rsyslog's tmpfiles rule (z /var/log 0775
-# root syslog) force-perms the shared inode at EVERY boot, silently
-# stripping /tmp's 1777 — which breaks apt's GPG sandbox (_apt can't
-# write temp files; fleet-wide, 2026-07-22). A z-rule in a file sorting
-# last re-asserts /tmp after rsyslog's.
-echo "z /tmp 1777 root root -" > /etc/tmpfiles.d/zz-pitools-tmp.conf
-
-# Root shell history lives on /data so `history -a` works on a read-only
-# root — the logout hook then needs NO rw/ro bracket. The old bracket was
-# the only runtime rw excursion in the stack, and its `ro` could lose the
-# transient remount-busy race and strand the box silently writable
-# (mini fleet, 2026-07-24). Never again: logout only appends history
-# (through the /data symlink) and saves the fake clock (/data too).
-mkdir -p /data/var
-if [ -f /root/.bash_history ] && [ ! -L /root/.bash_history ]; then
-    cat /root/.bash_history >> /data/var/root.bash_history 2>/dev/null
-    rm -f /root/.bash_history
-fi
-touch /data/var/root.bash_history
-ln -sf /data/var/root.bash_history /root/.bash_history
-
-# drop any previously-installed rw/ro logout bracket, then append the
-# marker-delimited hook (idempotent across reinstalls)
-if [ -f /etc/bash.bash_logout ]; then
-    sed -i '/^if \[ "\$(id -u)" -eq 0 \]; then$/,/^fi$/d' /etc/bash.bash_logout
-    sed -i '/^# >>> pitools rorw >>>$/,/^# <<< pitools rorw <<<$/d' /etc/bash.bash_logout
-fi
-echo '# >>> pitools rorw >>>
-if [ "$(id -u)" -eq 0 ]; then
-history -a
-fake-clock save
-fi
-# <<< pitools rorw <<<
-' >> /etc/bash.bash_logout
-
-# self-heal: any stray rw with no registered holder is remounted ro by
-# the ro-assert timer (3min after boot, then every 5min)
-ln -sf "$BASEPATH/ro-assert" /usr/local/bin/
-ln -sf "$BASEPATH/ro-assert.service" /etc/systemd/system/
-ln -sf "$BASEPATH/ro-assert.timer" /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable ro-assert.timer
-systemctl start ro-assert.timer 2>/dev/null
-
-
+# It lives in upgrade.sh so an ALREADY-INSTALLED box can take an image-level
+# rorw change without re-running this installer, which is not idempotent above
+# this line (fstab, .bashrc, the oh-my-bash log move). One copy, so the two
+# paths cannot drift — see the header of upgrade.sh.
 #
-# install succeeded — publish the toggle symlinks last, so is_module_installed
-# only sees rorw as "installed" once the whole thing actually ran.
+# Last on purpose: upgrade.sh publishes the ro/rw toggle symlinks that
+# is_module_installed keys on, so they only appear once the whole install ran.
+# /data is mounted by now, which is what upgrade.sh refuses to run without.
 #
-ln -sf "$BASEPATH/ro" /usr/local/bin/
-ln -sf "$BASEPATH/rw" /usr/local/bin/
-mkdir -p /usr/local/lib/pitools
-ln -sf "$BASEPATH/with_rw.sh" /usr/local/lib/pitools/
+# --installing suppresses upgrade.sh's rw...ro bracket: the root is already
+# writable here and the rw/ro counter has not been told, so the bracket's exit
+# would remount it read-only under the rest of the install. upgrade.sh's own
+# header argues it in full.
+#
+bash "$BASEPATH/upgrade.sh" --installing || exit 1
