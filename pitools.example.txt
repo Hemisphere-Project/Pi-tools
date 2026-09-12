@@ -57,6 +57,11 @@
 #            the old audioselect; that legacy key is still honored)
 # audiohub = ask
 
+# display — re-negotiate the HDMI link at boot, for TVs that latch
+#           "mode not supported" (Pi only). A no-op unless config.txt
+#           carries an explicit hdmi_group/hdmi_mode.
+# display = yes
+
 # xrun — X11/Openbox display server
 # xrun = no
 
