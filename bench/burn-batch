@@ -1,0 +1,412 @@
+#!/usr/bin/env bash
+# burn-batch — clone ONE golden image onto N SD cards from the bench, and
+# prove every card byte-for-byte before it leaves the table.
+#
+# Rolling a card lot is not `dd` in a loop. Each phase below exists because
+# skipping it produces a card that looks burned and does not boot.
+#
+#   1. fsck the IMAGE first, once, before it is cloned N times — an image
+#      captured from a card that was not cleanly unmounted carries an
+#      unreplayed journal that every clone replays on first boot, and the
+#      rw/ro helper leaves the vfat dirty bit set on /boot.
+#   2. take the cards back off the desktop — udisks automounts every inserted
+#      card read-write, and writing under it dirties what you just wrote.
+#   3. dd in parallel, CAPPED — a bus-powered hub dropped all five of its
+#      readers at once at six parallel writes (2026-09-10, 16-card LEA batch).
+#   4. cmp EVERY card against the image. A reused card can silently fail the
+#      write in its most-worn zone (the first ~260 MB, where its previous FAT
+#      lived): the burn "completes", the rootfs is correct, and /boot keeps a
+#      foreign volume id. Nothing but this pass catches it.
+#
+# Targets are resolved by READER SERIAL at run time, never by a /dev/sdX noted
+# earlier: device names shuffle after a hub reset, and with several cards in,
+# /dev/disk/by-label points at one arbitrary card.
+#
+#   Usage: burn-batch [-n] [-j N] [-y] [--no-fsck] IMAGE [TARGET ...]
+#     TARGET   a reader serial (preferred) or a /dev node, which is pinned to
+#              its serial immediately. Default: every card the readers hold.
+#     -l       list the readers, their serials and their USB port paths, exit
+#     -n       dry run: plan, refuse, report — write nothing, need no root
+#     -j N     parallel writes (default 3 — the hub is the ceiling, not the
+#              reader count)
+#     -y       skip the confirmation (for an unattended re-run)
+#     --no-fsck    skip phase 1, the image is already known clean
+#     --fsck-only  phase 1 ALONE — clean a golden image and stop, no cards
+#                  involved. Worth running once on an image you are about to
+#                  archive, so every future batch starts from a clean one.
+#
+#   BURNBATCH_LOG=<path>   CSV outcome log (default ~/burn-batch.csv)
+#
+# Root, once: the whole run is a single root phase on purpose, so a desktop
+# session raises ONE graphical prompt.
+#
+#   ./bench/burn-batch -n ~/RPi-images/RastaOS-7.3.img        # plan it first
+#   pkexec bash bench/burn-batch /home/me/RPi-images/RastaOS-7.3.img
+#
+# NOT in scope: per-card identity. This tool clones and proves; it never stamps
+# a hostname, a role or a config.txt. Which card becomes which player is
+# per-engagement and belongs in that engagement's runbook — `sd-converge` is
+# the no-reflash path, the fleet prep scripts are the stamping one.
+set -uo pipefail
+
+usage() { sed -n '2,48p' "$0" | sed 's/^# \?//'; }
+
+C_OK=$'\033[1;32m'; C_ERR=$'\033[1;31m'; C_WARN=$'\033[1;33m'; C_END=$'\033[0m'
+say()  { echo "  $*"; }
+ok()   { echo "${C_OK}  $*${C_END}"; }
+warn() { echo "${C_WARN}  $*${C_END}"; }
+err()  { echo "${C_ERR}  $*${C_END}"; }
+
+ORIG_ARGS=("$@")
+DRY=0; JOBS=3; YES=0; FSCK=1; LIST=0; FSCK_ONLY=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -n|--dry-run) DRY=1 ;;
+        -j|--jobs)    JOBS="${2:?-j needs a count}"; shift ;;
+        -y|--yes)     YES=1 ;;
+        -l|--list)    LIST=1 ;;
+        --no-fsck)    FSCK=0 ;;
+        --fsck-only)  FSCK_ONLY=1 ;;
+        -h|--help)    usage; exit 0 ;;
+        --)           shift; break ;;
+        -*)           err "unknown option: $1"; usage; exit 2 ;;
+        *)            break ;;
+    esac
+    shift
+done
+case "$JOBS" in ''|*[!0-9]*|0) err "-j wants a positive integer, got '$JOBS'"; exit 2 ;; esac
+
+# The invoking human, whoever we are running as: pkexec scrubs SUDO_USER but
+# sets PKEXEC_UID, and both are absent on a plain root shell.
+INVOKER="${SUDO_USER:-}"
+[ -z "$INVOKER" ] && [ -n "${PKEXEC_UID:-}" ] && INVOKER=$(getent passwd "$PKEXEC_UID" | cut -d: -f1)
+[ -z "$INVOKER" ] && INVOKER="${USER:-root}"
+INVOKER_HOME=$(getent passwd "$INVOKER" | cut -d: -f6)
+LOG="${BURNBATCH_LOG:-${INVOKER_HOME:-/tmp}/burn-batch.csv}"
+
+# ── the readers, as they are RIGHT NOW ───────────────────────────────────────
+# A multi-slot reader exposes every slot as a disk and never removes the node
+# when a card is pulled, so presence is MEDIUM presence (size > 0), not a node.
+# A slot that enumerates at 0 B is an unseated card, not a dead one — reseat it
+# before concluding anything.
+
+udev_prop() {   # udev_prop <disk> <PROPERTY>
+    udevadm info --query=property --name="/dev/$1" 2>/dev/null \
+        | sed -n "s/^$2=//p" | head -1
+}
+
+serial_of() {   # serial_of <disk> -> reader serial, "" if it has none
+    local s; s=$(udev_prop "$1" ID_SERIAL_SHORT)
+    [ -z "$s" ] && s=$(udev_prop "$1" ID_SERIAL)
+    echo "$s"
+}
+
+port_of() {     # port_of <disk> -> the physical USB port path, to label the slot
+    udevadm info -q path --name="/dev/$1" 2>/dev/null \
+        | sed -n 's|.*/usb[0-9]*/\([0-9.-]*\)/.*|\1|p' | head -1
+}
+
+size_of()  { cat "/sys/block/$1/size" 2>/dev/null || echo 0; }   # 512-B sectors
+bytes_of() { echo $(( $(size_of "$1") * 512 )); }
+human()    { numfmt --to=iec --suffix=B "$1" 2>/dev/null || echo "$1"; }
+
+all_disks() { ls /sys/block 2>/dev/null | grep -E '^(sd|mmcblk|nvme)' || true; }
+
+disks_with_medium() {
+    local d
+    for d in $(all_disks); do [ "$(size_of "$d")" -gt 0 ] 2>/dev/null && echo "$d"; done
+    return 0
+}
+
+# Re-resolve a serial to whatever /dev node holds it NOW. Called again
+# immediately before the write and again before the verify: a hub reset in
+# between renames the nodes, and that is exactly how a batch lands on the wrong
+# card. Several matches are returned space-separated — the caller refuses them.
+dev_for_serial() {  # dev_for_serial <serial> -> disk name(s); 1 if none
+    local want="$1" d hits=""
+    for d in $(disks_with_medium); do
+        [ "$(serial_of "$d")" = "$want" ] && hits="$hits $d"
+    done
+    set -- $hits
+    [ $# -eq 0 ] && return 1
+    echo "$*"
+}
+
+if [ "$LIST" = 1 ]; then
+    printf '%-10s %-24s %-8s %-10s %s\n' DEVICE SERIAL PORT SIZE MODEL
+    for d in $(all_disks); do
+        if [ "$(size_of "$d")" -gt 0 ]; then sz=$(human "$(bytes_of "$d")"); else sz="empty"; fi
+        printf '%-10s %-24s %-8s %-10s %s\n' \
+            "/dev/$d" "$(serial_of "$d")" "$(port_of "$d")" "$sz" "$(udev_prop "$d" ID_MODEL)"
+    done
+    exit 0
+fi
+
+# ── the image ────────────────────────────────────────────────────────────────
+IMG="${1:-}"; [ -n "$IMG" ] || { usage; exit 2; }; shift
+# zsh does not expand ~ after if=/of=, so a path that still carries a literal
+# leading tilde here is a file named "~" waiting to happen. Refuse it rather
+# than write one.
+case "$IMG" in '~'*) err "image path starts with a literal '~' — use \$HOME or an absolute path"; exit 1 ;; esac
+[ -f "$IMG" ] || { err "no such image: $IMG"; exit 1; }
+IMG=$(readlink -f "$IMG")
+IMG_BYTES=$(stat -c %s "$IMG")
+[ "$IMG_BYTES" -gt 0 ] || { err "image is empty: $IMG"; exit 1; }
+# the disk the image itself lives on is never a target, however removable it is
+IMG_SRC=$(df --output=source "$IMG" 2>/dev/null | tail -1)
+IMG_SRC=$(lsblk -no PKNAME "$IMG_SRC" 2>/dev/null | head -1)
+
+# ── phase 1 — the image, once, before it is cloned N times ───────────────────
+# Repair the boot vfat and the LAST ext4 (RastaOS: p1 boot, p2 rootfs mounted
+# ro on the player, p3 /data rw — /data is the one carrying an unreplayed
+# journal). Every other ext4 is CHECKED and never written: a golden's rootfs is
+# the thing under test, not something to silently repair.
+fsck_image() {
+    local L rc=0 part fstype p last_ext4="" ext4s=()
+    L=$(losetup -Pf --show "$IMG") || { err "losetup failed on $IMG"; return 1; }
+    say "image on $L"
+    for p in "$L"p*; do
+        [ -b "$p" ] || continue
+        [ "$(blkid -o value -s TYPE "$p" 2>/dev/null)" = "ext4" ] && ext4s+=("$p")
+    done
+    [ ${#ext4s[@]} -gt 0 ] && last_ext4="${ext4s[$(( ${#ext4s[@]} - 1 ))]}"
+    for part in "$L"p*; do
+        [ -b "$part" ] || continue
+        fstype=$(blkid -o value -s TYPE "$part" 2>/dev/null)
+        if [ "$fstype" = "vfat" ]; then
+            say "${part#/dev/}: vfat — repair"
+            fsck.fat -a "$part" >/dev/null 2>&1 || rc=1
+        elif [ "$fstype" = "ext4" ] && [ "$part" = "$last_ext4" ]; then
+            say "${part#/dev/}: ext4 (data) — repair"
+            e2fsck -fy "$part" >/dev/null 2>&1
+            [ $? -gt 2 ] && rc=1        # 1 = fixed, 2 = fixed + reboot advised
+        elif [ "$fstype" = "ext4" ]; then
+            say "${part#/dev/}: ext4 — checked, never written"
+            e2fsck -fn "$part" >/dev/null 2>&1 \
+                || warn "${part#/dev/}: e2fsck reports errors on a read-only check"
+        else
+            say "${part#/dev/}: ${fstype:-unknown} — left alone"
+        fi
+    done
+    losetup -d "$L"
+    return $rc
+}
+
+if [ "$FSCK_ONLY" = 1 ]; then
+    [ "$(id -u)" = 0 ] || { err "--fsck-only needs root: pkexec bash $(readlink -f "$0") ${ORIG_ARGS[*]}"; exit 1; }
+    echo "== clean the image (no cards involved)"
+    if fsck_image; then ok "image clean: $IMG"; exit 0; fi
+    err "image fsck failed: $IMG"; exit 1
+fi
+
+# ── select the targets ───────────────────────────────────────────────────────
+refuse_reason() {   # refuse_reason <disk> -> reason on stdout, exit 0 IF REFUSED
+    local d="$1" b
+    case "$d" in nvme*) echo "nvme — a fixed disk, not a card"; return 0 ;; esac
+    [ -n "$IMG_SRC" ] && [ "$d" = "$IMG_SRC" ] && { echo "holds the image we are cloning"; return 0; }
+    if [ "$(cat "/sys/block/$d/removable" 2>/dev/null)" != "1" ] && [[ "$d" != mmcblk* ]]; then
+        echo "not removable"; return 0
+    fi
+    b=$(bytes_of "$d")
+    [ "$b" -eq 0 ] && { echo "no medium — unseated card? reseat it"; return 0; }
+    [ "$b" -lt "$IMG_BYTES" ] && { echo "too small: $(human "$b") < $(human "$IMG_BYTES")"; return 0; }
+    return 1
+}
+
+TARGETS=()          # "disk|serial|port|bytes", the disk being the plan-time one only
+add_target() {      # add_target <disk>
+    local d="$1" why s
+    if why=$(refuse_reason "$d"); then err "REFUSED /dev/$d — $why"; return 1; fi
+    s=$(serial_of "$d")
+    if [ -z "$s" ]; then
+        err "REFUSED /dev/$d — no reader serial: it could not be re-resolved after a hub reset"
+        return 1
+    fi
+    TARGETS+=("$d|$s|$(port_of "$d")|$(bytes_of "$d")")
+}
+
+if [ $# -gt 0 ]; then
+    for t in "$@"; do
+        case "$t" in
+            /dev/*) add_target "$(basename "$t")" || exit 1 ;;
+            *)      if ! d=$(dev_for_serial "$t"); then
+                        err "no card with serial '$t' is present"; exit 1
+                    fi
+                    case "$d" in *" "*) err "serial '$t' matches several devices: $d"; exit 1 ;; esac
+                    add_target "$d" || exit 1 ;;
+        esac
+    done
+else
+    for d in $(disks_with_medium); do
+        refuse_reason "$d" >/dev/null && continue      # quietly not a candidate
+        add_target "$d" || true
+    done
+fi
+[ ${#TARGETS[@]} -gt 0 ] || { err "no eligible card found (try -l to see the readers)"; exit 1; }
+
+echo "burn-batch"
+say "image:  $IMG  ($(human "$IMG_BYTES"))"
+say "cards:  ${#TARGETS[@]}, $JOBS at a time"
+say "log:    $LOG"
+echo
+printf '  %-10s %-24s %-8s %s\n' DEVICE SERIAL PORT SIZE
+for spec in "${TARGETS[@]}"; do
+    IFS='|' read -r d s p b <<<"$spec"
+    printf '  %-10s %-24s %-8s %s\n' "/dev/$d" "$s" "$p" "$(human "$b")"
+done
+echo
+warn "every byte on these ${#TARGETS[@]} cards will be destroyed."
+
+if [ "$DRY" = 1 ]; then
+    warn "DRY RUN — nothing was written."
+    exit 0
+fi
+
+if [ "$(id -u)" != 0 ]; then
+    err "the burn needs root. Run the WHOLE thing as one root phase, one prompt:"
+    say "pkexec bash $(readlink -f "$0") ${ORIG_ARGS[*]}"
+    exit 1
+fi
+
+if [ "$YES" != 1 ]; then
+    if [ -t 0 ]; then
+        read -r -p "  type the number of cards to confirm (${#TARGETS[@]}): " answer
+        [ "$answer" = "${#TARGETS[@]}" ] || { err "not confirmed — nothing written"; exit 1; }
+    else
+        err "not a terminal and no -y — refusing to burn unconfirmed"; exit 1
+    fi
+fi
+
+if [ "$FSCK" = 1 ]; then
+    echo "== phase 1 — clean the image"
+    if fsck_image; then
+        ok "image clean"
+    else
+        err "image fsck failed — fix it before cloning it ${#TARGETS[@]} times"; exit 1
+    fi
+else
+    warn "phase 1 skipped (--no-fsck)"
+fi
+
+# ── phase 2 — take the cards off the desktop ─────────────────────────────────
+echo
+echo "== phase 2 — unmount"
+for spec in "${TARGETS[@]}"; do
+    IFS='|' read -r d s p b <<<"$spec"
+    while read -r mp; do
+        [ -n "$mp" ] && { umount "$mp" 2>/dev/null && say "/dev/$d: unmounted $mp"; }
+    done < <(lsblk -ln -o MOUNTPOINT "/dev/$d" 2>/dev/null)
+done
+ok "the cards are ours"
+
+RUNDIR=$(mktemp -d /tmp/burn-batch.XXXXXX)
+trap 'rm -rf "$RUNDIR"' EXIT
+
+# ── a capped pool ────────────────────────────────────────────────────────────
+# The hub is the ceiling, not the reader count: six parallel writes on a
+# bus-powered hub raised [Errno 19] on all five hub-side readers at once, while
+# the card on a direct port finished alone. -j 3 completed the same batch.
+pool() {    # pool <fn> <spec>...
+    local fn="$1"; shift
+    local running=0 spec
+    for spec in "$@"; do
+        while [ "$running" -ge "$JOBS" ]; do
+            wait -n 2>/dev/null
+            running=$(( running - 1 ))
+        done
+        "$fn" "$spec" &
+        running=$(( running + 1 ))
+    done
+    wait
+}
+
+# ── phase 3 — burn ───────────────────────────────────────────────────────────
+burn_one() {
+    trap - EXIT                 # the RUNDIR cleanup belongs to the parent only
+    local spec="$1" d t0 t1 secs rate serial
+    IFS='|' read -r _ serial _ _ <<<"$spec"
+    if ! d=$(dev_for_serial "$serial"); then
+        echo "gone" >"$RUNDIR/$serial.burn"; return
+    fi
+    case "$d" in *" "*) echo "ambiguous" >"$RUNDIR/$serial.burn"; return ;; esac
+    t0=$(date +%s)
+    if dd if="$IMG" of="/dev/$d" bs=4M conv=fsync status=none 2>"$RUNDIR/$serial.dd"; then
+        t1=$(date +%s); secs=$(( t1 - t0 )); [ "$secs" -lt 1 ] && secs=1
+        rate=$(( IMG_BYTES / secs / 1000000 ))
+        echo "ok ${secs}s ${rate}MB/s" >"$RUNDIR/$serial.burn"
+    else
+        echo "failed" >"$RUNDIR/$serial.burn"
+    fi
+}
+
+echo
+echo "== phase 3 — burn ($JOBS at a time)"
+pool burn_one "${TARGETS[@]}"
+sync
+for spec in "${TARGETS[@]}"; do
+    IFS='|' read -r d s p b <<<"$spec"
+    read -r st rest <<<"$(cat "$RUNDIR/$s.burn" 2>/dev/null)"
+    case "$st" in
+        ok)        ok "$s: $rest" ;;
+        gone)      err "$s: the reader lost the card mid-run" ;;
+        ambiguous) err "$s: two devices answer to that serial — nothing written" ;;
+        *)         err "$s: dd failed — $(tr '\n' ' ' <"$RUNDIR/$s.dd" 2>/dev/null)" ;;
+    esac
+done
+
+# ── phase 4 — prove it ───────────────────────────────────────────────────────
+# cmp -n stops at the image length, so a card larger than the image is expected
+# and is not a mismatch.
+#
+# --flushbufs FIRST: we have just written these bytes, so a plain read-back can
+# be served from the block device's page cache — comparing the image against
+# itself and green-lighting the exact silent write failure this pass exists to
+# catch. (And cmp against two real files, never `cmp /dev/x <(dd …)`: under
+# sudo the process-substitution fd is closed before cmp can read it.)
+verify_one() {
+    trap - EXIT
+    local spec="$1" d serial
+    IFS='|' read -r _ serial _ _ <<<"$spec"
+    if [ "$(head -c2 "$RUNDIR/$serial.burn" 2>/dev/null)" != "ok" ]; then
+        echo "skipped" >"$RUNDIR/$serial.cmp"; return
+    fi
+    if ! d=$(dev_for_serial "$serial"); then
+        echo "gone" >"$RUNDIR/$serial.cmp"; return
+    fi
+    case "$d" in *" "*) echo "ambiguous" >"$RUNDIR/$serial.cmp"; return ;; esac
+    blockdev --flushbufs "/dev/$d" 2>/dev/null
+    if cmp -s -n "$IMG_BYTES" "/dev/$d" "$IMG"; then
+        echo "identical" >"$RUNDIR/$serial.cmp"
+    else
+        echo "DIFFERS — $(cmp -n "$IMG_BYTES" "/dev/$d" "$IMG" 2>&1 | head -1)" >"$RUNDIR/$serial.cmp"
+    fi
+}
+
+echo
+echo "== phase 4 — verify, byte for byte ($JOBS at a time)"
+pool verify_one "${TARGETS[@]}"
+
+# ── the table ────────────────────────────────────────────────────────────────
+echo
+printf '  %-24s %-6s %-16s %s\n' SERIAL PORT BURN VERIFY
+FAILED=0
+for spec in "${TARGETS[@]}"; do
+    IFS='|' read -r d s p b <<<"$spec"
+    burn=$(cat "$RUNDIR/$s.burn" 2>/dev/null || echo "?")
+    cmpr=$(cat "$RUNDIR/$s.cmp"  2>/dev/null || echo "?")
+    printf '  %-24s %-6s %-16s %s\n' "$s" "$p" "$burn" "$cmpr"
+    [ "$cmpr" = "identical" ] || FAILED=$(( FAILED + 1 ))
+    echo "$(date -Is),$s,$p,$burn,$cmpr,$(basename "$IMG")" >> "$LOG" 2>/dev/null
+done
+[ -n "$INVOKER" ] && chown "$INVOKER" "$LOG" 2>/dev/null
+
+echo
+printf '\a'
+if [ "$FAILED" -eq 0 ]; then
+    ok "${#TARGETS[@]}/${#TARGETS[@]} cards identical to the image — safe to remove"
+    exit 0
+fi
+err "$FAILED of ${#TARGETS[@]} cards did NOT verify — those cards are OUT, do not ship them"
+say "a card that fails here is usually worn, not unlucky: burn a batch from fresh cards,"
+say "and if several failed at once, suspect the hub before the cards (-j 3, powered hub)."
+exit 1

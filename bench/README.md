@@ -12,6 +12,7 @@ here.
 | `fleet-run` + `fleet-lib.sh` | walk a roster of player **hotspots**, run one command on each, skip the dead ones |
 | `fleet-patch-hostapd.sh` | one-off: convert existing players from the NM/wpa_supplicant AP to hostapd, no reflash |
 | `sd-converge` | bench SD carousel: converge player **cards** to this machine's checkouts, no network |
+| `burn-batch` | clone one golden image onto N cards at once, and prove every card byte-for-byte |
 
 ---
 
@@ -203,3 +204,86 @@ fleet pass is the by-hand procedure, which is a slow day rather than a broken on
 `fleet-patch-hostapd.sh` is intentionally **not** refactored onto `fleet-lib.sh`:
 it is field-proven code, and the week before a site visit is the wrong week to
 touch it.
+
+---
+
+## `burn-batch` — N cards from one golden image, each one proved
+
+```sh
+./bench/burn-batch -l                              # which readers, which serials
+./bench/burn-batch -n ~/RPi-images/RastaOS-7.3.img # plan it: targets, refusals
+pkexec bash bench/burn-batch /home/me/RPi-images/RastaOS-7.3.img
+```
+
+Rolling a card lot is not `dd` in a loop. Four phases, and each one is there
+because skipping it produces a card that looks burned and does not boot:
+
+1. **fsck the image**, once, before it is cloned N times. An image captured
+   from a card that was not cleanly unmounted carries an unreplayed `/data`
+   journal that *every* clone replays on first boot, and `rorw`'s helper leaves
+   the vfat dirty bit set on `/boot`. The boot vfat and the **last** ext4
+   (`/data`) are repaired; every other ext4 is checked and never written — a
+   golden's rootfs is the thing under test, not something to silently repair.
+   `--fsck-only` runs this phase alone, which is worth doing once to an image
+   you are about to archive.
+2. **Unmount.** The desktop automounts every inserted card read-write.
+3. **Burn**, in parallel, capped by `-j` (default 3).
+4. **`cmp` every card against the image.** This is the phase the tool exists
+   for. A reused card can silently fail its write in the most-worn zone — the
+   first ~260 MB, where its previous FAT lived: the burn "completes", the
+   rootfs is correct, `/boot` keeps a foreign volume id, and the Pi does not
+   boot. Nothing else catches it.
+
+### The refusals are the safety, not the confirmation
+
+Nothing is written until every target survives: not `nvme`, not non-removable,
+not the disk the image itself lives on, not a card smaller than the image, and
+not a slot reporting 0 B (that is an **unseated card**, not a dead one —
+reseat it). A device with no reader serial is refused too, because it could not
+be re-resolved later. Then it still asks you to type the card count.
+
+### Why serials, and why the tool looks them up three times
+
+Targets are named by **reader serial**, and the serial is resolved to a `/dev`
+node again immediately before the write *and* again before the verify. Device
+names shuffle after a hub reset, and with several cards in, `/dev/disk/by-label`
+points at one arbitrary card — a `/dev/sdX` noted a minute ago is how a batch
+lands on the wrong card. Pass `/dev/sdX` if you like; it is pinned to its serial
+at once. `-l` also prints each reader's **USB port path**, so you can label the
+physical slot.
+
+### The hub is the ceiling, not the reader count
+
+`-j 3` by default. On the 16-card LEA run (2026-09-10) a **bus-powered** hub
+dropped **all five** of its readers at once at six parallel writes — every one
+raised `[Errno 19] No such device` mid-write, while the card on a direct port
+finished alone. `-j 3` completed the same batch. Sizing a batch by how many
+readers fit is how you lose the whole batch mid-write.
+
+Expect the batch to finish ragged: cards of different brands and ages write
+anywhere between **14 and 100 MB/s**, so planning on the fastest card's time is
+wrong by a factor of several. The per-card rate lands in the table and in
+`~/burn-batch.csv`.
+
+### Not in scope: identity
+
+`burn-batch` clones and proves. It never stamps a hostname, a role or a
+`config.txt` — which card becomes which player is per-engagement, and belongs in
+that engagement's runbook. `sd-converge` is the no-reflash path for cards that
+already have an identity.
+
+### Status
+
+**The phases that need no hardware are exercised; the card path is not proven
+yet.** `--fsck-only` was rehearsed against a real three-partition loop-mounted
+image (vfat repaired, rootfs checked-only, `/data` repaired), the parallel pool
+was verified to cap and to complete every item, every refusal above was
+triggered, and the verify *technique* was proved on a loop device: a card larger
+than the image reads identical, and a single byte flipped 100 MB in is caught
+with its offset.
+
+What that leaves unproven is everything a card reader owns — serial resolution
+across a real hub, the re-resolve after a reset, `dd` to a genuine card, and the
+worn-card failure the `cmp` pass exists for. That is a bench session with the
+reader and a lot of cards; until it has run, the fallback is the by-hand
+procedure this tool was written from.
