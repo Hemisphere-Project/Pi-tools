@@ -69,9 +69,55 @@ def rw_off():
         engageRW = False
 
 
+# -- 0. Host-number templating ----------------------------------------------
+#
+# A boot profile may carry `{N}` tokens, rendered from the trailing number of
+# the hostname when the profile is applied to NetworkManager (boot -> NM only;
+# the boot copy keeps the token, so a golden image stays generic and a clone
+# gets its own address from the one `hostrename@<name>` line in starter.txt).
+#
+#   hostname kmini-002:  address1=10.0.10.{N+100}/16,10.0.0.1  ->  10.0.10.102/16
+#                        address1=10.0.9.{N}/16                ->  10.0.9.2/16
+#
+# Grammar: {N}, {N+K}, {N-K}. A hostname with no trailing digits leaves the
+# tokens in place — NM then rejects the profile, which is the loud failure we
+# want rather than every clone silently sharing one address.
+
+TOKEN_RE = re.compile(r'\{N([+-]\d+)?\}')
+
+
+def host_number():
+    """Trailing integer of the hostname (kmini-002 -> 2), or None."""
+    try:
+        with open('/etc/hostname') as f:
+            name = f.read().strip()
+    except OSError:
+        name = ''
+    if not name:
+        name = os.uname().nodename
+    m = re.search(r'(\d+)$', name)
+    return int(m.group(1)) if m else None
+
+
+def render_tokens(text, n):
+    """Substitute {N}/{N+K}/{N-K} with the host number n (None = leave as is)."""
+    if n is None or '{N' not in text:
+        return text
+
+    def sub(m):
+        return str(n + int(m.group(1) or 0))
+    return TOKEN_RE.sub(sub, text)
+
+
+def render_file(path, n):
+    """Return the file content with tokens rendered (bytes -> str)."""
+    with open(path, 'r', encoding='utf-8', errors='surrogateescape') as f:
+        return render_tokens(f.read(), n)
+
+
 # -- 1. Additive profile sync ------------------------------------------------
 
-def syncFolder(src, dest, ext='', archive=False):
+def syncFolder(src, dest, ext='', archive=False, render=False):
     """Additive-only profile sync: copy new/changed files from src into dest.
 
     Never deletes anything already in dest — a profile added in the field (or a
@@ -79,8 +125,14 @@ def syncFolder(src, dest, ext='', archive=False):
     differs from an existing one and archive=True, the superseded copy is moved
     aside into '<dest>/_legacy/' before the incoming version is applied, so the
     boot source of truth keeps a trail of what it replaced.
+
+    With render=True the incoming file is rendered through the {N} host-number
+    tokens before comparison and copy (the boot -> NetworkManager step).
     """
     somethingChanged = False
+    n = host_number() if render else None
+    if render and n is None:
+        log("hostname carries no trailing number — {N} tokens left unrendered")
 
     log("Syncing " + src + " to " + dest)
 
@@ -99,9 +151,17 @@ def syncFolder(src, dest, ext='', archive=False):
         srcFile = os.path.join(src, name)
         destFile = os.path.join(dest, name)
 
-        if os.path.exists(destFile) and filecmp.cmp(srcFile, destFile, shallow=False):
-            print('  valid   :', name)
-            continue
+        rendered = render_file(srcFile, n) if render else None
+
+        if os.path.exists(destFile):
+            if rendered is None:
+                same = filecmp.cmp(srcFile, destFile, shallow=False)
+            else:
+                with open(destFile, 'r', encoding='utf-8', errors='surrogateescape') as f:
+                    same = (f.read() == rendered)
+            if same:
+                print('  valid   :', name)
+                continue
 
         rw_on()
 
@@ -112,8 +172,15 @@ def syncFolder(src, dest, ext='', archive=False):
             copyfile(destFile, os.path.join(legacy_dir, name))
             print('  archived:', os.path.join(LEGACY, name))
 
-        copyfile(srcFile, destFile)
-        print('  applied :', name)
+        if rendered is None:
+            copyfile(srcFile, destFile)
+        else:
+            with open(destFile, 'w', encoding='utf-8', errors='surrogateescape') as f:
+                f.write(rendered)
+        tag = ''
+        if rendered is not None and TOKEN_RE.search(open(srcFile, encoding='utf-8', errors='surrogateescape').read()):
+            tag = ' (rendered N=%s)' % n
+        print('  applied :', name + tag)
         somethingChanged = True
 
     return somethingChanged
@@ -336,7 +403,7 @@ try:
 
     # 2. Apply the boot profiles to NetworkManager (additive; never deletes).
     log("Applying profiles to NetworkManager")
-    syncFolder(LOCALSOURCE, DEST, EXT)
+    syncFolder(LOCALSOURCE, DEST, EXT, render=True)
 
     if engageRW:
         os.system('chmod 600 -R ' + DEST)
