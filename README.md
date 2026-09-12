@@ -53,6 +53,43 @@ cd /opt/Pi-tools && ./setup.sh
 
 Already-installed modules are detected and skipped. Only new/missing modules are offered.
 
+### 4. Pair a player (HPlayer2)
+
+Pi-tools is the platform; the player is a separate repo, paired to it in **two steps**.
+Run them **after** the Pi-tools install: step 1 only writes its `starter.txt` stub if
+`starter.txt` already exists, and it is Pi-tools that creates it.
+
+**Step 1 — install HPlayer2:**
+
+```bash
+git clone https://github.com/Hemisphere-Project/HPlayer2.git /opt/HPlayer2
+cd /opt/HPlayer2 && sudo ./install.sh
+```
+
+It symlinks `hplayer2@.service` into `/etc/systemd/system/`, `hplayer2` and `hplayer2-kill`
+into `/usr/local/bin/`, and appends a commented stub to `starter.txt`:
+
+```
+## [hplayer2] multimedia player [profile]
+# hplayer2@looper
+```
+
+**Step 2 — enable a profile** in `starter.txt`: uncomment that line, replacing `looper` with
+a profile name from `/opt/HPlayer2/profiles/` (the `%i` of the templated unit).
+
+```
+hplayer2@looper
+```
+
+That single line is the on/off switch — `starter` starts the unit at boot, so it is never
+`systemctl enable`d. To start it now without rebooting, `systemctl start hplayer2@looper`
+(re-running `starter` will not: it is a `RemainAfterExit` one-shot, already active).
+
+> **x86 vs Pi.** HPlayer2's installer appends to a hard-coded `/boot/starter.txt`. On x86
+> that is where Pi-tools puts it, so the stub lands and step 2 is an uncomment. On a Pi the
+> boot partition is `/boot/firmware`, so **no stub appears** — write the `hplayer2@<profile>`
+> line into `/boot/firmware/starter.txt` yourself.
+
 ---
 
 ## Configuration
