@@ -6,7 +6,7 @@ Before=starter.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/hdmi-rehandshake 3
+ExecStart=/usr/local/bin/hdmi-rehandshake 3 --wait 20
 
 [Install]
 WantedBy=multi-user.target

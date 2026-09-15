@@ -28,3 +28,12 @@ where `tvservice` does not exist.
 
 A hotplug listener (`tvservice -M`) re-asserting the mode on every attach event, plus re-asserts
 at 15 s and 45 s, would also cover TVs slower than the Pi and TVs cycled during the day.
+
+## v2 — display wait + late pass (KOUAGOU, 2026-09-14)
+
+A TV that powers up *after* the Pi (the venue's morning switch-on) got the boot re-handshake
+while it was still absent and latched anyway. The boot pass now waits up to 20 s for the
+display to answer on the hotplug line (`--wait N`), asserts the mode, and leaves a marker in
+`/run/hdmi-rehandshake.state`. `hdmi-rehandshake-late.timer` fires at +75 s and +150 s: if the
+boot pass saw **no** display and one is present now, it re-negotiates and restarts the player
+(nothing meaningful was on screen anyway). A display present at boot is never touched again.

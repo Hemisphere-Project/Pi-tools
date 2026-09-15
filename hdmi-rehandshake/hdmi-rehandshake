@@ -1,7 +1,8 @@
 #!/bin/bash
 # hdmi-rehandshake — re-negotiate the HDMI link with the EXPLICIT mode from config.txt.
 #
-#   hdmi-rehandshake [delay-seconds]      (default 3; the unit runs it before starter)
+#   hdmi-rehandshake [delay-seconds] [--wait N]     boot pass (the unit runs it before starter)
+#   hdmi-rehandshake --late                          late pass (timer): only if the boot pass saw no display
 #
 # Why: with hdmi_force_hotplug=1 the firmware drives the link the instant it boots. A TV
 # powered at the same moment (the venue's morning switch-on) can fail its first evaluation
@@ -10,9 +11,19 @@
 # the output off and on with the mode spelled out (KARIKIS + LEA, 2026-09-10). Doing that
 # once at boot, before the player starts, cures the boot path the same way.
 #
+# v2 (KOUAGOU, 2026-09-14): the boot pass first WAITS for the display to answer on the hotplug
+# line (up to --wait s, default 20): a TV that powers up after the Pi got the re-handshake
+# while it was still absent, and latched anyway. If no display showed up in time the pass
+# asserts the mode regardless and leaves a marker; the late pass (timer, +75 s / +150 s) then
+# re-asserts once a display has appeared and restarts the player, so a slow TV still gets a
+# freshly negotiated link. A display that was present at boot is never touched again.
+#
 # Reads hdmi_group / hdmi_mode from the [pi3] block first (falls back to the first global
 # ones); hdmi_drive=1 -> DVI signalling. No explicit mode in config.txt -> nothing to do.
 CFG=/boot/config.txt; [ -f /boot/firmware/config.txt ] && CFG=/boot/firmware/config.txt
+STATE=/run/hdmi-rehandshake.state
+LATE=0; WAIT=20; DELAY=3
+while [ $# -gt 0 ]; do case "$1" in --late) LATE=1 ;; --wait) WAIT=${2:-20}; shift ;; *) DELAY=$1 ;; esac; shift; done
 blk=$(awk '/^\[pi3\]/{p=1;next} /^\[/{p=0} p' "$CFG" 2>/dev/null)
 g=$(echo "$blk" | sed -n 's/^hdmi_group=\([0-9]*\).*/\1/p' | head -1)
 m=$(echo "$blk" | sed -n 's/^hdmi_mode=\([0-9]*\).*/\1/p' | head -1)
@@ -22,10 +33,30 @@ case "$g" in 1) G=CEA ;; 2) G=DMT ;; *) echo "hdmi-rehandshake: no explicit hdmi
 [ -n "$m" ] || { echo "hdmi-rehandshake: hdmi_group without hdmi_mode, nothing to do"; exit 0; }
 d=$(grep -m1 '^hdmi_drive=' "$CFG" | cut -d= -f2); [ "$d" = 1 ] && D=DVI || D=HDMI
 command -v tvservice >/dev/null || { echo "hdmi-rehandshake: no tvservice (KMS stack?), nothing to do"; exit 0; }
-sleep "${1:-3}"
-echo "hdmi-rehandshake: tvservice -e \"$G $m $D\""
-tvservice -e "$G $m $D"
-sleep 1
-# wake the framebuffer so what draws on it next lands on the fresh link
-fbset -depth 8 >/dev/null 2>&1; fbset -depth 32 >/dev/null 2>&1
-tvservice -s
+present() { tvservice -n 2>&1 | grep -q 'device_name='; }
+assert_mode() {
+  echo "hdmi-rehandshake: tvservice -e \"$G $m $D\" ($(tvservice -n 2>&1 | tr -d '\n'))"
+  tvservice -e "$G $m $D"
+  sleep 1
+  # wake the framebuffer so what draws on it next lands on the fresh link
+  fbset -depth 8 >/dev/null 2>&1; fbset -depth 32 >/dev/null 2>&1
+  tvservice -s
+}
+if [ "$LATE" = 1 ]; then
+  [ "$(cat $STATE 2>/dev/null)" = nodevice ] || { echo "hdmi-rehandshake: late pass, display was present at boot: nothing to do"; exit 0; }
+  present || { echo "hdmi-rehandshake: late pass, still no display: nothing to do"; exit 0; }
+  echo "hdmi-rehandshake: late pass, a display appeared after boot -> re-negotiate + restart the player"
+  assert_mode
+  echo device > $STATE
+  systemctl try-restart 'hplayer2@*.service' 2>/dev/null || true
+  exit 0
+fi
+sleep "$DELAY"
+t0=$(date +%s)
+while ! present; do
+  [ $(( $(date +%s) - t0 )) -ge "$WAIT" ] && break
+  sleep 2
+done
+if present; then echo device > $STATE; echo "hdmi-rehandshake: display present after $(( $(date +%s) - t0 )) s"
+else echo nodevice > $STATE; echo "hdmi-rehandshake: no display after $WAIT s: asserting the mode anyway (late pass will retry)"; fi
+assert_mode
