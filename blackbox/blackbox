@@ -11,6 +11,8 @@
 #   blackbox tail [N]   last N lines
 #   blackbox last       last line, one field per row
 LOG=${BLACKBOX_LOG:-/data/var/log/blackbox.log}
+# heredocs below need a temp dir: /tmp is the 102 MB tmpfs that a log storm fills in a minute (W6, 17/09)
+[ -d /data/tmp ] || mkdir -p /data/tmp 2>/dev/null; export TMPDIR=/data/tmp
 MAX=$((8*1024*1024)); KEEP=3          # 8 MB per file, 3 rotated -> 32 MB ceiling (~6 weeks at 1 line/min)
 case "${1:-}" in
   tail) tail -n "${2:-30}" "$LOG" 2>/dev/null | tr -d '\000'; exit 0 ;;
@@ -84,8 +86,10 @@ JV=$(amixer -c Headphones sget PCM 2>/dev/null | grep -oE '\[[-0-9.]+dB\]' | hea
 PS=$(iw dev wint get power_save 2>/dev/null | awk '{print $NF}')
 AP="ap=$(iw dev wint station dump 2>/dev/null | grep -c '^Station') hostapd=$(systemctl is-active hostapd@wint 2>/dev/null) ps=${PS:--} assoc=$(cnt "$JA" 'IEEE 802.11: associated') conn=$(cnt "$JA" 'AP-STA-CONNECTED') apst=$(cnt "$JA" 'AP-ENABLED') apfix=$(cnt "$JA" 'restarted') kwifi=$(cnt "$JK" 'brcmf|ieee80211|wlan|sdio')"
 
-# --- USB bus events this minute (node re-enumeration, sound card, dongles)
-KUSB="kusb=$(cnt "$JK" 'usb [0-9.-]+: (new|USB disconnect|reset)|cdc_acm|ttyACM')"
+# --- USB bus events this minute (node re-enumeration, sound card, dongles); urb= counts `urb status`
+#     errors in the last 400 lines of the ring buffer (a stalled endpoint loops at ~7000/s and journald
+#     drops most of them -- kmiss= is how many times it said so this minute); usbfix= resets this minute
+KUSB="kusb=$(cnt "$JK" 'usb [0-9.-]+: (new|USB disconnect|reset)|cdc_acm|ttyACM') urb=$(dmesg 2>/dev/null | tail -n 400 | grep -c 'urb status') kmiss=$(journalctl -u systemd-journald --since -60s --no-pager -o cat 2>/dev/null | grep -c Missed) usbfix=$(journalctl -t usbfix --since -60s --no-pager -o cat 2>/dev/null | grep -c .)"
 
 # --- display (video walls: black-screen episodes)
 DISP="disp=$(q tvservice -s | grep -oE '\[[A-Z]+ [A-Z]* *\(?[0-9]+\)?' | tr -d ' ()[' | head -1) dev=$(tvservice -n 2>&1 | grep -q device_name && echo y || echo n) pwr=$(q vcgencmd display_power | cut -d= -f2)"

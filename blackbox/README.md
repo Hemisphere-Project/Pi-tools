@@ -43,7 +43,7 @@ field is `key=value`, so one `grep` answers "what did X do at 19:31":
 | clock | `rtc=±Ns` | RTC minus system clock; `none` = no RTC; a dead cell shows as a wild delta after a power cut |
 | sound | `usb=<dB>` `jack=<dB>` | USB card level (a reboot used to lose it) and the jack |
 | hotspot | `ap` `hostapd` `ps` `assoc` `conn` `apst` `apfix` `kwifi` | stations now, hostapd active, power save on the AP interface, and this minute: association attempts, completed connects, AP-ENABLED events, apfix restarts, kernel wifi-driver lines. **A stale AP reads `ap=0` for hours, then `assoc>0 conn=0` while someone tries to join** — or nothing at all in hostapd while the laptop sees the SSID, which means frames never reached it (firmware-level hang) |
-| usb | `kusb` | USB bus events this minute (node re-enumeration, sound card, dongles) |
+| usb | `kusb` `urb` `kmiss` `usbfix` | USB bus events this minute; `urb status` errors in the last 400 ring-buffer lines (a stalled node endpoint loops at ~7000/s — W6 2026-09-17: 3.4 M kernel messages dropped in 8 min, tmpfs full, hostapd blind, HPlayer2 freewheeling); times journald reported dropping kernel messages this minute; usbfix (Pi-side USB-link watchdog) resets this minute |
 | display | `disp` `dev` `pwr` | mode, device on the hotplug line, display power (video walls) |
 | system | `thr` `t` `load` `free` `tmp` | throttling flags, temperature, load, free RAM, `/tmp` use (= `/var/log` on rorw) |
 | zyre | `sync` `drift` | sync interface address and signal; last wallclock drift window (video walls) |
