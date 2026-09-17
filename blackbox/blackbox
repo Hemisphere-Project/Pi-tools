@@ -1,0 +1,46 @@
+#!/bin/bash
+# blackbox — one line per minute of player state into /data/var/log/blackbox.log (self-rotated).
+# What the journal cannot say: is mpv's position still advancing, what the display reports right
+# now, who is on the hotspot, the sync link and the last drift window — with a timestamp, so a
+# "black screen at 15:40, back at 17:05 when a phone joined" reads off the file in one grep.
+#   blackbox            append one line (the timer does this)
+#   blackbox tail [N]   last N lines, one field per column
+LOG=/data/var/log/blackbox.log
+MAX=$((8*1024*1024)); KEEP=3          # 8 MB per file, 3 rotated -> 32 MB ceiling (~2 months at 1 line/min)
+if [ "${1:-}" = tail ]; then tail -n "${2:-30}" "$LOG" 2>/dev/null | tr '|' '\n' | sed 's/^/  /'; exit 0; fi
+[ -d /data ] || exit 0
+mkdir -p "$(dirname "$LOG")"
+if [ -f "$LOG" ] && [ "$(stat -c %s "$LOG")" -ge "$MAX" ]; then
+  for i in $(seq $((KEEP-1)) -1 1); do [ -f "$LOG.$i" ] && mv -f "$LOG.$i" "$LOG.$((i+1))"; done
+  mv -f "$LOG" "$LOG.1"
+fi
+q() { "$@" 2>/dev/null | tr -d '\n' | tr -s ' '; }
+HP=$(systemctl is-active hplayer2@biennale 2>/dev/null)
+HPR=$(systemctl show hplayer2@biennale -p NRestarts --value 2>/dev/null)
+MPV=$(python3 - <<'PY' 2>/dev/null
+import socket,json,time,os
+try:
+    s=socket.socket(socket.AF_UNIX); s.settimeout(2); s.connect("/tmp/hplayer-player")
+    def g(p):
+        s.send((json.dumps({"command":["get_property",p]})+"\n").encode()); return json.loads(s.recv(4096).decode().splitlines()[0]).get("data")
+    a=g("time-pos"); time.sleep(1.2); b=g("time-pos"); p=g("path") or ""
+    adv = "y" if (a is not None and b is not None and b!=a) else ("idle" if a is None else "STALL")
+    print("media=%s pos=%s adv=%s hw=%s drop=%s" % (os.path.basename(p)[:28] or "-", b if b is None else round(b,1), adv, g("hwdec-current"), g("frame-drop-count")))
+except Exception as e:
+    print("media=- pos=- adv=noipc")
+PY
+)
+DISP="disp=$(q tvservice -s | grep -oE '\[[A-Z]+ [A-Z]* *\(?[0-9]+\)?' | tr -d ' ()' | head -1) dev=$(tvservice -n 2>&1 | grep -q device_name && echo y || echo n) pwr=$(q vcgencmd display_power | cut -d= -f2)"
+SYS="thr=$(q vcgencmd get_throttled | cut -d= -f2) t=$(q vcgencmd measure_temp | grep -oE '[0-9.]+') load=$(cut -d' ' -f1 /proc/loadavg) free=$(free -m | awk '/Mem/{print $7}')M tmp=$(df -P /tmp | awk 'NR==2{print $5}')"
+WINT="ap=$(iw dev wint station dump 2>/dev/null | grep -c '^Station')"
+SYNC=""
+for i in eth0 wlan0; do
+  ip=$(ip -4 -o addr show "$i" 2>/dev/null | awk '{print $4}' | head -1)
+  [ -n "$ip" ] || continue
+  sig=$(iw dev "$i" link 2>/dev/null | grep -oE 'signal: -?[0-9]+' | grep -oE -- '-?[0-9]+$')
+  SYNC="$SYNC $i=${ip%/*}${sig:+@${sig}dBm}"
+done
+DRIFT=$(journalctl -u hplayer2@biennale --since -90s --no-hostname 2>/dev/null | grep -oE 'drift 60s: p50=[0-9.]+ms p95=[0-9.]+ms max=[0-9.]+ms locked=[0-9]+% jumps=[0-9]+' | tail -1 | sed 's/drift 60s: //; s/ /,/g')
+EV=$(journalctl -u hplayer2@biennale --since -60s --no-hostname 2>/dev/null | grep -ciE 'stopped /data|playing /data|LOCKED OUT|CRASH|Traceback|Play list empty')
+printf '%s up=%s hp=%s/%s %s %s %s %s sync=%s drift=%s ev=%s\n' \
+  "$(date '+%F %T')" "$(awk '{printf "%dm",$1/60}' /proc/uptime)" "$HP" "$HPR" "$MPV" "$DISP" "$SYS" "$WINT" "${SYNC:- -}" "${DRIFT:--}" "$EV" >> "$LOG"
