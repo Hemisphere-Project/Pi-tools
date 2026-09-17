@@ -101,9 +101,13 @@ function startDisco(io, bonjourPort) {
 
     zero.start();
 
-    // Advertise self
+    // Advertise self. The instance name must be unique on the link: bonjour-service
+    // probes but does NOT rename — on conflict it stops the service and only
+    // console.logs (registry.js), so every card after the first would silently
+    // vanish from mDNS until webconf restarts. www/disco/script.js matches the
+    // '3615-' prefix.
     bonjour.publish({
-        name: '3615',
+        name: `3615-${os.hostname()}`,
         type: 'http',
         protocol: 'tcp',
         port: bonjourPort,

@@ -11,7 +11,12 @@ $(document).ready(function() {
 
         if (this.info.type.startsWith("http") || this.info.protocol.startsWith("http")) {
             serviceShort = info.name
-            if (serviceShort == this.info.host.split('.')[0]) 
+            // webconf now publishes a per-host instance name ('3615-<hostname>').
+            // The badge already sits inside that host's card, so show the bare
+            // service name — and the "3615" tests below keep matching, which is
+            // also what keeps a not-yet-updated card working.
+            if (serviceShort.startsWith("3615-")) serviceShort = "3615"
+            if (serviceShort == this.info.host.split('.')[0])
                 serviceShort = "WebUI ("+this.info.port+")"
         }
         else serviceShort = this.info.type+'://'
