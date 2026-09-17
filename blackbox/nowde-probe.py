@@ -87,8 +87,10 @@ def main():
         t0 = time.time()
         while time.time() - t0 < 3.0 and not done:
             for m in inp.iter_pending():
+                if m.type != 'sysex':          # a slave's node also emits CC/clock messages: no .data
+                    continue
                 d = list(m.data)
-                if m.type != 'sysex' or len(d) < 2 or d[0] != 0x7D:
+                if len(d) < 2 or d[0] != 0x7D:
                     continue
                 if d[1] == 0x20:
                     hello = parse_hello(d[2:])
