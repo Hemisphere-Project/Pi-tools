@@ -1,0 +1,11 @@
+[Unit]
+Description=blackbox: one line of player state per minute into /data/var/log/blackbox.log
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=60s
+AccuracySec=5s
+Unit=blackbox.service
+
+[Install]
+WantedBy=timers.target

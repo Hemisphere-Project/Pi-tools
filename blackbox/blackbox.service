@@ -1,0 +1,7 @@
+[Unit]
+Description=blackbox: append one line of player state
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/blackbox
+Nice=10
