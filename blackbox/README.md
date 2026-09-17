@@ -10,10 +10,11 @@ mattered were gone. Two pieces, both under `/data/var/log`, both capped.
 
 `/data/var/log/journal` is bound over `/var/log/journal` before `systemd-journal-flush`, and
 journald runs with `Storage=persistent`. Budget: 500 MB max, 1 GB kept free on `/data`, 16 MB
-files, one month retention, compressed, synced once a minute (SD wear: negligible; a crash loses
+files, compressed, synced once a minute, no time-based retention (the first file of a boot has
+the fake-clock head time of early boot, and a time vacuum deletes exactly the boot's first minutes) (SD wear: negligible; a crash loses
 at most a minute). Noisy units are rate-limited at 1000 messages per 30 s. Sizing: a quiet
-master writes ~2 MB/day, a Nowde slave with its servo lines ~15–20 MB/day, so 500 MB is the
-month for a slave.
+master writes ~2 MB/day, a Nowde slave with its servo lines ~15–20 MB/day, so 500 MB is about a
+month for a slave, half a year for a master.
 
 What it buys: `journalctl --list-boots`, `journalctl -b -1 -u hplayer2@biennale` (the previous
 boot: the one the venue power-cycled), hostapd/NetworkManager/dnsmasq/kernel/hplayer2 history
@@ -55,9 +56,12 @@ the wifi hang and the sync loss are one event or two.
 ## Install / cost
 
 `install.sh` (Pi-tools installer, `script = yes`) links the units, drops the journald budget,
-enables both; effective at the next boot, or at once with
-`systemctl start journal-persist && journalctl --flush && systemctl start blackbox.timer`
-(no journald restart needed: with the bind in place `--flush` moves the runtime journal to
-`/var/log/journal` and journald keeps writing there; the conf.d budget applies at the next boot).
+enables both; effective at the next boot. `install.sh --now` starts on a running player without
+losing the current boot's journal: on rorw journald has been writing to `/var/log/journal/<mid>`
+on the tmpfs since boot, and a bind over it would only *hide* those files (journalctl goes blind,
+journald keeps writing to hidden inodes), so `--now` copies them to `/data` first, unlinks the
+tmpfs copy, binds, then restarts journald — the fdstore keeps every service's stdout stream across
+that restart (HPlayer2 included); the copied file is rotated into an archive and a fresh one
+continues on `/data`. The conf.d budget applies from that restart.
 CPU: ~4 s per minute at nice 10 on a Pi 3B+ (three `journalctl --since -60s` reads, one mpv IPC
 read, one node probe of 0.8 s). Storage: ≤ 532 MB on `/data`, never below 1 GB free.
