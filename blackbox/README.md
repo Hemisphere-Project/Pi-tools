@@ -16,9 +16,14 @@ at most a minute). Noisy units are rate-limited at 1000 messages per 30 s. Sizin
 master writes ~2 MB/day, a Nowde slave with its servo lines ~15–20 MB/day, so 500 MB is about a
 month for a slave, half a year for a master.
 
-What it buys: `journalctl --list-boots`, `journalctl -b -1 -u hplayer2@biennale` (the previous
-boot: the one the venue power-cycled), hostapd/NetworkManager/dnsmasq/kernel/hplayer2 history
-across days, wallclock drift windows and zyre link events for a whole run.
+What it buys: the previous boots (the one the venue power-cycled), hostapd/NetworkManager/dnsmasq/
+kernel/hplayer2 history across days, wallclock drift windows and zyre link events for a whole run.
+**Read it by time range, not by boot index**: `journalctl --since '2026-09-16 19:00' --until
+'2026-09-16 20:30' -u hplayer2@biennale`. `journalctl --list-boots` / `-b -1` show only the current
+boot here — every boot's first entries carry fake-clock timestamps (2019 / the last saved date)
+until the RTC or datesync sets the clock, and that breaks journalctl's boot chain (W3, 2026-09-17,
+one reboot later: 1 boot listed, 774 entries of the previous boot readable by `--since`). A power
+cut leaves the active file dirty (`.journal~`); it stays readable.
 
 ## 2. State log (`blackbox.timer`, one line per minute)
 
