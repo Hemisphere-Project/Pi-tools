@@ -13,8 +13,8 @@
 LOG=${BLACKBOX_LOG:-/data/var/log/blackbox.log}
 MAX=$((8*1024*1024)); KEEP=3          # 8 MB per file, 3 rotated -> 32 MB ceiling (~6 weeks at 1 line/min)
 case "${1:-}" in
-  tail) tail -n "${2:-30}" "$LOG" 2>/dev/null; exit 0 ;;
-  last) tail -n 1 "$LOG" 2>/dev/null | tr ' ' '\n' | sed 's/^/  /'; exit 0 ;;
+  tail) tail -n "${2:-30}" "$LOG" 2>/dev/null | tr -d '\000'; exit 0 ;;
+  last) tail -n 1 "$LOG" 2>/dev/null | tr -d '\000' | tr ' ' '\n' | sed 's/^/  /'; exit 0 ;;
 esac
 [ -d /data ] || exit 0
 mkdir -p "$(dirname "$LOG")"
@@ -108,3 +108,5 @@ EV=$(cnt "$J" 'stopped /data|playing /data|LOCKED OUT|CRASH|Traceback|Play list 
 
 printf '%s up=%s hp=%s/%s %s %s %s %s %s %s %s %s %s sync=%s drift=%s ev=%s\n' \
   "$(date '+%F %T')" "$(awk '{printf "%dm",$1/60}' /proc/uptime)" "$HP" "$HPR" "$MPV" "$SCHED" "$NOWDE" "$CLK" "$SND" "$AP" "$KUSB" "$DISP" "$SYS" "${SYNC:--}" "${DRIFT:--}" "$EV" >> "$LOG"
+# one fsync a minute: a power cut otherwise leaves the unflushed tail as a run of NUL bytes (W3, 17/09)
+sync -d "$LOG" 2>/dev/null || true
