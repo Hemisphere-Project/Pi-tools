@@ -2,7 +2,7 @@
 # blackbox — install: persistent journal on /data (bind + journald budget) and the per-minute state log.
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
-chmod 755 "$HERE/blackbox"
+chmod 755 "$HERE/blackbox" "$HERE/nowde-probe.py"
 ln -sf "$HERE/blackbox" /usr/local/bin/blackbox
 ln -sf "$HERE/journal-persist.service" /etc/systemd/system/journal-persist.service
 ln -sf "$HERE/blackbox.service" /etc/systemd/system/blackbox.service
