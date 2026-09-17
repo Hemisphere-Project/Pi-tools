@@ -1,0 +1,6 @@
+[Unit]
+Description=HDMI re-handshake late pass (display that appeared after boot)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/hdmi-rehandshake --late

@@ -1,0 +1,121 @@
+#!/bin/bash
+# blackbox — one line per minute of player state into /data/var/log/blackbox.log (self-rotated).
+# What the journal cannot say in one grep: is mpv's position still advancing, what the display
+# reports right now, who is on the hotspot — and, for a Nowde-synced player, what the NODE itself
+# says (asked over MIDI, not read from HPlayer2's memory): a master's receiver table and each
+# slave's lock, a slave's own lock quality, or `node=dead` when the USB link is gone. Plus the
+# RTC against the clock and the USB card level. Every field is `key=value`, one line a minute, so
+# "black at 15:40, back at 17:05 when a phone joined" or "hotspot stale from 19:31 — did the node
+# link drop at 19:31 too?" reads off the file with one grep.
+#   blackbox            append one line (the timer does this)
+#   blackbox tail [N]   last N lines
+#   blackbox last       last line, one field per row
+LOG=${BLACKBOX_LOG:-/data/var/log/blackbox.log}
+# heredocs below need a temp dir: /tmp is the 102 MB tmpfs that a log storm fills in a minute (W6, 17/09)
+[ -d /data/tmp ] || mkdir -p /data/tmp 2>/dev/null; export TMPDIR=/data/tmp
+MAX=$((8*1024*1024)); KEEP=3          # 8 MB per file, 3 rotated -> 32 MB ceiling (~6 weeks at 1 line/min)
+case "${1:-}" in
+  tail) tail -n "${2:-30}" "$LOG" 2>/dev/null | tr -d '\000'; exit 0 ;;
+  last) tail -n 1 "$LOG" 2>/dev/null | tr -d '\000' | tr ' ' '\n' | sed 's/^/  /'; exit 0 ;;
+esac
+[ -d /data ] || exit 0
+mkdir -p "$(dirname "$LOG")"
+if [ -f "$LOG" ] && [ "$(stat -c %s "$LOG")" -ge "$MAX" ]; then
+  for i in $(seq $((KEEP-1)) -1 1); do [ -f "$LOG.$i" ] && mv -f "$LOG.$i" "$LOG.$((i+1))"; done
+  mv -f "$LOG" "$LOG.1"
+fi
+q() { "$@" 2>/dev/null | tr -d '\n' | tr -s ' '; }
+cnt() { printf '%s\n' "$1" | grep -cE -- "$2"; }            # lines of $1 matching $2 (0 on empty)
+last() { printf '%s\n' "$1" | grep -oE -- "$2" | tail -1; }  # last match of $2 in $1
+
+# --- HPlayer2 instance (hplayer2@<profile>); ONE journal read of the last minute, many greps
+U=$(systemctl list-units --plain --no-legend --type=service 'hplayer2@*' 2>/dev/null | awk '{print $1; exit}')
+U=${U:-hplayer2@biennale.service}; PROFILE=${U#hplayer2@}; PROFILE=${PROFILE%.service}
+HP=$(systemctl is-active "$U" 2>/dev/null)
+HPR=$(systemctl show "$U" -p NRestarts --value 2>/dev/null)
+J=$(journalctl -u "$U" --since -60s --no-pager -o cat 2>/dev/null)
+JK=$(journalctl -k --since -60s --no-pager -o cat 2>/dev/null)
+JA=$(journalctl -u hostapd@wint -t apfix --since -60s --no-pager -o cat 2>/dev/null)
+
+# --- mpv: media, position, does it ADVANCE over 1.2 s (y / STALL / idle / noipc)
+MPV=$(python3 - <<'PY' 2>/dev/null
+import socket,json,time,os
+try:
+    s=socket.socket(socket.AF_UNIX); s.settimeout(2); s.connect("/tmp/hplayer-player")
+    def g(p):
+        s.send((json.dumps({"command":["get_property",p]})+"\n").encode()); return json.loads(s.recv(4096).decode().splitlines()[0]).get("data")
+    a=g("time-pos"); time.sleep(1.2); b=g("time-pos"); p=g("path") or ""
+    adv = "y" if (a is not None and b is not None and b!=a) else ("idle" if a is None else "STALL")
+    print("media=%s pos=%s adv=%s hw=%s drop=%s" % (os.path.basename(p)[:28].replace(" ","_") or "-", b if b is None else round(b,1), adv, g("hwdec-current"), g("frame-drop-count")))
+except Exception as e:
+    print("media=- pos=- adv=noipc")
+PY
+)
+
+# --- schedule, straight from the profile's cfg (what the player believes it should be doing)
+SCHED=$(python3 -c "
+import json
+try:
+    d=json.load(open('/data/hplayer2-$PROFILE.cfg')); print('sched=%s,%s,%s-%s vol=%s' % ('on' if d.get('schedule-enable') else 'off', d.get('schedule-days','-'), d.get('schedule-open','-'), d.get('schedule-close','-'), d.get('volume','-')))
+except Exception: print('sched=- vol=-')" 2>/dev/null)
+
+# --- Nowde: the node's own answer (master table / slave lock / dead), then HPlayer2's side of the
+#     link this minute: HELLOs seen (a slave gets one per keepalive; 0 = nothing heard), MEDIA_SYNC
+#     changes, CC#100 receptions, servo corrections and JUMPs, link warnings.
+PROBE=/opt/Pi-tools/blackbox/nowde-probe.py; VPY=/opt/HPlayer2/.venv/bin/python
+if ls /dev/ttyACM* >/dev/null 2>&1 || printf '%s' "$J" | grep -q NOWDE; then
+  NP=""; [ -x "$VPY" ] && [ -f "$PROBE" ] && NP=$(timeout 10 "$VPY" "$PROBE" 2>/dev/null | head -1)
+  NOWDE="${NP:-node=?} hello=$(cnt "$J" 'HELLO v') msync=$(cnt "$J" 'MEDIA_SYNC') cc=$(cnt "$J" 'CC#100=') servo=$(cnt "$J" 'timedelay=') jump=$(cnt "$J" 'JUMP') link=$(cnt "$J" 'disconnected|relinking|reconnect|unavailable|node error')"
+else
+  NOWDE="node=none"
+fi
+
+# --- clock: RTC against the system clock (a dead cell shows as a wild delta after a power cut)
+if [ -e /dev/rtc0 ]; then
+  RS=$(date -d "$(hwclock -r --noadjfile --utc 2>/dev/null)" +%s 2>/dev/null)
+  CLK="rtc=$( [ -n "$RS" ] && echo "$(( RS - $(date +%s) ))s" || echo err)"
+else CLK="rtc=none"; fi
+
+# --- sound: USB card level (a reboot used to lose it) and the jack
+SND="usb=$(amixer -c Device sget Speaker 2>/dev/null | grep -oE '\[[-0-9.]+dB\]' | head -1 | tr -d '[]')"; [ "$SND" = "usb=" ] && SND="usb=nocard"
+JV=$(amixer -c Headphones sget PCM 2>/dev/null | grep -oE '\[[-0-9.]+dB\]' | head -1 | tr -d '[]'); [ -n "$JV" ] && SND="$SND jack=$JV"
+
+# --- hotspot: stations now, hostapd alive, power save, and this minute: association attempts,
+#     completed connects, hostapd (re)starts, apfix restarts, kernel wifi-driver lines.
+#     A stale AP reads: ap=0 for hours, then assoc>0 with conn=0 while someone tries to join.
+PS=$(iw dev wint get power_save 2>/dev/null | awk '{print $NF}')
+AP="ap=$(iw dev wint station dump 2>/dev/null | grep -c '^Station') hostapd=$(systemctl is-active hostapd@wint 2>/dev/null) ps=${PS:--} assoc=$(cnt "$JA" 'IEEE 802.11: associated') conn=$(cnt "$JA" 'AP-STA-CONNECTED') apst=$(cnt "$JA" 'AP-ENABLED') apfix=$(cnt "$JA" 'restarted') kwifi=$(cnt "$JK" 'brcmf|ieee80211|wlan|sdio')"
+
+# --- USB bus events this minute (node re-enumeration, sound card, dongles); urb= counts `urb status`
+#     errors in the last 400 lines of the ring buffer (a stalled endpoint loops at ~7000/s and journald
+#     drops most of them -- kmiss= is how many times it said so this minute); usbfix= resets this minute
+KUSB="kusb=$(cnt "$JK" 'usb [0-9.-]+: (new|USB disconnect|reset)|cdc_acm|ttyACM') urb=$(dmesg 2>/dev/null | tail -n 400 | grep -c 'urb status') kmiss=$(journalctl -u systemd-journald --since -60s --no-pager -o cat 2>/dev/null | grep -c Missed) usbfix=$(journalctl -t usbfix --since -60s --no-pager -o cat 2>/dev/null | grep -c .)"
+
+# --- display (video walls: black-screen episodes)
+DISP="disp=$(q tvservice -s | grep -oE '\[[A-Z]+ [A-Z]* *\(?[0-9]+\)?' | tr -d ' ()[' | head -1) dev=$(tvservice -n 2>&1 | grep -q device_name && echo y || echo n) pwr=$(q vcgencmd display_power | cut -d= -f2)"
+
+# --- VideoCore output (video walls, CONTAINER 2026-09-17): is mpv's video layer still on the
+#     dispmanx display, and is the pixel clock running? A picture that goes black while mpv keeps
+#     "playing" shows up here (yuv=0) and nowhere else — tvservice/display_power never change.
+VC="vc=yuv$(vcgencmd dispmanx_list 2>/dev/null | grep -c 'format:YUV')/px$(vcgencmd measure_clock pixel 2>/dev/null | cut -d= -f2 | awk '{printf "%.1fM", $1/1e6}')"
+
+# --- system: throttling, temperature, load, RAM, the tmpfs /tmp (= /var/log on rorw)
+SYS="thr=$(q vcgencmd get_throttled | cut -d= -f2) t=$(q vcgencmd measure_temp | grep -oE '[0-9.]+') load=$(cut -d' ' -f1 /proc/loadavg) free=$(free -m | awk '/Mem/{print $7}')M tmp=$(df -P /tmp | awk 'NR==2{print $5}')"
+
+# --- zyre/wallclock sync (video walls): interface address + signal, last drift window
+SYNC=""
+for i in eth0 wlan0; do
+  ip=$(ip -4 -o addr show "$i" 2>/dev/null | awk '{print $4}' | head -1)
+  [ -n "$ip" ] || continue
+  sig=$(iw dev "$i" link 2>/dev/null | grep -oE 'signal: -?[0-9]+' | grep -oE -- '-?[0-9]+$')
+  SYNC="${SYNC:+$SYNC,}$i=${ip%/*}${sig:+@${sig}dBm}"
+done
+DRIFT=$(last "$J" 'drift 60s: p50=[0-9.]+ms p95=[0-9.]+ms max=[0-9.]+ms locked=[0-9]+% jumps=[0-9]+' | sed 's/drift 60s: //; s/ /,/g')
+
+# --- player events this minute: stop/play, lock-outs, crashes, tracebacks, empty playlist
+EV=$(cnt "$J" 'stopped /data|playing /data|LOCKED OUT|CRASH|Traceback|Play list empty')
+
+printf '%s up=%s hp=%s/%s %s %s %s %s %s %s %s %s %s %s sync=%s drift=%s ev=%s\n' \
+  "$(date '+%F %T')" "$(awk '{printf "%dm",$1/60}' /proc/uptime)" "$HP" "$HPR" "$MPV" "$SCHED" "$NOWDE" "$CLK" "$SND" "$AP" "$KUSB" "$DISP" "$VC" "$SYS" "${SYNC:--}" "${DRIFT:--}" "$EV" >> "$LOG"
+# one fsync a minute: a power cut otherwise leaves the unflushed tail as a run of NUL bytes (W3, 17/09)
+sync -d "$LOG" 2>/dev/null || true
