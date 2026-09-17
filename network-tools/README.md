@@ -49,6 +49,26 @@ it. On **x86** the installer strips the 5 GHz pin (Intel radios refuse AP on
 5 GHz) so NM falls back to 2.4 GHz. The hotspot SSID follows the hostname — change
 it with `hostrename <name>`.
 
+## Sync-role profiles (`profiles/_disabled/`)
+
+The four `eth0-sync-*` / `wlan0-sync-*` keyfiles are **templates for stamping a
+sync card**, not defaults. The installer's profile copy skips subdirectories, so
+`_disabled/` never reaches a card by itself — a card gets `eth0-dhcp` +
+`wint-hotspot`, and you make it a sync card by hand-moving the AP or the STA pair
+into `/boot/firmware/wifi/`.
+
+- All four carry **`autoconnect-priority=10`**. A card stamped from the golden
+  image still has its `eth0-dhcp` profile, which has no priority key (= `0`), and
+  on an equal tie-break NM can pick that one instead — the card then sits on DHCP
+  and never raises the static `10.1.0.1` the sync group is addressed on. `10`
+  settles it without deleting anything, which keeps the ADDITIVE rule above
+  intact.
+- `wlan0-sync-AP` / `-STA` are the only Wi-Fi profiles here with **no
+  `interface-name=` pin**. That is deliberate and safe: `setnet` arbitrates the AP
+  role per interface and falls back to the filename prefix, and it never hands an
+  AP profile to NM at all (it renders hostapd and marks the interface unmanaged).
+  So `10` here cannot outrank `wint-hotspot` (priority `9`) for the internal radio.
+
 ## Uplink NAT (optional)
 
 `uplink-fwd@<iface>` (from `starter.txt`) NATs other interfaces out through
