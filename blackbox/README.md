@@ -16,9 +16,14 @@ at most a minute). Noisy units are rate-limited at 1000 messages per 30 s. Sizin
 master writes ~2 MB/day, a Nowde slave with its servo lines ~15–20 MB/day, so 500 MB is about a
 month for a slave, half a year for a master.
 
-What it buys: `journalctl --list-boots`, `journalctl -b -1 -u hplayer2@biennale` (the previous
-boot: the one the venue power-cycled), hostapd/NetworkManager/dnsmasq/kernel/hplayer2 history
-across days, wallclock drift windows and zyre link events for a whole run.
+What it buys: the previous boots (the one the venue power-cycled), hostapd/NetworkManager/dnsmasq/
+kernel/hplayer2 history across days, wallclock drift windows and zyre link events for a whole run.
+**Read it by time range, not by boot index**: `journalctl --since '2026-09-16 19:00' --until
+'2026-09-16 20:30' -u hplayer2@biennale`. `journalctl --list-boots` / `-b -1` show only the current
+boot here — every boot's first entries carry fake-clock timestamps (2019 / the last saved date)
+until the RTC or datesync sets the clock, and that breaks journalctl's boot chain (W3, 2026-09-17,
+one reboot later: 1 boot listed, 774 entries of the previous boot readable by `--since`). A power
+cut leaves the active file dirty (`.journal~`); it stays readable.
 
 ## 2. State log (`blackbox.timer`, one line per minute)
 
@@ -38,7 +43,7 @@ field is `key=value`, so one `grep` answers "what did X do at 19:31":
 | clock | `rtc=±Ns` | RTC minus system clock; `none` = no RTC; a dead cell shows as a wild delta after a power cut |
 | sound | `usb=<dB>` `jack=<dB>` | USB card level (a reboot used to lose it) and the jack |
 | hotspot | `ap` `hostapd` `ps` `assoc` `conn` `apst` `apfix` `kwifi` | stations now, hostapd active, power save on the AP interface, and this minute: association attempts, completed connects, AP-ENABLED events, apfix restarts, kernel wifi-driver lines. **A stale AP reads `ap=0` for hours, then `assoc>0 conn=0` while someone tries to join** — or nothing at all in hostapd while the laptop sees the SSID, which means frames never reached it (firmware-level hang) |
-| usb | `kusb` | USB bus events this minute (node re-enumeration, sound card, dongles) |
+| usb | `kusb` `urb` `kmiss` `usbfix` | USB bus events this minute; `urb status` errors in the last 400 ring-buffer lines (a stalled node endpoint loops at ~7000/s — W6 2026-09-17: 3.4 M kernel messages dropped in 8 min, tmpfs full, hostapd blind, HPlayer2 freewheeling); times journald reported dropping kernel messages this minute; usbfix (Pi-side USB-link watchdog) resets this minute |
 | display | `disp` `dev` `pwr` | mode, device on the hotplug line, display power (video walls) |
 | system | `thr` `t` `load` `free` `tmp` | throttling flags, temperature, load, free RAM, `/tmp` use (= `/var/log` on rorw) |
 | zyre | `sync` `drift` | sync interface address and signal; last wallclock drift window (video walls) |
