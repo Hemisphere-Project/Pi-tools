@@ -94,6 +94,11 @@ KUSB="kusb=$(cnt "$JK" 'usb [0-9.-]+: (new|USB disconnect|reset)|cdc_acm|ttyACM'
 # --- display (video walls: black-screen episodes)
 DISP="disp=$(q tvservice -s | grep -oE '\[[A-Z]+ [A-Z]* *\(?[0-9]+\)?' | tr -d ' ()[' | head -1) dev=$(tvservice -n 2>&1 | grep -q device_name && echo y || echo n) pwr=$(q vcgencmd display_power | cut -d= -f2)"
 
+# --- VideoCore output (video walls, CONTAINER 2026-09-17): is mpv's video layer still on the
+#     dispmanx display, and is the pixel clock running? A picture that goes black while mpv keeps
+#     "playing" shows up here (yuv=0) and nowhere else — tvservice/display_power never change.
+VC="vc=yuv$(vcgencmd dispmanx_list 2>/dev/null | grep -c 'format:YUV')/px$(vcgencmd measure_clock pixel 2>/dev/null | cut -d= -f2 | awk '{printf "%.1fM", $1/1e6}')"
+
 # --- system: throttling, temperature, load, RAM, the tmpfs /tmp (= /var/log on rorw)
 SYS="thr=$(q vcgencmd get_throttled | cut -d= -f2) t=$(q vcgencmd measure_temp | grep -oE '[0-9.]+') load=$(cut -d' ' -f1 /proc/loadavg) free=$(free -m | awk '/Mem/{print $7}')M tmp=$(df -P /tmp | awk 'NR==2{print $5}')"
 
@@ -110,7 +115,7 @@ DRIFT=$(last "$J" 'drift 60s: p50=[0-9.]+ms p95=[0-9.]+ms max=[0-9.]+ms locked=[
 # --- player events this minute: stop/play, lock-outs, crashes, tracebacks, empty playlist
 EV=$(cnt "$J" 'stopped /data|playing /data|LOCKED OUT|CRASH|Traceback|Play list empty')
 
-printf '%s up=%s hp=%s/%s %s %s %s %s %s %s %s %s %s sync=%s drift=%s ev=%s\n' \
-  "$(date '+%F %T')" "$(awk '{printf "%dm",$1/60}' /proc/uptime)" "$HP" "$HPR" "$MPV" "$SCHED" "$NOWDE" "$CLK" "$SND" "$AP" "$KUSB" "$DISP" "$SYS" "${SYNC:--}" "${DRIFT:--}" "$EV" >> "$LOG"
+printf '%s up=%s hp=%s/%s %s %s %s %s %s %s %s %s %s %s sync=%s drift=%s ev=%s\n' \
+  "$(date '+%F %T')" "$(awk '{printf "%dm",$1/60}' /proc/uptime)" "$HP" "$HPR" "$MPV" "$SCHED" "$NOWDE" "$CLK" "$SND" "$AP" "$KUSB" "$DISP" "$VC" "$SYS" "${SYNC:--}" "${DRIFT:--}" "$EV" >> "$LOG"
 # one fsync a minute: a power cut otherwise leaves the unflushed tail as a run of NUL bytes (W3, 17/09)
 sync -d "$LOG" 2>/dev/null || true
