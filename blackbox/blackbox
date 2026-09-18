@@ -40,8 +40,13 @@ JA=$(journalctl -u hostapd@wint -t apfix --since -60s --no-pager -o cat 2>/dev/n
 # --- mpv: media, position, does it ADVANCE over 1.2 s (y / STALL / idle / noipc)
 MPV=$(python3 - <<'PY' 2>/dev/null
 import socket,json,time,os
+def connect():
+    s=socket.socket(socket.AF_UNIX); s.settimeout(2); s.connect("/tmp/hplayer-player"); return s
 try:
-    s=socket.socket(socket.AF_UNIX); s.settimeout(2); s.connect("/tmp/hplayer-player")
+    try:
+        s=connect()
+    except Exception:
+        time.sleep(1.5); s=connect()          # a file wrap closes the socket for a second: not an incident
     def g(p):
         s.send((json.dumps({"command":["get_property",p]})+"\n").encode()); return json.loads(s.recv(4096).decode().splitlines()[0]).get("data")
     a=g("time-pos"); time.sleep(1.2); b=g("time-pos"); p=g("path") or ""
