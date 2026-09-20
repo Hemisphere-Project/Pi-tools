@@ -10,22 +10,95 @@
 COUNT=/run/pitools-rw.count
 LOCK=/run/pitools-rw.lock
 TESTFILE="/root/.readonly"
+# One seal attempt per boot; /run is tmpfs, so this resets at every boot.
+SEALED=/run/pitools-boot-sealed
 
 FORCE=false
 if [ "$1" = "-f" ] || [ "$1" = "--force" ]; then
     FORCE=true
 fi
 
+# Boot partition, mountpoint-driven: Pi (/boot/firmware or /boot) and any EFI
+# system (/boot/efi on mmc/sda/nvme). Same order as `rw` — keep them in step.
+boot_mountpoint() {
+    local mp
+    for mp in /boot/firmware /boot/efi /boot; do
+        if mountpoint -q "$mp"; then echo "$mp"; return 0; fi
+    done
+    return 1
+}
+
+# Clear the FAT "dirty" flag on the boot partition, once per boot.
+#
+# Measured on a loop-mounted FAT32 image (dev37, 2026-09-20), because the
+# obvious model of this is wrong in a way that costs a field visit:
+#
+#   * on a vfat that mounted CLEAN, `mount -o remount,ro` DOES clear the flag.
+#     So the rw/ro helper is not what dirties a card — a box whose /boot starts
+#     clean stays clean through any number of rw/ro cycles.
+#   * on a vfat that mounted DIRTY, nothing in the mount path ever clears it:
+#     not remount-ro, not remount-rw, not even a clean `umount`. The kernel
+#     refuses to rewrite the state byte of a filesystem it mounted dirty, so the
+#     "Volume was not properly unmounted" warning latches and repeats at every
+#     boot, forever, with no writer still doing anything wrong.
+#
+# The only way out of the latch is fsck on the UNMOUNTED volume. Hence: unmount,
+# `fsck.fat -a`, mount back read-only. It has to succeed once — after that the
+# volume arrives clean and the ordinary remount-ro above keeps it that way.
+#
+# Everything here is best-effort: any step that fails leaves the caller to do
+# the plain remount-ro it has always done. A busy /boot is a normal outcome, not
+# an error — the next boot tries again.
+seal_boot_vfat() {
+    local mp="$1" dev rc
+    [ -e "$SEALED" ] && return 1
+
+    [ "$(findmnt -n -o FSTYPE "$mp" 2>/dev/null)" = "vfat" ] || { : >"$SEALED"; return 1; }
+    if ! command -v fsck.fat >/dev/null 2>&1; then
+        echo "RO - $mp is vfat but fsck.fat is missing; cannot clear a dirty flag (apt install dosfstools)"
+        : >"$SEALED"
+        return 1
+    fi
+    dev=$(findmnt -n -o SOURCE "$mp" 2>/dev/null)
+    [ -b "$dev" ] || { : >"$SEALED"; return 1; }
+
+    sync
+    umount "$mp" 2>/dev/null || { echo "RO - $mp busy, leaving its dirty flag for the next boot"; return 1; }
+
+    # Exit 1 is what a SUCCESSFUL repair returns ("recoverable errors detected");
+    # only >=2 is a usage/access failure. Treating 1 as an error would throw away
+    # the one run that actually fixes the card.
+    fsck.fat -a "$dev" >/dev/null 2>&1
+    rc=$?
+    [ "$rc" -ge 2 ] && echo "RO - fsck.fat -a $dev failed (exit $rc)"
+
+    # fstab FIRST, on purpose: install.sh writes the boot line as
+    # `defaults,ro,errors=remount-ro,umask=177`, and mounting by device with a
+    # bare `-o ro` would silently drop umask=177 and loosen /boot's permissions.
+    # The explicit form is the fallback for a box with no fstab entry.
+    if mount "$mp" 2>/dev/null || mount -o ro "$dev" "$mp"; then
+        # An older or hand-edited fstab may not carry the `ro`. Never leave boot
+        # writable here — and on a volume we just cleaned, remount-ro is enough
+        # to clear the flag again (that is the clean-vfat case measured above).
+        case "$(findmnt -n -o OPTIONS "$mp" 2>/dev/null)" in
+            rw|rw,*) mount -o remount,ro "$mp" ;;
+        esac
+        : >"$SEALED"
+        [ "$rc" -lt 2 ] && echo "=> $mp sealed clean (fsck.fat -a)"
+        return 0
+    fi
+    echo "RO - FAILED to remount $dev on $mp after fsck — $mp IS UNMOUNTED"
+    return 1
+}
+
 do_remount_ro() {
+    local boot
+    boot=$(boot_mountpoint) || boot=""
     sync
     for i in {1..5}; do
         mount -o remount,ro /
-        if mountpoint -q /boot/firmware; then
-            mount -o remount,ro /boot/firmware
-        elif mountpoint -q /boot/efi; then
-            mount -o remount,ro /boot/efi
-        elif mountpoint -q /boot; then
-            mount -o remount,ro /boot
+        if [ -n "$boot" ]; then
+            seal_boot_vfat "$boot" || mount -o remount,ro "$boot"
         fi
         if touch "$TESTFILE" 2>/dev/null; then
             echo "RO - attempt $i: still writable, retrying..."
