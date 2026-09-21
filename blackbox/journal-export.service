@@ -1,0 +1,8 @@
+[Unit]
+Description=journal-export: append the journal since the last run to /data (sequential, one fsync)
+ConditionPathIsDirectory=/data
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/journal-export
+Nice=10
