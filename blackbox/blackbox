@@ -124,3 +124,20 @@ printf '%s up=%s hp=%s/%s %s %s %s %s %s %s %s %s %s %s sync=%s drift=%s ev=%s\n
   "$(date '+%F %T')" "$(awk '{printf "%dm",$1/60}' /proc/uptime)" "$HP" "$HPR" "$MPV" "$SCHED" "$NOWDE" "$CLK" "$SND" "$AP" "$KUSB" "$DISP" "$VC" "$SYS" "${SYNC:--}" "${DRIFT:--}" "$EV" >> "$LOG"
 # one fsync a minute: a power cut otherwise leaves the unflushed tail as a run of NUL bytes (W3, 17/09)
 sync -d "$LOG" 2>/dev/null || true
+
+# --- v3: journald lives in RAM; on an anomaly, dump the last 15 min to /data now (journal-export --now),
+#     at most once per 15 min. What counts: mpv not advancing / no IPC, HPlayer2 not active or restarted
+#     since the previous line, a traceback or crash this minute, a slave whose window locked 0 %.
+if command -v journal-export >/dev/null 2>&1; then
+  R=""
+  case "$MPV" in *adv=STALL*|*adv=noipc*) R=mpv ;; esac
+  [ "$HP" = active ] || R=${R:-hplayer-$HP}
+  PREV=$(cat /run/blackbox.hpr 2>/dev/null || echo "$HPR"); echo "$HPR" > /run/blackbox.hpr
+  [ "$HPR" != "$PREV" ] && R=${R:-restart}
+  case "$EV" in 0) ;; *) printf '%s\n' "$J" | grep -qE 'Traceback|CRASH' && R=${R:-traceback} ;; esac
+  case "$DRIFT" in *locked=0%*) R=${R:-unlocked} ;; esac
+  if [ -n "$R" ]; then
+    now=$(date +%s); last=$(cat /run/blackbox.dump 2>/dev/null || echo 0)
+    if [ $((now - last)) -ge 900 ]; then echo "$now" > /run/blackbox.dump; journal-export --now "$R" >/dev/null 2>&1 & fi
+  fi
+fi

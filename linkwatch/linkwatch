@@ -92,8 +92,16 @@ if [ "$nsta" -gt 0 ]; then
     if ping -c 3 -W 1 -I "$IF" "$ip" >/dev/null 2>&1; then reset "fail.$mac"; continue; fi    # any reply clears
     n=$(count "fail.$mac")
     if [ "$n" -ge "$FAIL_TICKS" ] && cool "$mac"; then
-      act "station $mac ($name, $ip) associated but unanswering for $((n*30)) s: deauthenticating (it re-associates)"
-      [ "$DRYRUN" = 1 ] || { hostapd_cli -i "$IF" deauthenticate "$mac" >/dev/null 2>&1; ip neigh flush dev "$IF"; }
+      # v2 (2026-09-21): the deauth is OPT-IN (MASTER_DEAUTH=1). On KOUAGOU it fired 119 times in three
+      # days for kouagou03's dead data path and never cured one — a re-association does not reset a
+      # wedged rtl8xxxu, only the slave's own driver reload does (linkwatch on the slave). It only added
+      # a second disconnect on top of each death. Kept as an observation line so the count stays readable.
+      if [ "${MASTER_DEAUTH:-0}" = 1 ]; then
+        act "station $mac ($name, $ip) associated but unanswering for $((n*30)) s: deauthenticating (it re-associates)"
+        [ "$DRYRUN" = 1 ] || { hostapd_cli -i "$IF" deauthenticate "$mac" >/dev/null 2>&1; ip neigh flush dev "$IF"; }
+      else
+        say "station $mac ($name, $ip) associated but unanswering for $((n*30)) s (observing; MASTER_DEAUTH=0)"
+      fi
       reset "fail.$mac"
     fi
   done < <(cat /var/lib/dnsmasq/dnsmasq.leases /var/lib/misc/dnsmasq.leases 2>/dev/null | grep -E "^[0-9]+ [0-9a-fA-F:]{17} ${pfx//./\\.}\.")
