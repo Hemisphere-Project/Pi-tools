@@ -25,16 +25,19 @@ systemctl daemon-reload 2>/dev/null || true
 systemctl enable blackbox.timer journal-export.timer 2>/dev/null || true
 echo "blackbox v3 installed: journald in RAM (32 MB), journal-export.timer + blackbox.timer enabled (next boot; --now to switch a running player)"
 if [ "${1:-}" = --now ]; then
-  # unbind /data from /var/log/journal if v2 bound it; journald then sees Storage=volatile and writes
-  # /run/log/journal. The fdstore keeps every service's stdout stream across the restart.
+  # Order matters (kouagou02/03, 2026-09-21): journald holds the persistent files open, so the bind
+  # cannot be unmounted before journald has restarted on Storage=volatile. Restart first (the fdstore
+  # keeps every service's stdout stream, HPlayer2 included), then unbind, then archive the v2 files.
+  systemctl restart systemd-journald
+  sleep 1
   if findmnt -rn /var/log/journal >/dev/null 2>&1; then
-    systemctl stop journal-persist.service 2>/dev/null || umount /var/log/journal 2>/dev/null || true
+    umount /var/log/journal 2>/dev/null || umount -l /var/log/journal 2>/dev/null || true
   fi
   MID=$(cat /etc/machine-id)
   if [ -d "/data/var/log/journal/$MID" ] && [ ! -d /data/var/log/journal-v2 ]; then
     mv /data/var/log/journal /data/var/log/journal-v2 2>/dev/null || true   # archive, read with journalctl -D
   fi
-  systemctl restart systemd-journald
+  rm -rf /var/log/journal/*/ 2>/dev/null                                      # nothing must be left on the tmpfs dir
   systemctl start blackbox.timer journal-export.timer
   /usr/local/bin/journal-export >/dev/null 2>&1 || true
   sleep 1
