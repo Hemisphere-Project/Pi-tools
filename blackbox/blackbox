@@ -10,19 +10,24 @@
 #   blackbox            append one line (the timer does this)
 #   blackbox tail [N]   last N lines
 #   blackbox last       last line, one field per row
-LOG=${BLACKBOX_LOG:-/data/var/log/blackbox.log}
+# v3b (2026-09-21, P19b): the live line goes to the tmpfs (/run) and reaches the card only through
+# journal-export, every 10 minutes as one sequential append to /data/var/log/blackbox.log, plus the
+# anomaly dump. Between exports nothing touches /data: a power cut at closing time landed on a data
+# partition's superblock kept hot by the per-minute syncs (lacroix3-36, third card of the family).
+LOG=${BLACKBOX_LOG:-/run/blackbox.log}                 # live, tmpfs, 2 MB x 2 (~1 day at 1 line/min)
+ARCHIVE=${BLACKBOX_ARCHIVE:-/data/var/log/blackbox.log} # what journal-export appended (history)
 # heredocs below need a temp dir: /tmp is the 102 MB tmpfs that a log storm fills in a minute (W6, 17/09)
 [ -d /data/tmp ] || mkdir -p /data/tmp 2>/dev/null; export TMPDIR=/data/tmp
-MAX=$((8*1024*1024)); KEEP=3          # 8 MB per file, 3 rotated -> 32 MB ceiling (~6 weeks at 1 line/min)
+MAX=$((2*1024*1024)); KEEP=2
 case "${1:-}" in
-  tail) tail -n "${2:-30}" "$LOG" 2>/dev/null | tr -d '\000'; exit 0 ;;
+  tail) cat "$ARCHIVE" "$LOG" 2>/dev/null | tr -d '\000' | tail -n "${2:-30}"; exit 0 ;;
   last) tail -n 1 "$LOG" 2>/dev/null | tr -d '\000' | tr ' ' '\n' | sed 's/^/  /'; exit 0 ;;
 esac
-[ -d /data ] || exit 0
 mkdir -p "$(dirname "$LOG")"
 if [ -f "$LOG" ] && [ "$(stat -c %s "$LOG")" -ge "$MAX" ]; then
   for i in $(seq $((KEEP-1)) -1 1); do [ -f "$LOG.$i" ] && mv -f "$LOG.$i" "$LOG.$((i+1))"; done
   mv -f "$LOG" "$LOG.1"
+  : > /run/blackbox.exported                                     # the export offset restarts with the file
 fi
 q() { "$@" 2>/dev/null | tr -d '\n' | tr -s ' '; }
 cnt() { printf '%s\n' "$1" | grep -cE -- "$2"; }            # lines of $1 matching $2 (0 on empty)
@@ -40,8 +45,13 @@ JA=$(journalctl -u hostapd@wint -t apfix --since -60s --no-pager -o cat 2>/dev/n
 # --- mpv: media, position, does it ADVANCE over 1.2 s (y / STALL / idle / noipc)
 MPV=$(python3 - <<'PY' 2>/dev/null
 import socket,json,time,os
+def connect():
+    s=socket.socket(socket.AF_UNIX); s.settimeout(2); s.connect("/tmp/hplayer-player"); return s
 try:
-    s=socket.socket(socket.AF_UNIX); s.settimeout(2); s.connect("/tmp/hplayer-player")
+    try:
+        s=connect()
+    except Exception:
+        time.sleep(1.5); s=connect()          # a file wrap closes the socket for a second: not an incident
     def g(p):
         s.send((json.dumps({"command":["get_property",p]})+"\n").encode()); return json.loads(s.recv(4096).decode().splitlines()[0]).get("data")
     a=g("time-pos"); time.sleep(1.2); b=g("time-pos"); p=g("path") or ""
@@ -117,5 +127,21 @@ EV=$(cnt "$J" 'stopped /data|playing /data|LOCKED OUT|CRASH|Traceback|Play list 
 
 printf '%s up=%s hp=%s/%s %s %s %s %s %s %s %s %s %s %s sync=%s drift=%s ev=%s\n' \
   "$(date '+%F %T')" "$(awk '{printf "%dm",$1/60}' /proc/uptime)" "$HP" "$HPR" "$MPV" "$SCHED" "$NOWDE" "$CLK" "$SND" "$AP" "$KUSB" "$DISP" "$VC" "$SYS" "${SYNC:--}" "${DRIFT:--}" "$EV" >> "$LOG"
-# one fsync a minute: a power cut otherwise leaves the unflushed tail as a run of NUL bytes (W3, 17/09)
-sync -d "$LOG" 2>/dev/null || true
+# (v3b: no fsync — the live file is on the tmpfs; the archive on /data is written by journal-export)
+
+# --- v3: journald lives in RAM; on an anomaly, dump the last 15 min to /data now (journal-export --now),
+#     at most once per 15 min. What counts: mpv not advancing / no IPC, HPlayer2 not active or restarted
+#     since the previous line, a traceback or crash this minute, a slave whose window locked 0 %.
+if command -v journal-export >/dev/null 2>&1; then
+  R=""
+  case "$MPV" in *adv=STALL*|*adv=noipc*) R=mpv ;; esac
+  [ "$HP" = active ] || R=${R:-hplayer-$HP}
+  PREV=$(cat /run/blackbox.hpr 2>/dev/null || echo "$HPR"); echo "$HPR" > /run/blackbox.hpr
+  [ "$HPR" != "$PREV" ] && R=${R:-restart}
+  case "$EV" in 0) ;; *) printf '%s\n' "$J" | grep -qE 'Traceback|CRASH' && R=${R:-traceback} ;; esac
+  case "$DRIFT" in *locked=0%*) R=${R:-unlocked} ;; esac
+  if [ -n "$R" ]; then
+    now=$(date +%s); last=$(cat /run/blackbox.dump 2>/dev/null || echo 0)
+    if [ $((now - last)) -ge 900 ]; then echo "$now" > /run/blackbox.dump; journal-export --now "$R" >/dev/null 2>&1 & fi
+  fi
+fi
