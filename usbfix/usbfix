@@ -10,16 +10,16 @@
 # HPlayer2 relinks by itself. Runs every minute from usbfix.timer.
 #
 # Triggers (any):
-#   A) storm — >= STORM_MIN `urb status` lines in the last 400 lines of the kernel ring buffer
-#      (read from dmesg: under the storm journald DROPS most kernel lines). The device to reset is
-#      the one named in those lines (usb <path>: urb status ...).
+#   A) storm — >= STORM_MIN `urb status` lines with a kernel timestamp in the LAST 60 s (read from
+#      dmesg: under the storm journald DROPS most kernel lines; old lines stay in the ring for hours,
+#      so only fresh ones count). The device to reset is the one named in those lines.
 #   B) journald reporting dropped kernel messages >= MISSED_MIN times in the last minute (a kernel
 #      log storm of another kind): reset the PRODUCT device if there is exactly one, else log only.
 #   C) PRODUCT device present, it used to talk (>= 60 HELLO lines from hplayer2 in the previous
 #      10 min) and fell silent (0 in 90 s) — the Nowde case; skipped when no PRODUCT device exists.
 # At most one reset per COOLDOWN seconds. Logs as `usbfix` (journalctl -t usbfix).
 # Settings: /etc/default/usbfix may set PRODUCT, STORM_MIN, MISSED_MIN, COOLDOWN.
-PRODUCT=Nowde; STORM_MIN=100; MISSED_MIN=5; COOLDOWN=300
+PRODUCT=Nowde; STORM_MIN=20; MISSED_MIN=5; COOLDOWN=300
 [ -f /etc/default/usbfix ] && . /etc/default/usbfix
 IF=/run/usbfix.last
 now=$(date +%s); last=$(cat $IF 2>/dev/null || echo 0)
@@ -34,12 +34,15 @@ reset_dev() {  # $1 = sysfs device path like 1-1.2
   exit 0
 }
 
-# A) the storm, decided from the ring buffer only (fast, journald-free), device named by the lines
-ring=$(timeout 10 dmesg 2>/dev/null | tail -n 400)
-storm=$(printf '%s\n' "$ring" | grep -c 'urb status')
+# A) the storm, decided from the ring buffer only (fast, journald-free) — but FRESH lines only:
+#    dmesg prints [seconds since boot]; a past storm's lines stay in the ring for hours, and a plain
+#    count re-fired every cooldown for ~7 h after each real stall (W3, 18-21/09: 277 resets for 3 storms).
+UP=$(cut -d' ' -f1 /proc/uptime)
+fresh=$(timeout 10 dmesg 2>/dev/null | tail -n 3000 | awk -v now="$UP" '/urb status/ { t=$1; gsub(/[][]/, "", t); if (now - t < 60) print }')
+storm=$(printf '%s\n' "$fresh" | grep -c 'urb status')
 if [ "$storm" -ge "$STORM_MIN" ]; then
-  dev=$(printf '%s\n' "$ring" | grep 'urb status' | grep -oE 'usb [0-9][0-9.-]*:' | sort | uniq -c | sort -rn | head -1 | awk '{print $3}' | tr -d ':')
-  why="kernel urb storm ($storm of the last 400 dmesg lines)"
+  dev=$(printf '%s\n' "$fresh" | grep -oE 'usb [0-9][0-9.-]*:' | sort | uniq -c | sort -rn | head -1 | awk '{print $3}' | tr -d ':')
+  why="kernel urb storm ($storm urb errors in the last 60 s)"
   [ -n "$dev" ] && reset_dev "$dev"
   dev=$(product_dev); [ -n "$dev" ] && reset_dev "$dev"
   logger -t usbfix "$why — no device path in the lines and no $PRODUCT device: nothing to reset"; echo "$now" > $IF; exit 0

@@ -24,7 +24,7 @@ later.
 
 | trigger | how | device reset |
 |---|---|---|
-| **storm** | ≥ `STORM_MIN` (100) `urb status` lines in the last 400 lines of the kernel ring buffer — read from `dmesg`, never from journald, which drops most of it | the one named in those lines |
+| **storm** | ≥ `STORM_MIN` (20) `urb status` lines whose kernel timestamp is within the last 60 s — read from `dmesg` (journald drops most of a storm); **fresh lines only**: a past storm's lines sit in the ring buffer for hours, and a plain count re-fired every cooldown for ~7 h after each real stall (W3, 18–21/09: 277 resets for 3 storms) | the one named in those lines |
 | **journald dropping** | `systemd-journald` reported "Missed N kernel messages" ≥ `MISSED_MIN` (5) times in the last minute | the `PRODUCT` device (Nowde) if exactly one, else log only |
 | **silent node** | a `PRODUCT` device exists, hplayer2 logged ≥ 60 `HELLO` lines in the previous 10 min and none in the last 90 s (a Nowde slave answers a keepalive every 2 s; a master's node never chats, so this cannot fire on a master) | the `PRODUCT` device |
 
