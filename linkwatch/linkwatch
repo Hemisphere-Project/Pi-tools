@@ -1,0 +1,120 @@
+#!/bin/bash
+# linkwatch — sync-link watchdog for the wifi-dongle (and eth0) sync groups, one tick every 30 s.
+#
+# Born 2026-09-18 (Biennale 2026) from three losses that nothing recovered by itself:
+#   - SLAVE, dongle "associated but dead": the WN823N (rtl8xxxu) sits associated at -40 dBm, DHCP and
+#     beacons pass, but ARP/ping/TCP die both ways; NetworkManager sees a healthy link. A re-association
+#     changed nothing; unloading and reloading rtl8xxxu cured it instantly (KOUAGOU 03, twice, two boards).
+#   - MASTER, stale station: a slave reconnected (new board, same dongle), the AP kept the old session
+#     and dropped its unicast — lease present, ARP never answered, zyre never linked — until
+#     `hostapd_cli deauthenticate` re-admitted it (KOUAGOU 03).
+#   - MASTER, sync AP wedged: hostapd@wlan0 alive, nothing beacons, the slaves retry forever.
+#
+# Role from the /boot/wifi markers (same contract as HPlayer2's biennale profile):
+#   <if>-sync-STA -> slave : gateway (the master) unanswering for FAIL_TICKS ticks while the interface has
+#                             an address -> reload the dongle driver (wlan0) or bounce the link (eth0);
+#                             no address at all for NOADDR_TICKS ticks -> same.
+#   <if>-sync-AP  -> master: a lease whose station is associated but never answers ARP/ping for FAIL_TICKS
+#                             ticks -> deauthenticate that station (it re-associates cleanly);
+#                             no station at all for NOSTA_TICKS ticks after having had some this boot ->
+#                             restart hostapd@<if>; still none NOSTA_TICKS later -> reload the driver.
+# One action per COOLDOWN seconds per target. Everything it does is one line: `journalctl -t linkwatch`.
+# Settings: /etc/default/linkwatch (FAIL_TICKS, NOADDR_TICKS, NOSTA_TICKS, COOLDOWN, DRYRUN=1).
+set -u
+export TMPDIR=/data/tmp; mkdir -p /data/tmp 2>/dev/null
+FAIL_TICKS=2; NOADDR_TICKS=10; NOSTA_TICKS=20; COOLDOWN=300; DRYRUN=0
+[ -f /etc/default/linkwatch ] && . /etc/default/linkwatch
+S=/run/linkwatch; mkdir -p "$S"
+now=$(date +%s)
+say() { logger -t linkwatch "$*"; echo "linkwatch: $*"; }
+count() { local f="$S/$1"; local n=$(( $(cat "$f" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$f"; echo "$n"; }
+reset() { rm -f "$S/$1"; }
+cool() { local f="$S/cool.$1" t; t=$(cat "$f" 2>/dev/null || echo 0); [ $((now - t)) -ge "$COOLDOWN" ] && { echo "$now" > "$f"; return 0; }; return 1; }
+act() { [ "$DRYRUN" = 1 ] && { say "DRYRUN: $*"; return 0; }; say "$*"; }
+
+IF=""; ROLE=""
+for i in eth0 wlan0; do
+  [ -f /boot/wifi/$i-sync-STA.nmconnection ] && { IF=$i; ROLE=slave; }
+  [ -f /boot/wifi/$i-sync-AP.nmconnection ]  && { IF=$i; ROLE=master; }
+done
+[ -n "$IF" ] || exit 0                                   # solo player: nothing to watch
+ip link show "$IF" >/dev/null 2>&1 || { say "$IF absent (dongle unplugged?)"; exit 0; }
+
+reload_driver() {                                        # the proven cure for a wedged rtl8xxxu
+  if [ "$IF" = wlan0 ] && lsmod | grep -q '^rtl8xxxu'; then
+    act "reloading rtl8xxxu on $IF: $1"
+    [ "$DRYRUN" = 1 ] && return 0
+    nmcli device set "$IF" managed no >/dev/null 2>&1
+    modprobe -r rtl8xxxu; sleep 2; modprobe rtl8xxxu; sleep 4
+    nmcli device set "$IF" managed yes >/dev/null 2>&1
+    [ "$ROLE" = slave ] && nmcli connection up "sync-sta-$IF" >/dev/null 2>&1
+    [ "$ROLE" = master ] && systemctl restart "hostapd@$IF" >/dev/null 2>&1
+  else
+    act "bouncing $IF: $1"
+    [ "$DRYRUN" = 1 ] && return 0
+    ip link set "$IF" down; sleep 2; ip link set "$IF" up
+    [ "$ROLE" = slave ] && nmcli connection up "sync-sta-$IF" >/dev/null 2>&1
+  fi
+}
+
+if [ "$ROLE" = slave ]; then
+  addr=$(ip -4 -o addr show "$IF" 2>/dev/null | awk '{print $4}' | head -1)
+  if [ -z "$addr" ]; then
+    reset fail
+    n=$(count noaddr)
+    [ "$n" -ge "$NOADDR_TICKS" ] && cool "$IF" && { reload_driver "no address on $IF for $((n*30)) s"; reset noaddr; }
+    exit 0
+  fi
+  reset noaddr
+  gw=$(ip -4 route show dev "$IF" 2>/dev/null | awk '/default/{print $3; exit}')
+  [ -n "$gw" ] || gw=$(ip -4 route show dev "$IF" 2>/dev/null | awk '/proto dhcp|dhcp/{print $3; exit}')
+  [ -n "$gw" ] || gw="${addr%.*}.1"
+  if ping -c 3 -W 1 -I "$IF" "$gw" >/dev/null 2>&1; then reset fail; exit 0; fi    # exit 0 = at least one reply
+  n=$(count fail)
+  sig=$(iw dev "$IF" link 2>/dev/null | grep -oE 'signal: -?[0-9]+' | grep -oE -- '-?[0-9]+')
+  if [ "$n" -ge "$FAIL_TICKS" ] && cool "$IF"; then
+    reload_driver "master $gw unanswering for $((n*30)) s while $IF has $addr (signal ${sig:-?} dBm)"
+    reset fail
+  fi
+  exit 0
+fi
+
+# master
+pfx=$(ip -4 -o addr show "$IF" 2>/dev/null | awk '{print $4}' | head -1 | cut -d. -f1-3); pfx=${pfx:-10.1.0}
+sta=$(iw dev "$IF" station dump 2>/dev/null | awk '/^Station/{print tolower($2)}')
+nsta=$(printf '%s\n' "$sta" | grep -c .)
+if [ "$nsta" -gt 0 ]; then
+  reset nosta; echo 1 > "$S/hadsta"
+  # a station that is associated and holds a lease but answers nothing -> its session is stale
+  while read -r _ mac ip name _; do
+    [ -n "$mac" ] || continue
+    printf '%s\n' "$sta" | grep -qx "$(echo "$mac" | tr 'A-Z' 'a-z')" || continue
+    if ping -c 3 -W 1 -I "$IF" "$ip" >/dev/null 2>&1; then reset "fail.$mac"; continue; fi    # any reply clears
+    n=$(count "fail.$mac")
+    if [ "$n" -ge "$FAIL_TICKS" ] && cool "$mac"; then
+      # v2 (2026-09-21): the deauth is OPT-IN (MASTER_DEAUTH=1). On KOUAGOU it fired 119 times in three
+      # days for kouagou03's dead data path and never cured one — a re-association does not reset a
+      # wedged rtl8xxxu, only the slave's own driver reload does (linkwatch on the slave). It only added
+      # a second disconnect on top of each death. Kept as an observation line so the count stays readable.
+      if [ "${MASTER_DEAUTH:-0}" = 1 ]; then
+        act "station $mac ($name, $ip) associated but unanswering for $((n*30)) s: deauthenticating (it re-associates)"
+        [ "$DRYRUN" = 1 ] || { hostapd_cli -i "$IF" deauthenticate "$mac" >/dev/null 2>&1; ip neigh flush dev "$IF"; }
+      else
+        say "station $mac ($name, $ip) associated but unanswering for $((n*30)) s (observing; MASTER_DEAUTH=0)"
+      fi
+      reset "fail.$mac"
+    fi
+  done < <(cat /var/lib/dnsmasq/dnsmasq.leases /var/lib/misc/dnsmasq.leases 2>/dev/null | grep -E "^[0-9]+ [0-9a-fA-F:]{17} ${pfx//./\\.}\.")
+  exit 0
+fi
+# no station at all: normal at boot or with the slaves off; suspicious once we had some this boot
+[ -f "$S/hadsta" ] || exit 0
+n=$(count nosta)
+if [ "$n" -eq "$NOSTA_TICKS" ] && cool "ap"; then
+  act "no station on $IF for $((n*30)) s after having had some: restarting hostapd@$IF"
+  [ "$DRYRUN" = 1 ] || systemctl restart "hostapd@$IF"
+elif [ "$n" -ge $((NOSTA_TICKS*2)) ] && cool "ap"; then
+  reload_driver "still no station on $IF $((n*30)) s later"
+  reset nosta
+fi
+exit 0
