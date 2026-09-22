@@ -1,0 +1,11 @@
+[Unit]
+Description=usbfix: USB-link watchdog, every minute
+
+[Timer]
+OnBootSec=120
+OnUnitActiveSec=60
+AccuracySec=5
+Unit=usbfix.service
+
+[Install]
+WantedBy=timers.target
