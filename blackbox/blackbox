@@ -14,6 +14,8 @@
 # journal-export, every 10 minutes as one sequential append to /data/var/log/blackbox.log, plus the
 # anomaly dump. Between exports nothing touches /data: a power cut at closing time landed on a data
 # partition's superblock kept hot by the per-minute syncs (lacroix3-36, third card of the family).
+# v3c (2026-09-22): `tasks=` + `spawn=` on the system group -- a thread-exhaustion storm is a
+# creation RATE, and the two boxes that had one read 26 threads flat while it happened.
 LOG=${BLACKBOX_LOG:-/run/blackbox.log}                 # live, tmpfs, 2 MB x 2 (~1 day at 1 line/min)
 ARCHIVE=${BLACKBOX_ARCHIVE:-/data/var/log/blackbox.log} # what journal-export appended (history)
 # heredocs below need a temp dir: /tmp is the 102 MB tmpfs that a log storm fills in a minute (W6, 17/09)
@@ -110,7 +112,30 @@ DISP="disp=$(q tvservice -s | grep -oE '\[[A-Z]+ [A-Z]* *\(?[0-9]+\)?' | tr -d '
 VC="vc=yuv$(vcgencmd dispmanx_list 2>/dev/null | grep -c 'format:YUV')/px$(vcgencmd measure_clock pixel 2>/dev/null | cut -d= -f2 | awk '{printf "%.1fM", $1/1e6}')"
 
 # --- system: throttling, temperature, load, RAM, the tmpfs /tmp (= /var/log on rorw)
-SYS="thr=$(q vcgencmd get_throttled | cut -d= -f2) t=$(q vcgencmd measure_temp | grep -oE '[0-9.]+') load=$(cut -d' ' -f1 /proc/loadavg) free=$(free -m | awk '/Mem/{print $7}')M tmp=$(df -P /tmp | awk 'NR==2{print $5}')"
+#     `free=` has always been MemAvailable, NOT MemFree -- what a new allocation can actually get,
+#     cache already discounted. It was column 7 of `free -m`, which is true of procps-ng and of
+#     nothing else; read from /proc/meminfo the field says what it is and cannot change meaning
+#     under a column reorder. Same number, same name: six weeks of field lines still grep.
+SYS="thr=$(q vcgencmd get_throttled | cut -d= -f2) t=$(q vcgencmd measure_temp | grep -oE '[0-9.]+') load=$(cut -d' ' -f1 /proc/loadavg) free=$(awk '/^MemAvailable:/{printf "%d", $2/1024}' /proc/meminfo)M tmp=$(df -P /tmp | awk 'NR==2{print $5}')"
+
+# --- threads: the player's live count, and the whole system's thread CREATION RATE this minute.
+#     `tasks=` is the level (against the unit's TasksMax, 1803); `spawn=` is the rate, and the rate
+#     is the one that finds things. kouagou02/03 raised `RuntimeError: can't start new thread` 11x
+#     and 10x, in bursts of six a minute, while sitting at a perfectly steady 26 threads -- which is
+#     exactly why a thread leak was ruled out and the hunt went to memory instead. The real cause
+#     was HPlayer2's module.delimiter() starting a threading.Timer PER LOG LINE: hundreds of OS
+#     threads created and torn down per second during a link storm (fixed in HPlayer2 24288eb,
+#     2026-09-21). No count can see that; a per-minute delta of /proc/stat's `processes` -- which
+#     counts every fork AND clone since boot -- reads it straight off. What a healthy range looks
+#     like is not known yet: that is what the first weeks of lines are for, and until one is
+#     measured `spawn=` deliberately does not trigger the anomaly dump below.
+#     /run is tmpfs, so the previous value cannot survive a reboot into a nonsense delta.
+NCLONE=$(awk '/^processes /{print $2}' /proc/stat 2>/dev/null); NCLONE=${NCLONE:-0}
+PREVN=$(cat /run/blackbox.clones 2>/dev/null); case "$PREVN" in ''|*[!0-9]*) PREVN=$NCLONE ;; esac
+echo "$NCLONE" > /run/blackbox.clones
+SPAWN=$((NCLONE - PREVN)); [ "$SPAWN" -ge 0 ] || SPAWN=-          # counter reset under a stale file
+TASKS=$(systemctl show "$U" -p TasksCurrent --value 2>/dev/null); case "$TASKS" in ''|*[!0-9]*) TASKS=- ;; esac
+SYS="$SYS tasks=$TASKS spawn=$SPAWN"
 
 # --- zyre/wallclock sync (video walls): interface address + signal, last drift window
 SYNC=""

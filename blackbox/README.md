@@ -46,7 +46,7 @@ field is `key=value`, so one `grep` answers "what did X do at 19:31":
 | usb | `kusb` `urb` `kmiss` `usbfix` | USB bus events this minute; `urb status` errors in the last 400 ring-buffer lines (a stalled node endpoint loops at ~7000/s — W6 2026-09-17: 3.4 M kernel messages dropped in 8 min, tmpfs full, hostapd blind, HPlayer2 freewheeling); times journald reported dropping kernel messages this minute; usbfix (Pi-side USB-link watchdog) resets this minute |
 | display | `disp` `dev` `pwr` | mode, device on the hotplug line, display power (video walls) |
 | VideoCore | `vc=yuvN/pxXM` | mpv's video layers on the dispmanx display (`vcgencmd dispmanx_list`: 1 while a video plays, 0 = black output with mpv alive) and the HDMI pixel clock in MHz (0 = output stopped). The two sensors the black-screen case lacked (CONTAINER, 2026-09-17) |
-| system | `thr` `t` `load` `free` `tmp` | throttling flags, temperature, load, free RAM, `/tmp` use (= `/var/log` on rorw) |
+| system | `thr` `t` `load` `free` `tmp` `tasks` `spawn` | throttling flags, temperature, load, RAM, `/tmp` use (= `/var/log` on rorw), and threads. **`free` is MemAvailable, not MemFree** — what a new allocation can get, cache discounted; on a player with a warm page cache the two differ by hundreds of MB, so read it as headroom. `tasks` = the HPlayer2 unit's live thread count (`TasksMax` is 1803); **`spawn` = threads and processes created system-wide THIS MINUTE** (per-minute delta of `/proc/stat`'s `processes`, which counts every `fork` and `clone`) |
 | zyre | `sync` `drift` | sync interface address and signal; last wallclock drift window (video walls) |
 | events | `ev` | stop/play/lock-out/crash/traceback/empty-playlist lines this minute |
 
@@ -57,7 +57,12 @@ did; then the journal of that minute. Reading a **desync**: on the master, `slav
 `age` (who fell out of the table and when); on a slave, `sq` (2 → 1/0) and `hello` (12 → 0 =
 node silent) at the same minute as `servo`/`jump`. Reading a **stale hotspot**: `ap` stayed 0 and
 `assoc`/`conn` show the failed joins; put it next to `node`/`sq` of the same minute to see whether
-the wifi hang and the sync loss are one event or two.
+the wifi hang and the sync loss are one event or two. Reading a **`can't start new thread`**: look
+at `spawn`, not `tasks` — kouagou02/03 raised it 11× and 10× in bursts of six a minute at a flat 26
+threads, so the count said "healthy" throughout while a `threading.Timer` per log line was burning
+hundreds of threads a second (HPlayer2 `24288eb`, 2026-09-21). `free` of the same minute says
+whether it was headroom instead. (The sample line above was captured 2026-09-17 and predates both
+fields.)
 
 ## Install / cost
 
