@@ -28,7 +28,7 @@ later.
 | **journald dropping** | `systemd-journald` reported "Missed N kernel messages" ≥ `MISSED_MIN` (5) times in the last minute | the `PRODUCT` device (Nowde) if exactly one, else log only |
 | **silent node** | a `PRODUCT` device exists, hplayer2 logged ≥ 60 `HELLO` lines in the previous 10 min and none in the last 90 s (a Nowde slave answers a keepalive every 2 s; a master's node never chats, so this cannot fire on a master) | the `PRODUCT` device |
 
-One reset per `COOLDOWN` (300 s). Settings in `/etc/default/usbfix` (`PRODUCT`, `STORM_MIN`,
+One reset per `COOLDOWN` (90 s — long enough for the relink, short enough that a re-stall right after a cure is not left to starve the Pi: W4 froze Fri 18/09 17:06 → Sat 11:27 behind a 5-min cooldown). Settings in `/etc/default/usbfix` (`PRODUCT`, `STORM_MIN`,
 `MISSED_MIN`, `COOLDOWN`). Everything it does is one line in the journal: `journalctl -t usbfix`.
 
 ## rsyslog

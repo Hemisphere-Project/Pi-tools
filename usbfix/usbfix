@@ -17,9 +17,10 @@
 #      log storm of another kind): reset the PRODUCT device if there is exactly one, else log only.
 #   C) PRODUCT device present, it used to talk (>= 60 HELLO lines from hplayer2 in the previous
 #      10 min) and fell silent (0 in 90 s) — the Nowde case; skipped when no PRODUCT device exists.
-# At most one reset per COOLDOWN seconds. Logs as `usbfix` (journalctl -t usbfix).
+# At most one reset per COOLDOWN seconds (90: a re-stall right after a cure must not wait 5 min while
+# the Pi starves — W4 froze from Fri 18/09 17:06 to Sat 11:27 that way). Logs as `usbfix`.
 # Settings: /etc/default/usbfix may set PRODUCT, STORM_MIN, MISSED_MIN, COOLDOWN.
-PRODUCT=Nowde; STORM_MIN=20; MISSED_MIN=5; COOLDOWN=300
+PRODUCT=Nowde; STORM_MIN=20; MISSED_MIN=5; COOLDOWN=90
 [ -f /etc/default/usbfix ] && . /etc/default/usbfix
 IF=/run/usbfix.last
 now=$(date +%s); last=$(cat $IF 2>/dev/null || echo 0)
