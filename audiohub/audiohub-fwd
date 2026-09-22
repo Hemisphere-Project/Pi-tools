@@ -138,6 +138,14 @@ case "$SINK" in
         /usr/bin/alsaloop -C aloopcap -P "$DEV" -r 48000 -f S16_LE -c 8 -t "$LAT" -S auto &
         LOOP=$!
         trap "kill $LOOP 2>/dev/null" TERM INT
+        # Flow watch, same contract as the jack/hdmi branch below: while the loopback cable has
+        # a writer, the DAC's pointer must advance. A CPU-starved alsaloop (S06-48-P 2026-09-18:
+        # a stray daily mandb + the chip soft-throttled at 62 °C) logs "overrun for capture
+        # aloopcap", leaves the sink in XRUN with hw_ptr frozen 13 s after start, and then spins
+        # at 76 % CPU forever — the card is still present, so the presence check never fired and
+        # the piece ran mute until a hand restarted the unit. Three misses (~6 s) recycle us;
+        # SIGKILL because the spin ignores TERM (measured on the firmware sinks, same alsaloop).
+        STALL=0 LASTPTR=-1
         while kill -0 "$LOOP" 2>/dev/null; do
             if ! grep -qE "\[$CARD *\]" /proc/asound/cards; then
                 echo "usb card $CARD vanished: recycling forwarder"
@@ -146,6 +154,25 @@ case "$SINK" in
                 exit 1
             fi
             usb_volume_pin
+            LB=$(cardidx Loopback); SC=$(cardidx "$CARD")
+            CABLE=$(sed -n 1p "/proc/asound/card$LB/pcm0p/sub0/status" 2>/dev/null)
+            if [ "$CABLE" != "state: RUNNING" ]; then
+                STALL=0; LASTPTR=-1                      # no writer on the cable: idle is legit
+            else
+                ST=$(sed -n 1p "/proc/asound/card$SC/pcm0p/sub0/status" 2>/dev/null)
+                PTR=$(grep -h hw_ptr "/proc/asound/card$SC/pcm0p/sub0/status" 2>/dev/null | tr -dc 0-9)
+                if [ "$ST" = "state: RUNNING" ] && [ -n "$PTR" ] && [ "$PTR" != "$LASTPTR" ]; then
+                    STALL=0; LASTPTR=$PTR
+                else
+                    STALL=$((STALL+1)); LASTPTR=${PTR:-$LASTPTR}
+                    if [ "$STALL" -ge 3 ]; then
+                        echo "usb sink $CARD stalled (${ST:-closed}) with a live cable: recycling forwarder"
+                        kill -9 "$LOOP" 2>/dev/null
+                        wait "$LOOP" 2>/dev/null
+                        exit 1
+                    fi
+                fi
+            fi
             sleep 2
         done
         wait "$LOOP"
