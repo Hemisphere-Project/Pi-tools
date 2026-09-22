@@ -1,0 +1,69 @@
+# patch-ledger.example — a ledger for bench/probe-level.
+#
+# Copy it next to where you work (./patch-ledger) or to
+# ~/.config/pitools/patch-ledger, and put the real patches in it. This file is
+# an EXAMPLE and is deliberately NOT any installation's real ledger: it exists
+# so `probe-level --dry-run -l bench/fixtures/patch-ledger.example` runs the
+# whole reader on a machine with no player in earshot, and so the format has a
+# worked answer instead of a paragraph.
+#
+# THE IDS BELOW ARE THIS FILE'S OWN. A fleet's `P7` is whatever its own ledger
+# says `P7` is — the numbering is the ledger's, never the tool's, and never
+# this example's. Keep one ledger per fleet and keep the ids stable in it: the
+# id is what a note, a runbook and a phone message all mean when they say P7.
+#
+# Columns — five, `|` separated, one patch per line:
+#
+#     <id> | <title> | <golden-since> | <apply> | <detect command>
+#
+#   id             short and stable. It is the whole vocabulary.
+#   title          what it is, in a few words. Printed next to y/n.
+#   golden-since   the image this first shipped in, or `-`. A card older than
+#                  that is expected to be missing it; a card newer that is
+#                  missing it has drifted, which is the interesting case.
+#   apply          how to put it there. Printed under the missing list, so the
+#                  answer and the act land on one screen.
+#   detect         the command, run ON the box. LAST, so it may contain `|`.
+#                  exit 0 = there · exit 1 = not there · anything else = could
+#                  not read, which probe-level reports as `?` and never as `n`.
+#
+# Only a line whose first non-blank character is `#` is a comment. A trailing
+# `#` is not — detect commands contain them.
+#
+# Writing a detect command: make it answer about the BOX, not about the
+# checkout. `git -C /opt/Pi-tools merge-base --is-ancestor <sha> HEAD` says the
+# code is on disk; it does not say the unit was reloaded and started, which is
+# the deploy gotcha of AUDIT-2026 (a `git pull` changes files, not running
+# services). Prefer a question about the installed artefact, and use the
+# checkout form only for patches that really are just files.
+
+# --- units a module installs: the plain case -----------------------------------
+P1 | hdmi-rehandshake v2 (the late re-handshake pass)   | 7.3 | ./setup.sh hdmi-rehandshake      | systemctl is-enabled hdmi-rehandshake-late.timer >/dev/null 2>&1
+P2 | blackbox state logger                              | 7.3 | ./setup.sh blackbox             | systemctl is-enabled blackbox.timer >/dev/null 2>&1
+P3 | blackbox persistent journal on /data               | 7.3 | ./setup.sh blackbox             | systemctl is-enabled journal-persist.service >/dev/null 2>&1
+P4 | usbfix                                             | 7.3 | ./setup.sh usbfix               | systemctl is-enabled usbfix.timer >/dev/null 2>&1
+P5 | linkwatch sync-link watchdog                       | -   | ./setup.sh linkwatch            | systemctl is-enabled linkwatch.timer >/dev/null 2>&1
+P6 | extendfs                                           | 7.3 | ./setup.sh extendfs             | systemctl is-enabled extendfs.service >/dev/null 2>&1
+
+# --- a unit that must be MASKED: `is-enabled` prints, it does not exit-code -----
+# `systemctl is-enabled man-db.timer` exits 1 for masked AND for disabled, so
+# the exit code cannot be the answer here and the word has to be compared.
+P7 | man-db.timer masked (it starves the audio path)    | 7.3 | systemctl mask man-db.timer | [ "$(systemctl is-enabled man-db.timer 2>/dev/null)" = masked ]
+
+# --- a patch inside a script: grep the marker, not the version -----------------
+# The forwarder gained a flow watch on the usb branch; the marker is the line it
+# logs when it acts. A marker beats a version string because it is what the fix
+# IS, and it does not drift when someone bumps a number.
+P8 | audiohub usb forwarder flow watch                  | -   | cd /opt/Pi-tools && git pull --ff-only && systemctl restart 'audiohub@usb' | grep -q 'usb sink .* stalled' /opt/Pi-tools/audiohub/audiohub-fwd
+
+# --- a patch that really is just a file in the checkout ------------------------
+# The checkout form, used where it is honest: nothing has to be running for this
+# one to be true. Replace the sha with the commit that introduced the patch.
+P9 | Pi-tools checkout carries <sha>                    | -   | cd /opt/Pi-tools && git pull --ff-only | git -C /opt/Pi-tools merge-base --is-ancestor 4fb2c2a HEAD
+
+# --- a deliberate UNREADABLE row ------------------------------------------------
+# Keep one like this the first time you use a new ledger: it is how you see, in
+# one pass, that `?` is a different column from `n`. This command exits 127 (not
+# found) rather than 1, so probe-level must call it unread — if it ever shows as
+# `n`, the tool is lying to you about everything else too.
+P99 | a detect command that cannot run (expect `?`)     | -   | (nothing — this row is a self-test) | definitely-not-a-command-on-any-player
