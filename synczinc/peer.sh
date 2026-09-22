@@ -67,18 +67,20 @@ accept_offers() {
         local api="http://127.0.0.1:8384/rest" h="X-API-Key: $SYNC_API_KEY"
         while sleep 20; do
                 curl -fs -m 4 -H "$h" "$api/system/ping" >/dev/null 2>&1 || continue
-                curl -fs -m 4 -H "$h" "$api/cluster/pending/folders" 2>/dev/null | python3 - "$api" "$SYNC_API_KEY" "$SYNC_PATH" <<'PY' 2>&1 | sed 's/^/[synczinc] /'
+                python3 - "$api" "$SYNC_API_KEY" "$SYNC_PATH" <<'PY' 2>&1 | sed 's/^/[synczinc] /'
 import json, sys, urllib.request
 api, key, syncpath = sys.argv[1:4]
-try:
-    pending = json.load(sys.stdin)
-except Exception:
-    sys.exit(0)
+# (the pending list is fetched HERE, not piped in: `python3 -` takes its program from stdin,
+#  so a pipe into it is silently swallowed by the heredoc — the 2026-09-12 version never saw an offer)
 def call(path, data=None, method='GET'):
     req = urllib.request.Request(api + path, data=json.dumps(data).encode() if data is not None else None, method=method)
     req.add_header('X-API-Key', key); req.add_header('Content-Type', 'application/json')
     with urllib.request.urlopen(req, timeout=6) as r:
         return json.loads(r.read() or b'null')
+try:
+    pending = call('/cluster/pending/folders') or {}
+except Exception as e:
+    print('pending offers: %s' % e); sys.exit(0)
 introducers = {d['deviceID'] for d in call('/config/devices') if d.get('introducer')}
 have = {f['id'] for f in call('/config/folders')}
 for fid, info in pending.items():

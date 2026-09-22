@@ -1,0 +1,11 @@
+[Unit]
+Description=HDMI re-handshake late pass at +75 s and +150 s after boot
+
+[Timer]
+OnBootSec=75s
+OnBootSec=150s
+AccuracySec=5s
+Unit=hdmi-rehandshake-late.service
+
+[Install]
+WantedBy=timers.target
