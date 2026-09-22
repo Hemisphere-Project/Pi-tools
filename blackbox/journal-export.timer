@@ -1,0 +1,11 @@
+[Unit]
+Description=journal-export every 10 minutes (post-mortem trail on /data, journald stays in RAM)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+AccuracySec=30s
+Unit=journal-export.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,7 @@
+[Unit]
+Description=linkwatch: one sync-link watchdog tick
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/linkwatch
+Nice=5

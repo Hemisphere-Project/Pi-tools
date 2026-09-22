@@ -1,0 +1,11 @@
+[Unit]
+Description=linkwatch: sync-link watchdog tick every 30 s (dongle slaves and masters)
+
+[Timer]
+OnBootSec=120
+OnUnitActiveSec=30
+AccuracySec=5s
+Unit=linkwatch.service
+
+[Install]
+WantedBy=timers.target
