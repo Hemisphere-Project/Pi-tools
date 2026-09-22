@@ -23,6 +23,11 @@
 PRODUCT=Nowde; STORM_MIN=20; MISSED_MIN=5; COOLDOWN=90
 [ -f /etc/default/usbfix ] && . /etc/default/usbfix
 IF=/run/usbfix.last
+# Deliberate maintenance (a node OTA, a USB test) inhibits the watchdog: `touch /run/usbfix.inhibit`
+# before, remove it after. Without this the OTA's own conditions look exactly like a fault — and on
+# 2026-09-22 they did: HPlayer2 is stopped for a flash, so it logs no HELLO, trigger C concluded the
+# node had gone silent and re-enumerated the port at 88 % of a transfer, killing the session.
+[ -f /run/usbfix.inhibit ] && exit 0
 now=$(date +%s); last=$(cat $IF 2>/dev/null || echo 0)
 [ $((now - last)) -lt "$COOLDOWN" ] && exit 0
 
@@ -57,8 +62,12 @@ if [ "$missed" -ge "$MISSED_MIN" ]; then
   logger -t usbfix "$why — no $PRODUCT device to reset, log only"; echo "$now" > $IF; exit 0
 fi
 
-# C) a chatty PRODUCT device (Nowde slave node: one HELLO per keepalive) gone silent
+# C) a chatty PRODUCT device (Nowde slave node: one HELLO per keepalive) gone silent.
+#    Only meaningful while the host that LOGS those HELLOs is running: with HPlayer2 stopped the
+#    silence is guaranteed and says nothing about the node (2026-09-22, see the inhibit note above).
 dev=$(product_dev); [ -n "$dev" ] || exit 0
+HPU=$(systemctl list-units --plain --no-legend --type=service 'hplayer2@*' 2>/dev/null | awk '{print $1; exit}')
+[ -n "$HPU" ] && systemctl is-active --quiet "$HPU" || exit 0
 hello_now=$(timeout 15 journalctl -u 'hplayer2@*' --since -90s --no-pager -o cat 2>/dev/null | grep -c 'HELLO v')
 hello_prev=$(timeout 15 journalctl -u 'hplayer2@*' --since -11min --until -1min --no-pager -o cat 2>/dev/null | grep -c 'HELLO v')
 if [ "$hello_now" -eq 0 ] && [ "$hello_prev" -ge 60 ]; then
