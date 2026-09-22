@@ -1,0 +1,7 @@
+[Unit]
+Description=usbfix: re-enumerate a USB device whose endpoint stalled (kernel urb storm) or a silent Nowde node
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/usbfix
+Nice=5

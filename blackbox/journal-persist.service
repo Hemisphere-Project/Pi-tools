@@ -1,0 +1,18 @@
+[Unit]
+Description=Persistent journal on /data (bind /data/var/log/journal over the tmpfs /var/log/journal)
+DefaultDependencies=no
+After=local-fs.target
+RequiresMountsFor=/data /tmp
+Before=systemd-journal-flush.service
+ConditionPathIsDirectory=/data
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# /var/log is a bind of the tmpfs /tmp (rorw): the mount point is gone at every boot -> create it,
+# bind the persistent directory over it, then let systemd-journal-flush move the boot's /run logs in.
+ExecStart=/bin/sh -c 'mkdir -p /data/var/log/journal /var/log/journal && chown root:systemd-journal /data/var/log/journal && chmod 2755 /data/var/log/journal && mount --bind /data/var/log/journal /var/log/journal'
+ExecStop=/bin/sh -c 'umount /var/log/journal 2>/dev/null || true'
+
+[Install]
+WantedBy=sysinit.target
