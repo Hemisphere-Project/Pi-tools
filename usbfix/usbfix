@@ -1,0 +1,64 @@
+#!/bin/sh
+# usbfix — USB-link watchdog for a player: when a USB device's endpoint stalls, Linux's usb drivers
+# (snd-usbmidi for one) resubmit forever and the kernel logs `usb 1-1.2: urb status -32` for every
+# transfer, ~7000 times a second. On a Pi 3B+ that loop starves CPU0 (USB and SDIO wifi interrupts
+# both live there): the hotspot goes blind (auth/assoc answered by the firmware, no WPA handshake,
+# hostapd logs nothing), timers stall, the tmpfs /var/log fills in a minute, the journal budget is
+# eaten. Seen five times in one afternoon on the Biennale 2026 garden slaves (Nowde node on USB).
+# Cure that needs no visit: de-authorize + re-authorize the device — a port reset + re-enumeration;
+# the device keeps running (a Nowde node's uptime continues), the host rebuilds its endpoint state,
+# HPlayer2 relinks by itself. Runs every minute from usbfix.timer.
+#
+# Triggers (any):
+#   A) storm — >= STORM_MIN `urb status` lines in the last 400 lines of the kernel ring buffer
+#      (read from dmesg: under the storm journald DROPS most kernel lines). The device to reset is
+#      the one named in those lines (usb <path>: urb status ...).
+#   B) journald reporting dropped kernel messages >= MISSED_MIN times in the last minute (a kernel
+#      log storm of another kind): reset the PRODUCT device if there is exactly one, else log only.
+#   C) PRODUCT device present, it used to talk (>= 60 HELLO lines from hplayer2 in the previous
+#      10 min) and fell silent (0 in 90 s) — the Nowde case; skipped when no PRODUCT device exists.
+# At most one reset per COOLDOWN seconds. Logs as `usbfix` (journalctl -t usbfix).
+# Settings: /etc/default/usbfix may set PRODUCT, STORM_MIN, MISSED_MIN, COOLDOWN.
+PRODUCT=Nowde; STORM_MIN=100; MISSED_MIN=5; COOLDOWN=300
+[ -f /etc/default/usbfix ] && . /etc/default/usbfix
+IF=/run/usbfix.last
+now=$(date +%s); last=$(cat $IF 2>/dev/null || echo 0)
+[ $((now - last)) -lt "$COOLDOWN" ] && exit 0
+
+product_dev() { for d in /sys/bus/usb/devices/*/product; do grep -qs "$PRODUCT" "$d" && { echo "$d" | cut -d/ -f6; return; }; done; }
+reset_dev() {  # $1 = sysfs device path like 1-1.2
+  [ -e "/sys/bus/usb/devices/$1/authorized" ] || { logger -t usbfix "$why — device $1 not in sysfs, nothing to reset"; echo "$now" > $IF; exit 0; }
+  echo 0 > "/sys/bus/usb/devices/$1/authorized" 2>/dev/null; sleep 2; echo 1 > "/sys/bus/usb/devices/$1/authorized" 2>/dev/null
+  echo "$now" > $IF
+  logger -t usbfix "$why: usb $1 ($(cat /sys/bus/usb/devices/$1/product 2>/dev/null || echo '?')) de/re-authorized (re-enumeration)"
+  exit 0
+}
+
+# A) the storm, decided from the ring buffer only (fast, journald-free), device named by the lines
+ring=$(timeout 10 dmesg 2>/dev/null | tail -n 400)
+storm=$(printf '%s\n' "$ring" | grep -c 'urb status')
+if [ "$storm" -ge "$STORM_MIN" ]; then
+  dev=$(printf '%s\n' "$ring" | grep 'urb status' | grep -oE 'usb [0-9][0-9.-]*:' | sort | uniq -c | sort -rn | head -1 | awk '{print $3}' | tr -d ':')
+  why="kernel urb storm ($storm of the last 400 dmesg lines)"
+  [ -n "$dev" ] && reset_dev "$dev"
+  dev=$(product_dev); [ -n "$dev" ] && reset_dev "$dev"
+  logger -t usbfix "$why — no device path in the lines and no $PRODUCT device: nothing to reset"; echo "$now" > $IF; exit 0
+fi
+
+# B) journald dropping kernel messages (another storm shape)
+missed=$(timeout 15 journalctl -u systemd-journald --since -60s --no-pager -o cat 2>/dev/null | grep -c 'Missed')
+if [ "$missed" -ge "$MISSED_MIN" ]; then
+  why="kernel log storm (journald dropped kernel messages $missed times in 60 s)"
+  dev=$(product_dev); [ -n "$dev" ] && reset_dev "$dev"
+  logger -t usbfix "$why — no $PRODUCT device to reset, log only"; echo "$now" > $IF; exit 0
+fi
+
+# C) a chatty PRODUCT device (Nowde slave node: one HELLO per keepalive) gone silent
+dev=$(product_dev); [ -n "$dev" ] || exit 0
+hello_now=$(timeout 15 journalctl -u 'hplayer2@*' --since -90s --no-pager -o cat 2>/dev/null | grep -c 'HELLO v')
+hello_prev=$(timeout 15 journalctl -u 'hplayer2@*' --since -11min --until -1min --no-pager -o cat 2>/dev/null | grep -c 'HELLO v')
+if [ "$hello_now" -eq 0 ] && [ "$hello_prev" -ge 60 ]; then
+  why="$PRODUCT node silent (0 HELLO in 90 s after $hello_prev in 10 min)"
+  reset_dev "$dev"
+fi
+exit 0

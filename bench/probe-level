@@ -1,0 +1,259 @@
+#!/usr/bin/env bash
+# probe-level — which patches does THIS player actually carry?
+#
+# Run from the laptop against a player (or on the player itself with --here).
+# It reads a LEDGER of patches — each one an id, a title, the golden it first
+# shipped in, how to apply it, and the one command that detects it — runs every
+# detection in a single session on the box, and prints one y/n per patch and a
+# `missing:` line.
+#
+#   Usage: probe-level [options]
+#
+#     -l, --ledger FILE   patch ledger (see FORMAT below)
+#     -t, --target SSH    ssh target to probe            (default root@10.0.0.1)
+#         --here          run the detections on THIS machine — you are already
+#                         on the player, or in a chroot on its card
+#         --only ID[,...] restrict the probe to these patch ids
+#         --timeout SEC   per-detection budget on the box        (default 15)
+#         --ssh-timeout SEC  connect budget                      (default 10)
+#     -n, --dry-run       print the plan and the program; reach nothing
+#     -q, --quiet         only the summary lines
+#     -h, --help
+#
+#   Ledger search order when -l is absent:
+#     ./patch-ledger · ~/.config/pitools/patch-ledger · $(dirname $0)/patch-ledger
+#
+#   FORMAT — five `|` separated fields, one patch per line:
+#
+#     <id> | <title> | <golden-since> | <apply> | <detect command>
+#
+#   The detect command is LAST and takes the whole rest of the line, so it may
+#   contain `|` — pipelines are the normal case. Only a line whose first
+#   non-blank character is `#` is a comment: a trailing `#` is NOT, because
+#   detect commands contain them. See fixtures/patch-ledger.example.
+#
+#   THE DETECT COMMAND'S EXIT CODE IS THE ANSWER, and it has three outcomes,
+#   not two:
+#
+#     0          y  the patch is there
+#     1          n  the patch is not there
+#     anything   ?  COULD NOT READ — the command broke, timed out (124), or the
+#     else          box never answered. This is not `n`.
+#
+#   That third state is the whole point. `missing: none` is printed only when
+#   every patch was read AND every one answered yes; a probe that could not look
+#   says so and exits 2. A tool that reports "absent" for "I could not tell"
+#   sends someone to re-apply a patch that is already there, or — worse — reads
+#   as a clean fleet when it is an unread one.
+#
+#   Exit: 0 nothing missing and nothing unread · 1 something missing · 2 could
+#         not run, or something could not be read.
+#
+#   Examples:
+#     probe-level --dry-run -l fixtures/patch-ledger.example
+#     probe-level -t root@10.0.0.1
+#     probe-level --here --only P5,P6
+#     ./fleet-run --local -- ./bench/probe-level -t %t -q     # the whole fleet
+#
+# The LEDGER IS NOT IN THIS REPO, and that is deliberate: which patches a given
+# installation is supposed to carry is engagement state, not component state —
+# the same split as `fleet-run` and its roster. This repo ships the reader and
+# an example; the real ledger lives with the fleet it describes.
+set -uo pipefail
+
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+usage() { sed -n '2,61p' "$0" | sed 's/^# \?//'; }
+
+LEDGER=""; TARGET="root@10.0.0.1"; HERE=0; ONLY=""; BUDGET=15; SSHB=10
+DRY=0; QUIET=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -l|--ledger)   LEDGER="${2:?--ledger needs a file}"; shift ;;
+    -t|--target)   TARGET="${2:?--target needs an ssh target}"; shift ;;
+    --here)        HERE=1 ;;
+    --only)        ONLY="${2:?--only needs an id list}"; shift ;;
+    --timeout)     BUDGET="${2:?--timeout needs seconds}"; shift ;;
+    --ssh-timeout) SSHB="${2:?--ssh-timeout needs seconds}"; shift ;;
+    -n|--dry-run)  DRY=1 ;;
+    -q|--quiet)    QUIET=1 ;;
+    -h|--help)     usage; exit 0 ;;
+    --)            shift; break ;;
+    *)             echo "probe-level: unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+  shift
+done
+
+say()  { [ "$QUIET" = 1 ] || printf '%s\n' "$*"; }
+die()  { printf 'probe-level: %s\n' "$*" >&2; exit 2; }
+
+case "$BUDGET$SSHB" in *[!0-9]*) die "timeouts must be integers" ;; esac
+
+if [ -z "$LEDGER" ]; then
+  for c in "./patch-ledger" "$HOME/.config/pitools/patch-ledger" "$SELF_DIR/patch-ledger"; do
+    [ -r "$c" ] && { LEDGER="$c"; break; }
+  done
+fi
+[ -n "$LEDGER" ] || die "no ledger found — pass -l FILE (fixtures/patch-ledger.example is one)"
+[ -r "$LEDGER" ] || die "ledger not readable: $LEDGER"
+
+# ── read the ledger ─────────────────────────────────────────────────
+#
+# Fields are `|` separated and the detect command is last, so it keeps every
+# `|` it contains. Whitespace around a field is trimmed; whitespace inside the
+# detect command is not.
+
+trim() { local s="$1"; s="${s#"${s%%[![:space:]]*}"}"; s="${s%"${s##*[![:space:]]}"}"; printf '%s' "$s"; }
+
+IDS=(); TITLES=(); SINCES=(); APPLIES=(); DETECTS=()
+lineno=0
+while IFS= read -r line || [ -n "$line" ]; do
+  lineno=$((lineno + 1))
+  case "$(trim "$line")" in ''|'#'*) continue ;; esac
+  IFS='|' read -r f_id f_title f_since f_apply f_detect <<< "$line"
+  f_id="$(trim "${f_id:-}")"
+  f_detect="$(trim "${f_detect:-}")"
+  [ -n "$f_id" ]     || die "$LEDGER:$lineno: no patch id"
+  [ -n "$f_detect" ] || die "$LEDGER:$lineno: patch $f_id has no detect command"
+  for seen in ${IDS[@]+"${IDS[@]}"}; do
+    [ "$seen" = "$f_id" ] && die "$LEDGER:$lineno: duplicate patch id $f_id"
+  done
+  IDS+=("$f_id")
+  TITLES+=("$(trim "${f_title:-}")")
+  SINCES+=("$(trim "${f_since:-}")")
+  APPLIES+=("$(trim "${f_apply:-}")")
+  DETECTS+=("$f_detect")
+done < "$LEDGER"
+
+[ "${#IDS[@]}" -gt 0 ] || die "$LEDGER: no patches in it"
+
+# --only, applied to the ledger and reported, never silent.
+if [ -n "$ONLY" ]; then
+  keep=(); IFS=',' read -r -a wanted <<< "$ONLY"
+  for w in "${wanted[@]}"; do
+    w="$(trim "$w")"; hit=-1
+    for i in "${!IDS[@]}"; do [ "${IDS[$i]}" = "$w" ] && { hit=$i; break; }; done
+    [ "$hit" -ge 0 ] || die "--only '$w' is not a patch id in $LEDGER"
+    keep+=("$hit")
+  done
+  n_id=(); n_ti=(); n_si=(); n_ap=(); n_de=()
+  for i in "${keep[@]}"; do
+    n_id+=("${IDS[$i]}"); n_ti+=("${TITLES[$i]}"); n_si+=("${SINCES[$i]}")
+    n_ap+=("${APPLIES[$i]}"); n_de+=("${DETECTS[$i]}")
+  done
+  IDS=("${n_id[@]}"); TITLES=("${n_ti[@]}"); SINCES=("${n_si[@]}")
+  APPLIES=("${n_ap[@]}"); DETECTS=("${n_de[@]}")
+fi
+
+# ── build the program that runs ON the box ──────────────────────────
+#
+# One session, not one ssh per patch: eighteen round trips over a player's own
+# hotspot is a minute of nothing, and it is the reason the by-hand version of
+# this check never got run on every group.
+
+sq() { printf "'%s'" "${1//\'/\'\\\'\'}"; }   # single-quote for the remote sh
+
+build_program() {
+  printf '%s\n' "PROBE_T=$BUDGET"
+  cat <<'PROG'
+if command -v timeout >/dev/null 2>&1; then
+  _run() { timeout "$PROBE_T" sh -c "$1" >/dev/null 2>&1; }
+else
+  _run() { sh -c "$1" >/dev/null 2>&1; }
+fi
+p() { _run "$2"; printf 'PROBE %s %s\n' "$1" "$?"; }
+PROG
+  for i in "${!IDS[@]}"; do
+    printf 'p %s %s\n' "$(sq "${IDS[$i]}")" "$(sq "${DETECTS[$i]}")"
+  done
+}
+
+say "== pi-tools probe-level =="
+say "   ledger : $LEDGER  (${#IDS[@]} patch/es)"
+say "   box    : $([ "$HERE" = 1 ] && echo 'HERE (this machine)' || echo "$TARGET")"
+say "   budget : ${BUDGET}s per detection$([ "$HERE" = 1 ] || echo ", ${SSHB}s to connect")"
+say ""
+
+if [ "$DRY" = 1 ]; then
+  for i in "${!IDS[@]}"; do
+    printf '%-6s %s\n' "${IDS[$i]}" "${TITLES[$i]}"
+    printf '       would run: %s\n' "${DETECTS[$i]}"
+  done
+  echo
+  echo "── the program that would be sent to the box"
+  build_program | sed 's/^/   /'
+  echo
+  echo "dry-run: nothing was reached and nothing was read"
+  exit 0
+fi
+
+# ── run it ──────────────────────────────────────────────────────────
+
+OUT=""; transport_rc=0
+if [ "$HERE" = 1 ]; then
+  OUT="$(build_program | sh 2>/dev/null)"; transport_rc=$?
+else
+  command -v ssh >/dev/null 2>&1 || die "no ssh on this machine (--here probes locally)"
+  OUT="$(build_program | ssh -o BatchMode=yes -o ConnectTimeout="$SSHB" \
+          -o StrictHostKeyChecking=accept-new ${PROBE_SSH_KEY:+-i "$PROBE_SSH_KEY"} \
+          "$TARGET" 'sh -s' 2>/dev/null)"; transport_rc=$?
+fi
+
+# A dead transport is every patch UNREAD, never every patch missing. The whole
+# reason for the third state is that these two look identical from here.
+[ "$transport_rc" -eq 0 ] || say "   ! the box did not answer cleanly (rc $transport_rc) — reading what came back"
+
+declare -A RC=()
+while IFS=' ' read -r tag id rc; do
+  [ "$tag" = PROBE ] || continue
+  case "$rc" in ''|*[!0-9]*) continue ;; esac
+  RC["$id"]="$rc"
+done <<< "$OUT"
+
+MISSING=(); UNREAD=(); HAVE=0
+say "ID     HAVE  GOLDEN-SINCE  PATCH"
+for i in "${!IDS[@]}"; do
+  id="${IDS[$i]}"; rc="${RC[$id]:-}"
+  case "$rc" in
+    0) mark=y; HAVE=$((HAVE + 1)) ;;
+    1) mark=n; MISSING+=("$id") ;;
+    *) mark='?'; UNREAD+=("$id") ;;
+  esac
+  say "$(printf '%-6s %-5s %-13s %s' "$id" "$mark" "${SINCES[$i]:--}" "${TITLES[$i]}")"
+done
+say ""
+
+# How to fix what is missing, from the ledger's own apply column — so the answer
+# and the act are one screen, not a screen and a memory.
+if [ "${#MISSING[@]}" -gt 0 ] && [ "$QUIET" = 0 ]; then
+  echo "── to apply what is missing"
+  for id in "${MISSING[@]}"; do
+    for i in "${!IDS[@]}"; do
+      [ "${IDS[$i]}" = "$id" ] || continue
+      printf '%-6s %s\n' "$id" "${APPLIES[$i]:-(no apply path in the ledger)}"
+    done
+  done
+  echo
+fi
+
+# Exactly ONE `missing:` line, always the last one, because that is the line
+# people grep for and paste into a note. It says `none` only when every patch
+# was read and every one said yes.
+printf 'have: %d of %d\n' "$HAVE" "${#IDS[@]}"
+[ "${#UNREAD[@]}" -gt 0 ] && printf 'unread: %s\n' "${UNREAD[*]}"
+
+if [ "${#UNREAD[@]}" -gt 0 ]; then
+  if [ "${#MISSING[@]}" -gt 0 ]; then
+    printf 'missing: %s — and %d of %d could not be read, so this is not a full answer\n' \
+           "${MISSING[*]}" "${#UNREAD[@]}" "${#IDS[@]}"
+  else
+    printf 'missing: UNKNOWN — %d of %d could not be read, so this is not a clean answer\n' \
+           "${#UNREAD[@]}" "${#IDS[@]}"
+  fi
+  exit 2
+fi
+if [ "${#MISSING[@]}" -gt 0 ]; then
+  printf 'missing: %s\n' "${MISSING[*]}"
+  exit 1
+fi
+echo "missing: none"
