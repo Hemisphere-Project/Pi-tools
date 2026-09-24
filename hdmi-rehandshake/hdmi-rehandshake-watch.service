@@ -1,0 +1,6 @@
+[Unit]
+Description=HDMI re-handshake daytime watch pass (poll and re-assert if a display returns)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/hdmi-rehandshake --watch
