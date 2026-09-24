@@ -1,0 +1,11 @@
+[Unit]
+Description=HDMI re-handshake daytime watcher: poll for a display that returns after boot
+
+[Timer]
+OnBootSec=180s
+OnUnitActiveSec=60s
+AccuracySec=5s
+Unit=hdmi-rehandshake-watch.service
+
+[Install]
+WantedBy=timers.target

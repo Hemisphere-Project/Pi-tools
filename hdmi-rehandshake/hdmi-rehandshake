@@ -3,6 +3,8 @@
 #
 #   hdmi-rehandshake [delay-seconds] [--wait N]     boot pass (the unit runs it before starter)
 #   hdmi-rehandshake --late                          late pass (timer): only if the boot pass saw no display
+#   hdmi-rehandshake --watch                         daytime pass (timer): poll for a display that
+#                                                     RETURNS after boot, any time of day
 #
 # Why: with hdmi_force_hotplug=1 the firmware drives the link the instant it boots. A TV
 # powered at the same moment (the venue's morning switch-on) can fail its first evaluation
@@ -18,12 +20,27 @@
 # re-asserts once a display has appeared and restarts the player, so a slow TV still gets a
 # freshly negotiated link. A display that was present at boot is never touched again.
 #
+# v3 (2026-09-24): the boot pass and the late timer are both boot-gated — a TV cycled hours
+# into the day (venue power-down, a set woken from standby) is still unreached. The watch pass
+# polls the same `present()` check v2 uses (not a `tvservice -M` hotplug listener: v2's field
+# walk proved `-n` sees a screen leave) and re-asserts only on a nodevice -> device transition,
+# never on player start: it MUST NOT inherit the late pass's `systemctl try-restart`, which is
+# right seconds after boot and wrong at 3 pm on a card nobody is standing next to. `tvservice -e`
+# itself power-cycles the output, which can look like its own transition, so a watch pass never
+# acts twice inside its suppression window, never past its rate limit, and never past its
+# per-boot cap — belt, braces, and a backstop for a set that is genuinely flapping.
+#
 # Reads hdmi_group / hdmi_mode from the [pi3] block first (falls back to the first global
 # ones); hdmi_drive=1 -> DVI signalling. No explicit mode in config.txt -> nothing to do.
 CFG=/boot/config.txt; [ -f /boot/firmware/config.txt ] && CFG=/boot/firmware/config.txt
 STATE=/run/hdmi-rehandshake.state
-LATE=0; WAIT=20; DELAY=3
-while [ $# -gt 0 ]; do case "$1" in --late) LATE=1 ;; --wait) WAIT=${2:-20}; shift ;; *) DELAY=$1 ;; esac; shift; done
+# watch-pass tuning: WSUPPRESS seconds between acts, at most WRATELIMIT acts in any
+# WRATEWINDOW-second span, at most WMAXACTS acts total in one boot (tmpfs state -> resets on reboot).
+WSTATE=/run/hdmi-rehandshake-watch.state
+WACTS=/run/hdmi-rehandshake-watch.acts
+WSUPPRESS=90; WRATEWINDOW=600; WRATELIMIT=3; WMAXACTS=20
+LATE=0; WATCH=0; WAIT=20; DELAY=3
+while [ $# -gt 0 ]; do case "$1" in --late) LATE=1 ;; --watch) WATCH=1 ;; --wait) WAIT=${2:-20}; shift ;; *) DELAY=$1 ;; esac; shift; done
 blk=$(awk '/^\[pi3\]/{p=1;next} /^\[/{p=0} p' "$CFG" 2>/dev/null)
 g=$(echo "$blk" | sed -n 's/^hdmi_group=\([0-9]*\).*/\1/p' | head -1)
 m=$(echo "$blk" | sed -n 's/^hdmi_mode=\([0-9]*\).*/\1/p' | head -1)
@@ -49,6 +66,41 @@ if [ "$LATE" = 1 ]; then
   assert_mode
   echo device > $STATE
   systemctl try-restart 'hplayer2@*.service' 2>/dev/null || true
+  exit 0
+fi
+if [ "$WATCH" = 1 ]; then
+  now=$(date +%s)
+  prev=$(cat "$WSTATE" 2>/dev/null || echo unknown)
+  cur=nodevice; present && cur=device
+  echo "$cur" > "$WSTATE"
+  # only a display RETURNING is interesting — first tick after boot just seeds the state,
+  # a display that stays present or stays absent is not this unit's job
+  [ "$prev" = nodevice ] && [ "$cur" = device ] || exit 0
+  # per-boot cap: a set that keeps needing this has a hardware problem, not a software one
+  # (test existence first: `wc -l < missing-file` leaks its error past `2>/dev/null` — the
+  # shell resolves the `<` redirect, and reports its own failure, before that redirect runs)
+  acts=0; [ -f "$WACTS" ] && acts=$(wc -l < "$WACTS")
+  if [ "$acts" -ge "$WMAXACTS" ]; then
+    echo "hdmi-rehandshake: watch pass, display returned but $WMAXACTS acts already this boot: not acting again"
+    exit 0
+  fi
+  # suppression window: tvservice -e power-cycles the output, which can look like its own
+  # nodevice -> device transition to the very next poll
+  last=0; [ -s "$WACTS" ] && last=$(tail -n1 "$WACTS")
+  if [ $(( now - last )) -lt "$WSUPPRESS" ]; then
+    echo "hdmi-rehandshake: watch pass, display returned but inside the ${WSUPPRESS}s suppression window ($(( now - last ))s since the last act): skipping"
+    exit 0
+  fi
+  # rate limit: no more than WRATELIMIT acts in any WRATEWINDOW-second span, independent of
+  # the per-act suppression window above (catches a slower flap the suppression alone would not)
+  recent=$(awk -v since=$(( now - WRATEWINDOW )) '$1 >= since' "$WACTS" 2>/dev/null | wc -l)
+  if [ "$recent" -ge "$WRATELIMIT" ]; then
+    echo "hdmi-rehandshake: watch pass, display returned but $recent act(s) already in the last ${WRATEWINDOW}s (limit $WRATELIMIT): skipping"
+    exit 0
+  fi
+  echo "hdmi-rehandshake: watch pass, a display returned during the day -> re-negotiate (no player restart)"
+  assert_mode
+  echo "$now" >> "$WACTS"
   exit 0
 fi
 sleep "$DELAY"
