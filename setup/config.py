@@ -20,6 +20,9 @@ DEFAULTS = {
         'network': 'yes',
         'web': 'ask',
         'audiohub': 'ask',
+        # 'display' here is the MODULE GROUP (hdmi-rehandshake), not the
+        # [display] section below (resolution/rotation) — different sections.
+        'display': 'yes',
         'xrun': 'no',
         'synczinc': 'no',
         'bluetooth': 'no',
