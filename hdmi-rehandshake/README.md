@@ -24,11 +24,6 @@ signal and needs nothing.
 Cost: one blink of the screen ~3 s into boot. Legacy (dispmanx) display stack only — exits 0
 where `tvservice` does not exist.
 
-## Later
-
-A hotplug listener (`tvservice -M`) re-asserting the mode on every attach event, plus re-asserts
-at 15 s and 45 s, would also cover TVs slower than the Pi and TVs cycled during the day.
-
 ## v2 — display wait + late pass (KOUAGOU, 2026-09-14)
 
 A TV that powers up *after* the Pi (the venue's morning switch-on) got the boot re-handshake
@@ -37,3 +32,22 @@ display to answer on the hotplug line (`--wait N`), asserts the mode, and leaves
 `/run/hdmi-rehandshake.state`. `hdmi-rehandshake-late.timer` fires at +75 s and +150 s: if the
 boot pass saw **no** display and one is present now, it re-negotiates and restarts the player
 (nothing meaningful was on screen anyway). A display present at boot is never touched again.
+
+## v3 — daytime watcher (2026-09-24)
+
+The boot pass and the late timer are both boot-gated: a display that leaves and comes back
+**hours into the day** — a venue powering the set down, a set woken from standby — is still
+unreached. `hdmi-rehandshake-watch.timer` polls the same `present()` check v2 uses (`tvservice -n`
+… `device_name=`, not the `tvservice -M` hotplug listener this README used to propose here — v2's
+field walk proved `-n` sees a screen leave) every 60 s from +180 s after boot, and re-asserts only
+on a `nodevice → device` transition. **It never restarts the player** — the late pass's
+`systemctl try-restart 'hplayer2@*.service'` is right seconds after boot when nothing has drawn
+yet, and wrong at 3 pm on a card nobody is standing next to; a daytime re-assert only re-negotiates
+the link.
+
+`tvservice -e` itself powers the output off and on, which can look like its own transition to the
+very next poll, so a watch pass never acts twice inside 90 s of its last assert, never more than 3
+times in any 10-minute window, and never more than 20 times in one boot (state lives in `/run`, so
+the counters reset every reboot) — a set that keeps flapping past that ceiling has a hardware
+problem, not a software one. A set that never leaves the hotplug line costs the watcher one poll
+every 60 s and nothing else.
