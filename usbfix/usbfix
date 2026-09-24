@@ -10,18 +10,24 @@
 # HPlayer2 relinks by itself. Runs every minute from usbfix.timer.
 #
 # Triggers (any):
-#   A) storm — >= STORM_MIN `urb status` lines in the last 400 lines of the kernel ring buffer
-#      (read from dmesg: under the storm journald DROPS most kernel lines). The device to reset is
-#      the one named in those lines (usb <path>: urb status ...).
+#   A) storm — >= STORM_MIN `urb status` lines with a kernel timestamp in the LAST 60 s (read from
+#      dmesg: under the storm journald DROPS most kernel lines; old lines stay in the ring for hours,
+#      so only fresh ones count). The device to reset is the one named in those lines.
 #   B) journald reporting dropped kernel messages >= MISSED_MIN times in the last minute (a kernel
 #      log storm of another kind): reset the PRODUCT device if there is exactly one, else log only.
 #   C) PRODUCT device present, it used to talk (>= 60 HELLO lines from hplayer2 in the previous
 #      10 min) and fell silent (0 in 90 s) — the Nowde case; skipped when no PRODUCT device exists.
-# At most one reset per COOLDOWN seconds. Logs as `usbfix` (journalctl -t usbfix).
+# At most one reset per COOLDOWN seconds (90: a re-stall right after a cure must not wait 5 min while
+# the Pi starves — W4 froze from Fri 18/09 17:06 to Sat 11:27 that way). Logs as `usbfix`.
 # Settings: /etc/default/usbfix may set PRODUCT, STORM_MIN, MISSED_MIN, COOLDOWN.
-PRODUCT=Nowde; STORM_MIN=100; MISSED_MIN=5; COOLDOWN=300
+PRODUCT=Nowde; STORM_MIN=20; MISSED_MIN=5; COOLDOWN=90
 [ -f /etc/default/usbfix ] && . /etc/default/usbfix
 IF=/run/usbfix.last
+# Deliberate maintenance (a node OTA, a USB test) inhibits the watchdog: `touch /run/usbfix.inhibit`
+# before, remove it after. Without this the OTA's own conditions look exactly like a fault — and on
+# 2026-09-22 they did: HPlayer2 is stopped for a flash, so it logs no HELLO, trigger C concluded the
+# node had gone silent and re-enumerated the port at 88 % of a transfer, killing the session.
+[ -f /run/usbfix.inhibit ] && exit 0
 now=$(date +%s); last=$(cat $IF 2>/dev/null || echo 0)
 [ $((now - last)) -lt "$COOLDOWN" ] && exit 0
 
@@ -34,12 +40,15 @@ reset_dev() {  # $1 = sysfs device path like 1-1.2
   exit 0
 }
 
-# A) the storm, decided from the ring buffer only (fast, journald-free), device named by the lines
-ring=$(timeout 10 dmesg 2>/dev/null | tail -n 400)
-storm=$(printf '%s\n' "$ring" | grep -c 'urb status')
+# A) the storm, decided from the ring buffer only (fast, journald-free) — but FRESH lines only:
+#    dmesg prints [seconds since boot]; a past storm's lines stay in the ring for hours, and a plain
+#    count re-fired every cooldown for ~7 h after each real stall (W3, 18-21/09: 277 resets for 3 storms).
+UP=$(cut -d' ' -f1 /proc/uptime)
+fresh=$(timeout 10 dmesg 2>/dev/null | tail -n 3000 | awk -v now="$UP" '/urb status/ { t=$1; gsub(/[][]/, "", t); if (now - t < 60) print }')
+storm=$(printf '%s\n' "$fresh" | grep -c 'urb status')
 if [ "$storm" -ge "$STORM_MIN" ]; then
-  dev=$(printf '%s\n' "$ring" | grep 'urb status' | grep -oE 'usb [0-9][0-9.-]*:' | sort | uniq -c | sort -rn | head -1 | awk '{print $3}' | tr -d ':')
-  why="kernel urb storm ($storm of the last 400 dmesg lines)"
+  dev=$(printf '%s\n' "$fresh" | grep -oE 'usb [0-9][0-9.-]*:' | sort | uniq -c | sort -rn | head -1 | awk '{print $3}' | tr -d ':')
+  why="kernel urb storm ($storm urb errors in the last 60 s)"
   [ -n "$dev" ] && reset_dev "$dev"
   dev=$(product_dev); [ -n "$dev" ] && reset_dev "$dev"
   logger -t usbfix "$why — no device path in the lines and no $PRODUCT device: nothing to reset"; echo "$now" > $IF; exit 0
@@ -53,8 +62,12 @@ if [ "$missed" -ge "$MISSED_MIN" ]; then
   logger -t usbfix "$why — no $PRODUCT device to reset, log only"; echo "$now" > $IF; exit 0
 fi
 
-# C) a chatty PRODUCT device (Nowde slave node: one HELLO per keepalive) gone silent
+# C) a chatty PRODUCT device (Nowde slave node: one HELLO per keepalive) gone silent.
+#    Only meaningful while the host that LOGS those HELLOs is running: with HPlayer2 stopped the
+#    silence is guaranteed and says nothing about the node (2026-09-22, see the inhibit note above).
 dev=$(product_dev); [ -n "$dev" ] || exit 0
+HPU=$(systemctl list-units --plain --no-legend --type=service 'hplayer2@*' 2>/dev/null | awk '{print $1; exit}')
+[ -n "$HPU" ] && systemctl is-active --quiet "$HPU" || exit 0
 hello_now=$(timeout 15 journalctl -u 'hplayer2@*' --since -90s --no-pager -o cat 2>/dev/null | grep -c 'HELLO v')
 hello_prev=$(timeout 15 journalctl -u 'hplayer2@*' --since -11min --until -1min --no-pager -o cat 2>/dev/null | grep -c 'HELLO v')
 if [ "$hello_now" -eq 0 ] && [ "$hello_prev" -ge 60 ]; then
