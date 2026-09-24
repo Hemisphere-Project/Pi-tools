@@ -24,10 +24,10 @@ from setup import ui, detect, config, utils, bootstrap
 # (group_key, description, [module_dirs], default_setting)
 
 MODULE_GROUPS = [
-    ('system',      'System (read-only root + USB automount)',
-     ['rorw', 'usbautomount'], 'yes'),
-    ('network',     'Network (WiFi profiles + hostname)',
-     ['network-tools', 'hostrename'], 'yes'),
+    ('system',      'System (read-only root + USB automount + journal + USB watchdog)',
+     ['rorw', 'usbautomount', 'blackbox', 'usbfix'], 'yes'),
+    ('network',     'Network (WiFi profiles + hostname + sync-link watchdog)',
+     ['network-tools', 'hostrename', 'linkwatch'], 'yes'),
     ('web',         'Web UIs (config + file manager + discovery)',
      ['webconf', 'filebrother'], 'ask'),
     ('audiohub',    'Audio hub: always-on multi-output (jack/HDMI/USB)',

@@ -101,6 +101,8 @@ xrun = no
 |--------|-------------|
 | **rorw** | Read-only root filesystem with writable `/data` partition |
 | **usbautomount** | Auto-mount USB drives to `/mnt/usbN`, symlink latest to `/data/usb` |
+| **blackbox** | Persistent journal on `/data` + one line of player state per minute |
+| **usbfix** | USB-link watchdog: re-enumerates a device whose endpoint stalled |
 
 ### Network (`network = yes`)
 
@@ -108,6 +110,7 @@ xrun = no
 |--------|-------------|
 | **network-tools** | Sync WiFi profiles from boot partition / USB to NetworkManager |
 | **hostrename** | Change hostname + update hotspot SSIDs on the fly |
+| **linkwatch** | Sync-link watchdog: reloads the driver / restarts hostapd on a dead link |
 
 ### Web (`web = ask`)
 
