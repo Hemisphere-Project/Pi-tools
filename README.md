@@ -121,6 +121,7 @@ xrun = no
 | Module | Group key | Description |
 |--------|-----------|-------------|
 | **audiohub** | `audiohub` | HDMI/analog/USB audio routing (Pi only) |
+| **hdmi-rehandshake** | `display` | Re-negotiates the HDMI link at boot for TVs that latch "mode not supported" (Pi only; no-op without an explicit `hdmi_group`/`hdmi_mode` in `config.txt`) |
 | **xrun** | `xrun` | X11/Openbox display server with rotation support |
 | **synczinc** | `synczinc` | Syncthing wrapper for `/data/sync` replication |
 | **bluetooth** | `bluetooth` | Bluetooth UART controller attachment (Pi only) |

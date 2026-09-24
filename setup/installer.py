@@ -32,6 +32,8 @@ MODULE_GROUPS = [
      ['webconf', 'filebrother'], 'ask'),
     ('audiohub',    'Audio hub: always-on multi-output (jack/HDMI/USB)',
      ['audiohub'], 'ask'),
+    ('display',     'Display: HDMI re-handshake at boot (TV mode latch-up)',
+     ['hdmi-rehandshake'], 'yes'),
     ('xrun',        'X11/Openbox display server',
      ['xrun'], 'no'),
     ('synczinc',    'Syncthing synchronization',
