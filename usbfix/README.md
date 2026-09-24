@@ -26,7 +26,9 @@ later.
 |---|---|---|
 | **storm** | ≥ `STORM_MIN` (20) `urb status` lines whose kernel timestamp is within the last 60 s — read from `dmesg` (journald drops most of a storm); **fresh lines only**: a past storm's lines sit in the ring buffer for hours, and a plain count re-fired every cooldown for ~7 h after each real stall (W3, 18–21/09: 277 resets for 3 storms) | the one named in those lines |
 | **journald dropping** | `systemd-journald` reported "Missed N kernel messages" ≥ `MISSED_MIN` (5) times in the last minute | the `PRODUCT` device (Nowde) if exactly one, else log only |
-| **silent node** | a `PRODUCT` device exists, hplayer2 logged ≥ 60 `HELLO` lines in the previous 10 min and none in the last 90 s (a Nowde slave answers a keepalive every 2 s; a master's node never chats, so this cannot fire on a master) | the `PRODUCT` device |
+| **silent node** | a `PRODUCT` device exists **and its host is running**, hplayer2 logged ≥ 60 `HELLO` lines in the previous 10 min and none in the last 90 s (a Nowde slave answers a keepalive every 2 s; a master's node never chats, so this cannot fire on a master) | the `PRODUCT` device |
+
+**Inhibit it for deliberate maintenance**: `touch /run/usbfix.inhibit` before a node OTA or a USB test, remove it after — otherwise the maintenance looks like the fault it is meant to cure (2026-09-22: HPlayer2 is stopped for a flash, so it logs no HELLO, and the watchdog re-enumerated the port at 88 % of a transfer). The same reasoning is built in: trigger C is skipped whenever the host is not running.
 
 One reset per `COOLDOWN` (90 s — long enough for the relink, short enough that a re-stall right after a cure is not left to starve the Pi: W4 froze Fri 18/09 17:06 → Sat 11:27 behind a 5-min cooldown). Settings in `/etc/default/usbfix` (`PRODUCT`, `STORM_MIN`,
 `MISSED_MIN`, `COOLDOWN`). Everything it does is one line in the journal: `journalctl -t usbfix`.
