@@ -99,9 +99,9 @@ PS=$(iw dev wint get power_save 2>/dev/null | awk '{print $NF}')
 AP="ap=$(iw dev wint station dump 2>/dev/null | grep -c '^Station') hostapd=$(systemctl is-active hostapd@wint 2>/dev/null) ps=${PS:--} assoc=$(cnt "$JA" 'IEEE 802.11: associated') conn=$(cnt "$JA" 'AP-STA-CONNECTED') apst=$(cnt "$JA" 'AP-ENABLED') apfix=$(cnt "$JA" 'restarted') kwifi=$(cnt "$JK" 'brcmf|ieee80211|wlan|sdio')"
 
 # --- USB bus events this minute (node re-enumeration, sound card, dongles); urb= counts `urb status`
-#     errors in the last 400 lines of the ring buffer (a stalled endpoint loops at ~7000/s and journald
+#     errors with a kernel timestamp in the last 60 s (ring buffer, fresh lines only) (a stalled endpoint loops at ~7000/s and journald
 #     drops most of them -- kmiss= is how many times it said so this minute); usbfix= resets this minute
-KUSB="kusb=$(cnt "$JK" 'usb [0-9.-]+: (new|USB disconnect|reset)|cdc_acm|ttyACM') urb=$(dmesg 2>/dev/null | tail -n 400 | grep -c 'urb status') kmiss=$(journalctl -u systemd-journald --since -60s --no-pager -o cat 2>/dev/null | grep -c Missed) usbfix=$(journalctl -t usbfix --since -60s --no-pager -o cat 2>/dev/null | grep -c .)"
+KUSB="kusb=$(cnt "$JK" 'usb [0-9.-]+: (new|USB disconnect|reset)|cdc_acm|ttyACM') urb=$(dmesg 2>/dev/null | tail -n 3000 | awk -v now="$(cut -d' ' -f1 /proc/uptime)" '/urb status/ { t=$1; gsub(/[][]/, "", t); if (now - t < 60) n++ } END { print n+0 }') kmiss=$(journalctl -u systemd-journald --since -60s --no-pager -o cat 2>/dev/null | grep -c Missed) usbfix=$(journalctl -t usbfix --since -60s --no-pager -o cat 2>/dev/null | grep -c .)"
 
 # --- display (video walls: black-screen episodes)
 DISP="disp=$(q tvservice -s | grep -oE '\[[A-Z]+ [A-Z]* *\(?[0-9]+\)?' | tr -d ' ()[' | head -1) dev=$(tvservice -n 2>&1 | grep -q device_name && echo y || echo n) pwr=$(q vcgencmd display_power | cut -d= -f2)"
