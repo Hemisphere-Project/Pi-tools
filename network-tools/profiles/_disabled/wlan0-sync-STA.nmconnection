@@ -2,7 +2,7 @@
 id=sync-sta-wlan0
 type=wifi
 autoconnect=true
-autoconnect-priority=0
+autoconnect-priority=10
 
 [wifi]
 powersave=2

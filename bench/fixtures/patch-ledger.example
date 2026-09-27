@@ -35,15 +35,56 @@
 # code is on disk; it does not say the unit was reloaded and started, which is
 # the deploy gotcha of AUDIT-2026 (a `git pull` changes files, not running
 # services). Prefer a question about the installed artefact, and use the
-# checkout form only for patches that really are just files.
+# checkout form only for patches that really are just files. When the fix IS a
+# setting rather than a feature, the unit being enabled answers nothing — P4 is
+# the worked example of that class, and of where the values actually live.
 
 # --- units a module installs: the plain case -----------------------------------
 P1 | hdmi-rehandshake v2 (the late re-handshake pass)   | 7.3 | ./setup.sh hdmi-rehandshake      | systemctl is-enabled hdmi-rehandshake-late.timer >/dev/null 2>&1
 P2 | blackbox state logger                              | 7.3 | ./setup.sh blackbox             | systemctl is-enabled blackbox.timer >/dev/null 2>&1
 P3 | blackbox persistent journal on /data               | 7.3 | ./setup.sh blackbox             | systemctl is-enabled journal-persist.service >/dev/null 2>&1
-P4 | usbfix                                             | 7.3 | ./setup.sh usbfix               | systemctl is-enabled usbfix.timer >/dev/null 2>&1
 P5 | linkwatch sync-link watchdog                       | -   | ./setup.sh linkwatch            | systemctl is-enabled linkwatch.timer >/dev/null 2>&1
 P6 | extendfs                                           | 7.3 | ./setup.sh extendfs             | systemctl is-enabled extendfs.service >/dev/null 2>&1
+
+# --- a module whose fix is a SETTING: enabled is not the same as fixed ----------
+# P4 sat in the block above as `systemctl is-enabled usbfix.timer` until 2026-09-22.
+# It was true on every player and it answered the wrong question. usbfix's last two
+# fixes are its thresholds — `STORM_MIN` 100 -> 20 and `COOLDOWN` 300 -> 90 — so the
+# six garden players passed P4 green while running the configuration that left W4
+# dark from Fri 18/09 17:06 to Sat 11:27. For a module whose fix is a number, the
+# unit being enabled is the part that was never in doubt.
+#
+# Three things have to be true, and each is here because leaving it out reads green
+# on a box that is still broken:
+#
+#   1. READ THE INSTALLED SCRIPT, NOT THE CHECKOUT. `usbfix` and `linkwatch` are the
+#      two modules whose install.sh `install -m 755`s the script into
+#      /usr/local/sbin instead of symlinking it — every other module is a symlink
+#      out of /opt/Pi-tools. So a `git pull` updates the checkout and NOT the file
+#      `ExecStart=/usr/local/sbin/usbfix` runs: on these two the pull is not the
+#      deploy, re-running the installer is. P9's checkout form would report the fix
+#      present on a box still executing the old copy.
+#   2. RESOLVE THE VALUES THE WAY usbfix DOES — the defaults baked into the
+#      installed script first, then /etc/default/usbfix over them, which is exactly
+#      `PRODUCT=…; STORM_MIN=…` followed by `[ -f /etc/default/usbfix ] && .` at the
+#      top of the script. Grepping only the override file calls a correct box broken
+#      (the file is optional and usually absent); grepping only the script misses a
+#      box whose override puts 300 back.
+#   3. ASSERT THE CODE MARKER TOO. Correct numbers on top of the pre-22/09 script
+#      still count stale `urb status` lines out of the ring buffer, which is the bug
+#      that produced the needless reset in the first place. `/proc/uptime` is the
+#      marker: reading it is what makes the count fresh-only.
+#   4. MAP `is-enabled`'s EXIT 4 ONTO 1. systemd answers 0 enabled, 1 disabled or
+#      masked, and **4 for a unit it has never heard of** — which is precisely the
+#      card that never got the module, i.e. the answer this ledger exists to give.
+#      Left alone it lands in the `?` column and makes `missing:` unanswerable, so
+#      the row maps 4 -> 1 by hand. 127 (no systemd here at all) is deliberately NOT
+#      mapped: that one really is "could not read".
+#
+# `-le`, not `=`: the row asks whether the box is at or past the fix, so a fleet
+# tuned tighter later still reads y. Bump these two numbers when the ledger's fleet
+# moves, the same as any other row.
+P4 | usbfix carries the 22/09 thresholds (not just enabled) | 7.3 | ./setup.sh usbfix | systemctl is-enabled usbfix.timer >/dev/null 2>&1; rc=$?; [ "$rc" = 4 ] && rc=1; [ "$rc" = 0 ] || exit "$rc"; [ -r /usr/local/sbin/usbfix ] || exit 1; grep -q /proc/uptime /usr/local/sbin/usbfix || exit 1; eval "$(grep -m1 '^PRODUCT=' /usr/local/sbin/usbfix)"; [ -f /etc/default/usbfix ] && . /etc/default/usbfix; [ "${STORM_MIN:-999}" -le 20 ] && [ "${COOLDOWN:-999}" -le 90 ]
 
 # --- a unit that must be MASKED: `is-enabled` prints, it does not exit-code -----
 # `systemctl is-enabled man-db.timer` exits 1 for masked AND for disabled, so
