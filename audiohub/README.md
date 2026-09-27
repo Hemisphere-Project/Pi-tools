@@ -51,6 +51,25 @@ byte-identical to v2.
 - Why no dmix/multi: both are broken on bcm2835 + Buster alsa-lib 1.1.8
   (dmix stalls at any geometry; 12ch multi freezes) — see the asound header.
 
+**Platform graphs** — same hub shape, one file per card layout. `install.sh`
+picks one and copies it to `/etc/asound.conf`; on a Pi the **cards** decide,
+not the arch (`armv7l` and `aarch64` both land in the same branch):
+
+| file | when | HDMI sink |
+|---|---|---|
+| `asound.conf-pi3` | Pi, legacy firmware stack — the RastaOS 7.x golden | `b1` (bcm2835) |
+| `asound.conf-pi-kms` | Pi, `dtoverlay=vc4-kms-v3d` → a `vc4hdmi*` card exists | `vc4hdmi0` |
+| `asound.conf-x86` | x86 HDA (Intel PCH) | `PCH,3` |
+
+`asound.conf-pi-kms` is **UNTESTED — never played on real hardware** (written
+2026-09-12, pi-tools#t-009: no KMS Pi on the bench; pi-tools#t-003 owns the
+aarch64 bench verification). It is shipped because without it a KMS Pi got the
+legacy graph and a dangling `hdmiout`. `install.sh` says so at every install,
+and the file's own header lists what to check first. Each graph hardcodes the
+FIRST HDMI port — you edit the file for another one; on KMS the installer
+names the exact `sed` when the board's card id is not the one the graph names
+(a single-port Pi 3 is `vc4hdmi`, not `vc4hdmi0`).
+
 Install: via `setup.sh` (module group `audiohub`) or `sudo ./install.sh`
 (idempotent; migrates old `hplayer-audio` installs and removes audioselect).
 Smoke test without hardware: `./desktest.sh`.
