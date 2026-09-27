@@ -15,20 +15,54 @@ else
 fi
 
 # ALSA graph per platform — see each file's header for the design
+# On a Pi the ARCH does not pick the graph — the CARDS do. The legacy
+# firmware stack exposes Headphones + b1/b2 (bcm2835: the RastaOS-7.x
+# golden, asound.conf-pi3); a KMS Pi (dtoverlay=vc4-kms-v3d — what
+# setup/bootstrap.py's own config.txt writes) exposes vc4hdmi* for HDMI
+# instead and keeps only the analog half of bcm2835 (asound.conf-pi-kms).
+# Both spellings of the Pi arch land here on purpose: that same config.txt
+# sets arm_64bit=1 on anything past Buster, so the installer's OWN reference
+# platform reports aarch64 and used to fall through to "no graph at all".
+pi_hdmi_card() {
+    sed -n 's/^ *[0-9]* *\[\(vc4hdmi[0-9]*\) *\].*/\1/p' /proc/asound/cards 2>/dev/null | head -1
+}
+
 GRAPH_OK=false
 case "$(uname -m)" in
-    armv*)   cp "$BASEPATH/asound.conf-pi3" /etc/asound.conf
+    armv*|aarch64)
+             KMSCARD="$(pi_hdmi_card)"
+             if [ -n "$KMSCARD" ]; then
+                 GRAPH="asound.conf-pi-kms"
+             else
+                 GRAPH="asound.conf-pi3"
+             fi
+             cp "$BASEPATH/$GRAPH" /etc/asound.conf
              GRAPH_OK=true
-             # asound.conf-pi3 names the LEGACY firmware cards
-             # (Headphones/b1 = bcm2835 stack, the RastaOS-7.1 golden).
-             # A KMS Pi (vc4-kms-v3d — what setup's own config.txt
-             # writes) exposes vc4hdmi* cards instead: hdmiout would
-             # dangle. No pi-kms graph exists yet — warn loudly.
-             if grep -q "vc4hdmi" /proc/asound/cards 2>/dev/null; then
-                 echo "WARNING: KMS audio stack detected (vc4hdmi*):"
-                 echo "  asound.conf-pi3 targets the legacy bcm2835 cards"
-                 echo "  (Headphones/b1) — hdmiout will NOT match. An"
-                 echo "  asound.conf-pi-kms variant is needed (TODO)."
+             if [ -n "$KMSCARD" ]; then
+                 # Say it at install time, every time: this graph was written
+                 # at a desk and has never been played (pi-tools#t-009 —
+                 # no KMS Pi on the bench). Whoever installs it is very
+                 # likely the first person to hear it.
+                 echo "NOTE: KMS audio stack detected ($KMSCARD) -> asound.conf-pi-kms."
+                 echo "      That graph is UNTESTED — never played on real hardware."
+                 echo "      Read the header of $BASEPATH/$GRAPH before debugging"
+                 echo "      silence; it lists what to check, in order."
+                 # The graph hardcodes the FIRST HDMI port, house convention
+                 # (same as asound.conf-x86's device-3 pick). A single-port
+                 # Pi 3 names it plain 'vc4hdmi' and a second port is
+                 # 'vc4hdmi1': hdmiout would dangle exactly the way it did
+                 # under the pi3 graph, so name the one-line edit rather
+                 # than let it be discovered as silence. Read the card the
+                 # graph names out of the graph itself — no second copy of
+                 # it to drift here.
+                 GRAPHCARD=$(sed -n 's/.*slave\.pcm "hw:\(vc4hdmi[0-9]*\)".*/\1/p' /etc/asound.conf | head -1)
+                 if [ -n "$GRAPHCARD" ] && [ "$KMSCARD" != "$GRAPHCARD" ]; then
+                     echo "WARNING: the graph targets '$GRAPHCARD' but this Pi's HDMI card"
+                     echo "         is '$KMSCARD' — hdmiout will NOT match. Fix with:"
+                     echo "           sed -i 's/$GRAPHCARD/$KMSCARD/g' /etc/asound.conf"
+                     echo "         and send the same edit back to $GRAPH if this"
+                     echo "         board type is one we ship."
+                 fi
              fi ;;
     x86_64)  cp "$BASEPATH/asound.conf-x86" /etc/asound.conf; GRAPH_OK=true ;;
     *)       echo "WARNING: no hub graph for $(uname -m) yet, /etc/asound.conf untouched" ;;
@@ -88,8 +122,9 @@ if [ "$GRAPH_OK" = true ]; then
     done
     echo "audiohub installed: $(head -1 /etc/asound.conf | cut -c3-22), forwarders enabled"
 else
-    # No ALSA graph for this arch (e.g. aarch64 / pi-kms): enabling the forwarders
-    # would just crash-loop them (alsaloop on missing PCMs). Leave them disabled
+    # No ALSA graph for this arch (Pi legacy, Pi KMS and x86 all have one now —
+    # so this is an arch we have never shipped): enabling the forwarders would
+    # just crash-loop them (alsaloop on missing PCMs). Leave them disabled
     # until a graph exists for this platform.
     systemctl disable audiohub@jack audiohub@hdmi audiohub@usb 2>/dev/null
     echo "audiohub: NO hub graph for $(uname -m) — forwarders left DISABLED (would"

@@ -2,6 +2,7 @@
 id=sync-ap-eth0
 type=ethernet
 autoconnect=true
+autoconnect-priority=10
 interface-name=eth0
 
 [ipv4]
