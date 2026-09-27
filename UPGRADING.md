@@ -1,9 +1,10 @@
 # Upgrading a running device (Pi-tools, branch 2026)
 
 How to roll the Phase 0/1 improvements onto an **already-deployed** machine. Most
-of it is a `git pull` (modules are symlinked from `/opt/Pi-tools`), but some
-changes need a service restart, and **one class — rorw's fstab boot-safety — is
-NOT applied by a pull** and needs the complementary step in §3.
+of it is a `git pull` (most modules are symlinked from `/opt/Pi-tools` —
+`usbfix` and `linkwatch` are the exception, see §1), but some changes need a
+service restart, and **one class — rorw's fstab boot-safety — is NOT applied
+by a pull** and needs the complementary step in §3.
 
 > On a rorw box the root filesystem is read-only, so wrap everything in `rw` … `ro`.
 > A fresh **golden-image build runs `setup.sh` and bakes all of this in** — the
@@ -40,6 +41,12 @@ process lives — and an unlinked-but-open file is enough on its own to pin the 
 read-write. There is **no write fd anywhere**, which is what makes this look
 unexplainable: nothing is writing, and the remount still fails.
 
+**`usbfix` and `linkwatch` are the exception**: their `install.sh` `install -m 755`s
+the script into `/usr/local/sbin/` instead of symlinking it, so on those two a
+`git pull` alone never touches what `ExecStart=` runs — the inode-pinning problem
+above does not apply, but neither does the fix. Re-run `install.sh` after pulling on
+these two, or you're testing against a stale copy.
+
 Seen on player-000 (2026-09-04): after a pull, `audiohub@jack` / `audiohub@hdmi` were
 still running the *previous* `audiohub-fwd`. `ro` retried its five attempts and gave
 up, and `ro-assert` then failed the same way on every timer tick — a venue box left
@@ -63,6 +70,28 @@ Still busy after restarting everything? Look for unlinked files, not for a write
 lsof +L1 /        # open files with link count 0 — the ones pinning the mount
 fuser -vm /       # everything holding / (also in rorw/ro, commented out)
 ```
+
+### ⚠️ Hotfixing a single file directly — skipping `git pull`
+
+Field-proven deploying to 39 live players, 2026-09-21
+(`notes/2026-09-21-blackbox-v3b-linkwatch-v2-fleet-day-rules.md` §3) — none of this
+was in the repo before:
+
+- **Never `cp` a new version over a script path a running bash may still be
+  reading.** bash executes a script incrementally by byte offset; overwriting it
+  in place lets a long-running shell resume mid-read into different text. Write
+  the new version alongside as `<name>.new`, then `mv`/`ln -sfn` it into place —
+  the rename is atomic and any process still running keeps the old
+  (now-unlinked) inode until it exits.
+- **Respect what `install.sh` actually wired — don't assume the symlink shape
+  above.** A staging pass that drops a real file over `/usr/local/bin/audiohub-fwd`
+  (a symlink into the module tree) silently detaches the box from the tree, and
+  the next `git pull` updates code nothing runs. Check `install.sh` first — see
+  the `usbfix`/`linkwatch` exception just above.
+- **Detach anything that restarts hostapd.** `setnet` (§1) cycles the AP your own
+  ssh session may be riding on — run it under `nohup` when you're connected
+  through the box's own hotspot, or the restart kills the shell running the
+  command mid-way.
 
 ## 2. What each change needs to go live
 
