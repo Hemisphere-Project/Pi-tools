@@ -5,5 +5,7 @@ Requires=fake-clock.service
 
 [Service]
 Type=oneshot
+# only while diagnostics are armed: a saved clock helps date a post-mortem, and is a card write
+ExecCondition=/usr/local/bin/diag armed --peek
 ExecStart=/usr/local/bin/fake-clock save
 StandardOutput=null
