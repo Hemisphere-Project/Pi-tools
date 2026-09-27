@@ -18,8 +18,11 @@
 # creation RATE, and the two boxes that had one read 26 threads flat while it happened.
 LOG=${BLACKBOX_LOG:-/run/blackbox.log}                 # live, tmpfs, 2 MB x 2 (~1 day at 1 line/min)
 ARCHIVE=${BLACKBOX_ARCHIVE:-/data/var/log/blackbox.log} # what journal-export appended (history)
-# heredocs below need a temp dir: /tmp is the 102 MB tmpfs that a log storm fills in a minute (W6, 17/09)
-[ -d /data/tmp ] || mkdir -p /data/tmp 2>/dev/null; export TMPDIR=/data/tmp
+# heredocs below need a temp dir: /tmp is the 102 MB tmpfs that a log storm fills in a minute (W6, 17/09),
+# and /data/tmp put a write on the SD card every minute (bash < 5.1 backs each heredoc with a file) —
+# the card the venue's power cuts damage (lacroix02, 2026-09-27). /run is a separate tmpfs; the files
+# are a few KB and removed at once.
+mkdir -p /run/blackbox.tmp 2>/dev/null; export TMPDIR=/run/blackbox.tmp
 MAX=$((2*1024*1024)); KEEP=2
 case "${1:-}" in
   tail) cat "$ARCHIVE" "$LOG" 2>/dev/null | tr -d '\000' | tail -n "${2:-30}"; exit 0 ;;

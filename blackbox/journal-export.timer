@@ -1,9 +1,11 @@
 [Unit]
-Description=journal-export every 10 minutes (post-mortem trail on /data, journald stays in RAM)
+Description=journal-export every hour (post-mortem trail on /data, journald stays in RAM)
 
 [Timer]
 OnBootSec=5min
-OnUnitActiveSec=10min
+# hourly (was 10 min, 2026-09-27): /data sees one sequential append per hour; a power cut
+# costs at most the last hour of trail. An anomaly still dumps at once (journal-export --now).
+OnUnitActiveSec=60min
 AccuracySec=30s
 Unit=journal-export.service
 
