@@ -4,5 +4,8 @@ ConditionPathIsDirectory=/data
 
 [Service]
 Type=oneshot
+# Nothing reaches the card unless diagnostics are armed (`diag arm`, Thomas 2026-09-27); each armed
+# run counts one hour down.
+ExecCondition=/usr/local/bin/diag armed
 ExecStart=/usr/local/bin/journal-export
 Nice=10
