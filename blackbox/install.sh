@@ -8,7 +8,8 @@
 # and dumps the last 15 min on an anomaly (called by blackbox).
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
-chmod 755 "$HERE/blackbox" "$HERE/nowde-probe.py" "$HERE/journal-export"
+chmod 755 "$HERE/blackbox" "$HERE/nowde-probe.py" "$HERE/journal-export" "$HERE/diag"
+ln -sf "$HERE/diag" /usr/local/bin/diag   # on-card diagnostics are armed on demand (disarmed by default)
 ln -sf "$HERE/blackbox" /usr/local/bin/blackbox
 ln -sf "$HERE/journal-export" /usr/local/bin/journal-export
 ln -sf "$HERE/blackbox.service" /etc/systemd/system/blackbox.service

@@ -1,0 +1,96 @@
+#!/bin/bash
+# data-repair — check /data before it is mounted, and repair what a power cut broke.
+#
+# Why: the venue power cuts are hard, and a consumer SD card losing power mid-write can
+# damage blocks nobody was writing. lacroix02-61 (2026-09-27) booted with the /data primary
+# ext4 superblock zeroed: no filesystem signature, no /dev/disk/by-uuid link, `data.mount`
+# "Dependency failed", HPlayer2 up on an empty /data/media — a black screen until a human ran
+# e2fsck from the backup superblock. This does that at boot, and nothing more.
+#
+# Contract — never a new failure source:
+#   * runs before data.mount but is not required by it: if this fails or times out, /data is
+#     mounted exactly as before (or not, exactly as before);
+#   * acts only on the partition /etc/fstab names for /data (its UUID), and only while it is
+#     not mounted;
+#   * primary superblock readable  -> `e2fsck -p` (preen: the standard boot-time check, safe
+#                                     fixes only; instant on a clean filesystem);
+#   * primary superblock unreadable -> only if the backup superblock carries the SAME UUID:
+#                                     `e2fsck -y` from the backup (the 2026-09-27 repair), then
+#                                     a preen; then udev is re-triggered so the UUID link exists
+#                                     when data.mount looks for it;
+#   * a preen that stops on something it will not fix alone is logged, never escalated.
+# The outcome is in the journal (-t data-repair) and in /run/data-repair.status (+ .e2fsck.log).
+#
+# Usage: data-repair [device] [uuid]   (both detected from /etc/fstab when omitted)
+set -u
+TAG=data-repair
+# /run on a player; any writable place otherwise — a log we cannot write must never stop the check
+RUNDIR=${DATA_REPAIR_RUN:-/run}
+{ : >> "$RUNDIR/data-repair.status"; } 2>/dev/null || RUNDIR=$(mktemp -d 2>/dev/null || echo /tmp)
+STATUS=$RUNDIR/data-repair.status
+ELOG=$RUNDIR/data-repair.e2fsck.log
+log() { echo "[$TAG] $*"; logger -t "$TAG" "$*" 2>/dev/null || true; }
+status() { echo "$(date '+%F %T') $*" > "$STATUS" 2>/dev/null || true; log "$*"; }
+
+UUID=${2:-$(awk '$2 == "/data" && $1 ~ /^UUID=/ { sub(/^UUID=/, "", $1); print $1; exit }' /etc/fstab 2>/dev/null)}
+[ -n "$UUID" ] || { status "no UUID for /data in /etc/fstab: nothing to do"; exit 0; }
+
+DEV=${1:-}
+if [ -z "$DEV" ]; then
+	# By UUID when the signature is readable; otherwise the partition that carried it: the one
+	# after the root partition on the same disk (the layout /data has on every player).
+	for i in $(seq 1 10); do
+		DEV=$(blkid -U "$UUID" 2>/dev/null) && break
+		ROOT=$(findmnt -no SOURCE / 2>/dev/null)
+		case "$ROOT" in
+			/dev/mmcblk*p[0-9]) CAND="${ROOT%p*}p$(( ${ROOT##*p} + 1 ))" ;;
+			/dev/sd[a-z][0-9])  CAND="${ROOT%[0-9]}$(( ${ROOT: -1} + 1 ))" ;;
+			*) CAND= ;;
+		esac
+		[ -n "$CAND" ] && [ -b "$CAND" ] && { DEV=$CAND; break; }
+		DEV=; sleep 1
+	done
+fi
+[ -n "$DEV" ] || { status "device for /data (UUID $UUID) not found: nothing to do"; exit 0; }
+[ -b "$DEV" ] || [ -f "$DEV" ] || { status "$DEV is not a device: nothing to do"; exit 0; }
+if [ -b "$DEV" ] && findmnt -rn -S "$DEV" >/dev/null 2>&1; then
+	status "$DEV already mounted: nothing to do"; exit 0
+fi
+
+sb_uuid() { dumpe2fs -h "$@" 2>/dev/null | awk -F': *' '/^Filesystem UUID/ { print $2; exit }'; }
+
+PRIMARY=$(sb_uuid "$DEV")
+if [ -n "$PRIMARY" ]; then
+	if [ "$PRIMARY" != "$UUID" ]; then
+		status "$DEV carries UUID $PRIMARY, not /data's $UUID: not touching it"; exit 0
+	fi
+	e2fsck -p "$DEV" > "$ELOG" 2>&1
+	rc=$?
+	case $rc in
+		0) status "$DEV clean" ;;
+		1|2|3) status "$DEV preen fixed errors (e2fsck rc=$rc): $(grep -v '^$' "$ELOG" | tail -2 | tr '\n' ' ')" ;;
+		*) status "!! $DEV preen stopped on errors it will not fix alone (e2fsck rc=$rc) — mounting as before; needs a manual e2fsck: $(tail -3 "$ELOG" | tr '\n' ' ')" ;;
+	esac
+	exit 0
+fi
+
+# Primary superblock unreadable. Only the backup that names the same filesystem may repair it.
+for BS in 32768:4096 98304:4096 8193:1024; do
+	B=${BS%:*}; K=${BS#*:}
+	if [ "$(sb_uuid -o superblock=$B -o blocksize=$K "$DEV")" = "$UUID" ]; then
+		log "$DEV: primary superblock unreadable; backup at $B carries /data's UUID -> e2fsck -y from it"
+		e2fsck -y -b "$B" -B "$K" "$DEV" > "$ELOG" 2>&1
+		rc=$?
+		e2fsck -p "$DEV" >> "$ELOG" 2>&1
+		rc2=$?
+		if [ "$(sb_uuid "$DEV")" = "$UUID" ]; then
+			status "$DEV REPAIRED from the backup superblock $B (e2fsck rc=$rc, preen rc=$rc2)"
+		else
+			status "!! $DEV repair from backup $B did not restore the primary superblock (rc=$rc/$rc2)"
+		fi
+		[ -b "$DEV" ] && { udevadm trigger --action=change "$DEV" 2>/dev/null; udevadm settle -t 10 2>/dev/null; }
+		exit 0
+	fi
+done
+status "!! $DEV: no readable ext4 superblock with /data's UUID (primary nor backups): not touching it"
+exit 0
