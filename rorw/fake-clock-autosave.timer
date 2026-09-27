@@ -5,8 +5,7 @@ After=fake-clock.service
 [Timer]
 # hourly (was 15 min, 2026-09-27): one touch of /data per hour; the boot clock floor may lag by
 # up to an hour, which no player depends on (their clocks are fake anyway, schedule needs an RTC).
-OnActiveSec=60min
-OnUnitActiveSec=60min
+OnCalendar=hourly
 
 [Install]
 WantedBy=fake-clock.service

@@ -160,7 +160,8 @@ printf '%s up=%s hp=%s/%s %s %s %s %s %s %s %s %s %s %s sync=%s drift=%s ev=%s\n
 # --- v3: journald lives in RAM; on an anomaly, dump the last 15 min to /data now (journal-export --now),
 #     at most once per 15 min. What counts: mpv not advancing / no IPC, HPlayer2 not active or restarted
 #     since the previous line, a traceback or crash this minute, a slave whose window locked 0 %.
-if command -v journal-export >/dev/null 2>&1; then
+#     Only while diagnostics are armed (`diag arm`, Thomas 2026-09-27: nothing on the card otherwise).
+if command -v journal-export >/dev/null 2>&1 && diag armed --peek 2>/dev/null; then
   R=""
   case "$MPV" in *adv=STALL*|*adv=noipc*) R=mpv ;; esac
   [ "$HP" = active ] || R=${R:-hplayer-$HP}
