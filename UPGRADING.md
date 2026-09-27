@@ -30,6 +30,40 @@ setnet                                                # optional: re-apply wifi 
 ro                                                    # rorw boxes only
 ```
 
+### ⚠️ Restart EVERY unit whose script changed — not the one you tested
+
+If `ro` refuses to take after a pull, this is why, every time.
+
+Modules are symlinked out of `/opt/Pi-tools`, so a `git pull` **replaces the file a
+running unit is executing**. The old inode is unlinked but stays open as long as that
+process lives — and an unlinked-but-open file is enough on its own to pin the mount
+read-write. There is **no write fd anywhere**, which is what makes this look
+unexplainable: nothing is writing, and the remount still fails.
+
+Seen on player-000 (2026-09-04): after a pull, `audiohub@jack` / `audiohub@hdmi` were
+still running the *previous* `audiohub-fwd`. `ro` retried its five attempts and gave
+up, and `ro-assert` then failed the same way on every timer tick — a venue box left
+silently writable, with nothing to blame.
+
+The comment in §1 is right about *which device*; this is about *which units on it*.
+Restart **all** the units whose script the pull touched, including the ones you were
+not testing:
+
+```bash
+git -C /opt/Pi-tools diff --name-only HEAD@{1} HEAD   # what the pull actually changed
+```
+
+For audiohub that means `audiohub apply` — it restarts all three forwarders (`jack`,
+`hdmi`, `usb`) sequentially, where `systemctl restart audiohub@hdmi` alone leaves the
+other two holding the old inode.
+
+Still busy after restarting everything? Look for unlinked files, not for a writer:
+
+```bash
+lsof +L1 /        # open files with link count 0 — the ones pinning the mount
+fuser -vm /       # everything holding / (also in rorw/ro, commented out)
+```
+
 ## 2. What each change needs to go live
 
 | Change (commit) | Activation |
@@ -98,6 +132,8 @@ and snapd changes — no in-place patching needed on a freshly imaged card.
 - Wi-Fi: `setnet` prints "additive" behavior; a stray empty `wifi/` no longer wipes
   profiles; check `/boot/firmware/wifi/_legacy/` after any conflicting update.
 - rorw: `findmnt /data` shows `nofail`; a test unclean boot still reaches multi-user.
+- rorw, after any pull: `ro` prints `=> RO ok!`. If it retries and fails instead, a
+  unit you did not restart is still holding a deleted script — see §1.
 
 ## 6. Phase 2 & 3 — one-time steps on an already-deployed box
 
