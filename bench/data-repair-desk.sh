@@ -28,8 +28,17 @@ echo "== 2. primary superblock zeroed (lacroix02, 2026-09-27)"
 mk; dd if=/dev/zero of="$T/img" bs=1024 seek=1 count=1 conv=notrunc 2>/dev/null
 check "precondition: primary unreadable" '! dumpe2fs -h "$T/img" >/dev/null 2>&1'
 run
-check "reported REPAIRED" '[[ "$STATUS_OUT" == *REPAIRED* ]]'
+check "reported REPAIRED, verified clean" '[[ "$STATUS_OUT" == *"verified clean"* ]]'
 check "primary superblock back, same UUID" '[ "$(dumpe2fs -h "$T/img" 2>/dev/null | awk -F": *" "/^Filesystem UUID/{print \$2}")" = "$UUID" ]'
+check "filesystem clean after" fs_clean
+check "film intact (md5)" film_ok
+
+echo "== 2b. primary superblock zeroed AND bitmap damage (the lacroix02 shape: a restore alone is not enough)"
+mk; BLK=$(debugfs -R "blocks media/01_FILM.mp4" "$T/img" 2>/dev/null | awk '{print $1}')
+debugfs -w -R "freeb $BLK 2048" "$T/img" >/dev/null 2>&1
+dd if=/dev/zero of="$T/img" bs=1024 seek=1 count=1 conv=notrunc 2>/dev/null
+run
+check "reported REPAIRED, verified clean" '[[ "$STATUS_OUT" == *"verified clean"* ]]'
 check "filesystem clean after" fs_clean
 check "film intact (md5)" film_ok
 

@@ -15,8 +15,8 @@
 #   * primary superblock readable  -> `e2fsck -p` (preen: the standard boot-time check, safe
 #                                     fixes only; instant on a clean filesystem);
 #   * primary superblock unreadable -> only if the backup superblock carries the SAME UUID:
-#                                     `e2fsck -y` from the backup (the 2026-09-27 repair), then
-#                                     a preen; then udev is re-triggered so the UUID link exists
+#                                     `e2fsck -y` from the backup, then a full `e2fsck -f -y`
+#                                     (the 27/09 and 28/09 two-pass repairs), then a read-only verify; then udev is re-triggered so the UUID link exists
 #                                     when data.mount looks for it;
 #   * a preen that stops on something it will not fix alone is logged, never escalated.
 # The outcome is in the journal (-t data-repair) and in /run/data-repair.status (+ .e2fsck.log).
@@ -81,12 +81,20 @@ for BS in 32768:4096 98304:4096 8193:1024; do
 		log "$DEV: primary superblock unreadable; backup at $B carries /data's UUID -> e2fsck -y from it"
 		e2fsck -y -b "$B" -B "$K" "$DEV" > "$ELOG" 2>&1
 		rc=$?
-		e2fsck -p "$DEV" >> "$ELOG" 2>&1
+		# The restore pass can stop before its full check (lacroix02, 27/09: "unable to set superblock
+		# flags") and leave bitmap/count errors that let new writes land on used blocks — the film's.
+		# Without this repair the partition is unusable anyway, so finish it: one full -y pass, then a
+		# read-only verify whose verdict is what we report.
+		e2fsck -f -y "$DEV" >> "$ELOG" 2>&1
 		rc2=$?
-		if [ "$(sb_uuid "$DEV")" = "$UUID" ]; then
-			status "$DEV REPAIRED from the backup superblock $B (e2fsck rc=$rc, preen rc=$rc2)"
+		e2fsck -f -n "$DEV" >> "$ELOG" 2>&1
+		rc3=$?
+		if [ "$(sb_uuid "$DEV")" = "$UUID" ] && [ $rc3 -eq 0 ]; then
+			status "$DEV REPAIRED from the backup superblock $B, verified clean (rc=$rc/$rc2/$rc3)"
+		elif [ "$(sb_uuid "$DEV")" = "$UUID" ]; then
+			status "!! $DEV restored from backup $B but still has errors (rc=$rc/$rc2/verify $rc3) — needs a manual e2fsck"
 		else
-			status "!! $DEV repair from backup $B did not restore the primary superblock (rc=$rc/$rc2)"
+			status "!! $DEV repair from backup $B did not restore the primary superblock (rc=$rc/$rc2/$rc3)"
 		fi
 		[ -b "$DEV" ] && { udevadm trigger --action=change "$DEV" 2>/dev/null; udevadm settle -t 10 2>/dev/null; }
 		exit 0
