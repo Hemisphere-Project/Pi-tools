@@ -14,10 +14,15 @@
 # journal-export, every 10 minutes as one sequential append to /data/var/log/blackbox.log, plus the
 # anomaly dump. Between exports nothing touches /data: a power cut at closing time landed on a data
 # partition's superblock kept hot by the per-minute syncs (lacroix3-36, third card of the family).
+# v3c (2026-09-22): `tasks=` + `spawn=` on the system group -- a thread-exhaustion storm is a
+# creation RATE, and the two boxes that had one read 26 threads flat while it happened.
 LOG=${BLACKBOX_LOG:-/run/blackbox.log}                 # live, tmpfs, 2 MB x 2 (~1 day at 1 line/min)
 ARCHIVE=${BLACKBOX_ARCHIVE:-/data/var/log/blackbox.log} # what journal-export appended (history)
-# heredocs below need a temp dir: /tmp is the 102 MB tmpfs that a log storm fills in a minute (W6, 17/09)
-[ -d /data/tmp ] || mkdir -p /data/tmp 2>/dev/null; export TMPDIR=/data/tmp
+# heredocs below need a temp dir: /tmp is the 102 MB tmpfs that a log storm fills in a minute (W6, 17/09),
+# and /data/tmp put a write on the SD card every minute (bash < 5.1 backs each heredoc with a file) —
+# the card the venue's power cuts damage (lacroix02, 2026-09-27). /run is a separate tmpfs; the files
+# are a few KB and removed at once.
+mkdir -p /run/blackbox.tmp 2>/dev/null; export TMPDIR=/run/blackbox.tmp
 MAX=$((2*1024*1024)); KEEP=2
 case "${1:-}" in
   tail) cat "$ARCHIVE" "$LOG" 2>/dev/null | tr -d '\000' | tail -n "${2:-30}"; exit 0 ;;
@@ -97,9 +102,9 @@ PS=$(iw dev wint get power_save 2>/dev/null | awk '{print $NF}')
 AP="ap=$(iw dev wint station dump 2>/dev/null | grep -c '^Station') hostapd=$(systemctl is-active hostapd@wint 2>/dev/null) ps=${PS:--} assoc=$(cnt "$JA" 'IEEE 802.11: associated') conn=$(cnt "$JA" 'AP-STA-CONNECTED') apst=$(cnt "$JA" 'AP-ENABLED') apfix=$(cnt "$JA" 'restarted') kwifi=$(cnt "$JK" 'brcmf|ieee80211|wlan|sdio')"
 
 # --- USB bus events this minute (node re-enumeration, sound card, dongles); urb= counts `urb status`
-#     errors in the last 400 lines of the ring buffer (a stalled endpoint loops at ~7000/s and journald
+#     errors with a kernel timestamp in the last 60 s (ring buffer, fresh lines only) (a stalled endpoint loops at ~7000/s and journald
 #     drops most of them -- kmiss= is how many times it said so this minute); usbfix= resets this minute
-KUSB="kusb=$(cnt "$JK" 'usb [0-9.-]+: (new|USB disconnect|reset)|cdc_acm|ttyACM') urb=$(dmesg 2>/dev/null | tail -n 400 | grep -c 'urb status') kmiss=$(journalctl -u systemd-journald --since -60s --no-pager -o cat 2>/dev/null | grep -c Missed) usbfix=$(journalctl -t usbfix --since -60s --no-pager -o cat 2>/dev/null | grep -c .)"
+KUSB="kusb=$(cnt "$JK" 'usb [0-9.-]+: (new|USB disconnect|reset)|cdc_acm|ttyACM') urb=$(dmesg 2>/dev/null | tail -n 3000 | awk -v now="$(cut -d' ' -f1 /proc/uptime)" '/urb status/ { t=$1; gsub(/[][]/, "", t); if (now - t < 60) n++ } END { print n+0 }') kmiss=$(journalctl -u systemd-journald --since -60s --no-pager -o cat 2>/dev/null | grep -c Missed) usbfix=$(journalctl -t usbfix --since -60s --no-pager -o cat 2>/dev/null | grep -c .)"
 
 # --- display (video walls: black-screen episodes)
 DISP="disp=$(q tvservice -s | grep -oE '\[[A-Z]+ [A-Z]* *\(?[0-9]+\)?' | tr -d ' ()[' | head -1) dev=$(tvservice -n 2>&1 | grep -q device_name && echo y || echo n) pwr=$(q vcgencmd display_power | cut -d= -f2)"
@@ -110,7 +115,30 @@ DISP="disp=$(q tvservice -s | grep -oE '\[[A-Z]+ [A-Z]* *\(?[0-9]+\)?' | tr -d '
 VC="vc=yuv$(vcgencmd dispmanx_list 2>/dev/null | grep -c 'format:YUV')/px$(vcgencmd measure_clock pixel 2>/dev/null | cut -d= -f2 | awk '{printf "%.1fM", $1/1e6}')"
 
 # --- system: throttling, temperature, load, RAM, the tmpfs /tmp (= /var/log on rorw)
-SYS="thr=$(q vcgencmd get_throttled | cut -d= -f2) t=$(q vcgencmd measure_temp | grep -oE '[0-9.]+') load=$(cut -d' ' -f1 /proc/loadavg) free=$(free -m | awk '/Mem/{print $7}')M tmp=$(df -P /tmp | awk 'NR==2{print $5}')"
+#     `free=` has always been MemAvailable, NOT MemFree -- what a new allocation can actually get,
+#     cache already discounted. It was column 7 of `free -m`, which is true of procps-ng and of
+#     nothing else; read from /proc/meminfo the field says what it is and cannot change meaning
+#     under a column reorder. Same number, same name: six weeks of field lines still grep.
+SYS="thr=$(q vcgencmd get_throttled | cut -d= -f2) t=$(q vcgencmd measure_temp | grep -oE '[0-9.]+') load=$(cut -d' ' -f1 /proc/loadavg) free=$(awk '/^MemAvailable:/{printf "%d", $2/1024}' /proc/meminfo)M tmp=$(df -P /tmp | awk 'NR==2{print $5}')"
+
+# --- threads: the player's live count, and the whole system's thread CREATION RATE this minute.
+#     `tasks=` is the level (against the unit's TasksMax, 1803); `spawn=` is the rate, and the rate
+#     is the one that finds things. kouagou02/03 raised `RuntimeError: can't start new thread` 11x
+#     and 10x, in bursts of six a minute, while sitting at a perfectly steady 26 threads -- which is
+#     exactly why a thread leak was ruled out and the hunt went to memory instead. The real cause
+#     was HPlayer2's module.delimiter() starting a threading.Timer PER LOG LINE: hundreds of OS
+#     threads created and torn down per second during a link storm (fixed in HPlayer2 24288eb,
+#     2026-09-21). No count can see that; a per-minute delta of /proc/stat's `processes` -- which
+#     counts every fork AND clone since boot -- reads it straight off. What a healthy range looks
+#     like is not known yet: that is what the first weeks of lines are for, and until one is
+#     measured `spawn=` deliberately does not trigger the anomaly dump below.
+#     /run is tmpfs, so the previous value cannot survive a reboot into a nonsense delta.
+NCLONE=$(awk '/^processes /{print $2}' /proc/stat 2>/dev/null); NCLONE=${NCLONE:-0}
+PREVN=$(cat /run/blackbox.clones 2>/dev/null); case "$PREVN" in ''|*[!0-9]*) PREVN=$NCLONE ;; esac
+echo "$NCLONE" > /run/blackbox.clones
+SPAWN=$((NCLONE - PREVN)); [ "$SPAWN" -ge 0 ] || SPAWN=-          # counter reset under a stale file
+TASKS=$(systemctl show "$U" -p TasksCurrent --value 2>/dev/null); case "$TASKS" in ''|*[!0-9]*) TASKS=- ;; esac
+SYS="$SYS tasks=$TASKS spawn=$SPAWN"
 
 # --- zyre/wallclock sync (video walls): interface address + signal, last drift window
 SYNC=""
@@ -132,7 +160,8 @@ printf '%s up=%s hp=%s/%s %s %s %s %s %s %s %s %s %s %s sync=%s drift=%s ev=%s\n
 # --- v3: journald lives in RAM; on an anomaly, dump the last 15 min to /data now (journal-export --now),
 #     at most once per 15 min. What counts: mpv not advancing / no IPC, HPlayer2 not active or restarted
 #     since the previous line, a traceback or crash this minute, a slave whose window locked 0 %.
-if command -v journal-export >/dev/null 2>&1; then
+#     Only while diagnostics are armed (`diag arm`, Thomas 2026-09-27: nothing on the card otherwise).
+if command -v journal-export >/dev/null 2>&1 && diag armed --peek 2>/dev/null; then
   R=""
   case "$MPV" in *adv=STALL*|*adv=noipc*) R=mpv ;; esac
   [ "$HP" = active ] || R=${R:-hplayer-$HP}

@@ -5,5 +5,9 @@ Requires=fake-clock.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/fake-clock save
+# only while diagnostics are armed: a saved clock helps date a post-mortem, and is a card write.
+# The 28/09 set gates this with ExecCondition=, which systemd 241 (RastaOS 7.3) does not know
+# (added in systemd 243): an unknown key is ignored and the save would run ungated every hour.
+# Same gate, inside ExecStart. No `diag` on the box = disarmed = nothing written.
+ExecStart=/bin/sh -c '/usr/local/bin/diag armed --peek 2>/dev/null || exit 0; exec /usr/local/bin/fake-clock save'
 StandardOutput=null

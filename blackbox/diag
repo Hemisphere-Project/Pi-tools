@@ -1,0 +1,43 @@
+#!/bin/bash
+# diag — on-card diagnostics are ARMED on demand, never on by default.
+#
+# Thomas, 2026-09-27: a daily power cut and years of painless operation need the RastaOS rule back —
+# nothing written to the SD card in normal operation. The trail (journal export, blackbox archive,
+# anomaly dumps, fake-clock saves) exists to chase a bug, so it is armed for a bounded run on the
+# players under investigation, and silent everywhere else. Blackbox's live line and journald stay in
+# RAM regardless: readable over ssh while the player runs.
+#
+#   diag arm [HOURS]     arm for HOURS of running time (default 72, max 336)
+#   diag disarm          stop now
+#   diag status          armed? how many hours left
+#   diag armed           exit 0 if armed, and count one hour down (journal-export's ExecCondition:
+#                        it fires hourly, so the budget is powered hours — the players' clocks are
+#                        fake and rewind at every power cut, so no expiry date could be trusted)
+#   diag armed --peek    exit 0 if armed, count nothing (blackbox's anomaly dump, fake-clock save)
+#
+# State: /data/var/diag-armed, one integer (hours left); absent = disarmed. Written only when arming,
+# disarming, and once an hour while armed.
+STATE=${DIAG_STATE:-/data/var/diag-armed}
+left() { local v; v=$(cat "$STATE" 2>/dev/null) || return 1; [[ "$v" =~ ^[0-9]+$ ]] || return 1; echo "$v"; }
+put() { mkdir -p "$(dirname "$STATE")" && echo "$1" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE" && sync; }
+
+case "${1:-status}" in
+arm)
+	h=${2:-72}
+	[[ "$h" =~ ^[0-9]+$ ]] && [ "$h" -ge 1 ] || { echo "usage: diag arm [HOURS]"; exit 2; }
+	[ "$h" -gt 336 ] && h=336
+	put "$h" && { echo "diag armed for $h h of running time"; logger -t diag "armed for $h h" 2>/dev/null; } ;;
+disarm)
+	rm -f "$STATE" "$STATE.tmp"; sync
+	echo "diag disarmed"; logger -t diag "disarmed" 2>/dev/null ;;
+armed)
+	h=$(left) || exit 1
+	[ "$h" -ge 1 ] || { rm -f "$STATE"; sync; logger -t diag "expired: disarmed" 2>/dev/null; exit 1; }
+	[ "${2:-}" = --peek ] && exit 0
+	if [ "$h" -le 1 ]; then rm -f "$STATE"; sync; logger -t diag "last armed hour: disarmed" 2>/dev/null
+	else put $((h - 1)); fi
+	exit 0 ;;
+status)
+	if h=$(left) && [ "$h" -ge 1 ]; then echo "armed: $h h of running time left"; else echo "disarmed (nothing is written to the card)"; fi ;;
+*)	echo "usage: diag arm [HOURS] | disarm | status | armed [--peek]"; exit 2 ;;
+esac

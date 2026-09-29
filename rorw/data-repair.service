@@ -1,0 +1,19 @@
+[Unit]
+Description=Check and repair /data before it is mounted (power-cut damage)
+Documentation=file:///opt/Pi-tools/rorw/data-repair
+# Ordered before data.mount, but data.mount does not require it: a failure or timeout
+# here leaves /data exactly as it was before this unit existed.
+DefaultDependencies=no
+Before=data.mount local-fs.target shutdown.target
+After=systemd-remount-fs.service
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/data-repair
+# A full check of a damaged 54 GB /data takes minutes on a Pi; killing e2fsck mid-repair
+# would be worse than waiting. A clean filesystem returns in about a second.
+TimeoutStartSec=900
+
+[Install]
+WantedBy=local-fs.target

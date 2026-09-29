@@ -1,10 +1,17 @@
 [Unit]
-Description=journal-export every 10 minutes (post-mortem trail on /data, journald stays in RAM)
+Description=journal-export hourly (blackbox archive always, journal only while diag is armed)
 
 [Timer]
-OnBootSec=5min
-OnUnitActiveSec=10min
-AccuracySec=30s
+# hourly (was 10 min in v3b): /data sees one sequential append per hour; a power cut costs at most
+# the last hour of trail. An anomaly still dumps at once (blackbox calls journal-export --now).
+# OnCalendar (absolute), never OnUnitActiveSec: the run is skipped most hours once disarmed, and a
+# relative timer must not depend on how systemd counts a skipped run. Persistent=false: a boot after
+# a power cut must not fire a catch-up write on the card the cut just hit. The random delay spreads
+# the six players over five minutes.
+OnCalendar=hourly
+Persistent=false
+AccuracySec=2min
+RandomizedDelaySec=5min
 Unit=journal-export.service
 
 [Install]
