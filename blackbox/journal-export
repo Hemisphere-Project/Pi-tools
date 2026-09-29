@@ -1,12 +1,13 @@
 #!/bin/bash
 # journal-export — the post-mortem trail on /data, written the way an SD card tolerates, and
-# BOUNDED BY CONSTRUCTION (v4, 2026-09-29, MBA garden).
+# BOUNDED BY CONSTRUCTION, SILENT WHEN DISARMED (v4.1, 2026-09-29, MBA garden).
 #
 # journald stays in RAM (journald-ram.conf). Every hour (timer) this script:
-#   1. ALWAYS appends the blackbox's live per-minute line (/run/blackbox.log) to
-#      /data/var/log/blackbox.log — one sequential append + one fsync, ~500 B/min (~0.7 MB/day).
-#      This is the record every diagnosis so far stood on; it is deliberately not gated.
-#   2. ONLY WHILE `diag armed` (one armed hour consumed per run): appends the journal lines logged
+#   0. DOES NOTHING unless `diag armed` (Thomas, 2026-09-29: once disarmed, or after the armed period,
+#      NOTHING scheduled writes the card — the blackbox archive included; v4.0 kept that one always-on).
+#   1. Appends the blackbox's live per-minute line (/run/blackbox.log) to /data/var/log/blackbox.log —
+#      one sequential append + one fsync, ~500 B/min (~0.7 MB/day). The record every diagnosis stood on.
+#   2. Appends the journal lines logged (one armed hour consumed per hourly run)
 #      since the previous run to journal-export/<date>.log — STREAMED, never held in a variable
 #      (the v3b variable version invoked the OOM killer on W1, 2026-09-29 02:03), the NEWEST
 #      LINES_CAP entries at most (a storm's older lines are skipped, one marker line says so),
@@ -17,7 +18,7 @@
 # RAM journal does not survive a reboot, so neither should the cursor (a stale cursor made the
 # v3b script export nothing after some reboots). Pruning never deletes today's file.
 # Worst case per day while armed: 24 × RUN_CAP + 20 dumps ≈ well under 100 MB, typically < 25 MB;
-# disarmed: the blackbox archive only.
+# disarmed: nothing at all (not even the blackbox archive — it waits in /run, 6 MB, ~3 days).
 set -u
 OUT=${JOURNAL_EXPORT_DIR:-/data/var/log/journal-export}
 CUR=/run/journal-export.cursor
@@ -98,8 +99,8 @@ journal_part() {
 
 case "${1:-}" in
   --now|dump)
+    armed --peek || exit 0        # disarmed: nothing reaches the card, the archive included
     bb_archive
-    armed --peek || exit 0
     D=$OUT/dumps; mkdir -p "$D" 2>/dev/null || exit 0
     T=$D/$(date +%F_%H%M%S)-${2:-anomaly}.log
     { echo "### blackbox, last 60 lines"; tail -n 60 /run/blackbox.log 2>/dev/null
@@ -110,10 +111,11 @@ case "${1:-}" in
   status)
     echo "dir $(du -sm "$OUT" 2>/dev/null | cut -f1) MB, files: $(ls "$OUT"/*.log 2>/dev/null | wc -l), dumps: $(ls "$OUT/dumps" 2>/dev/null | wc -l), cursor: $([ -s "$CUR" ] && echo yes || echo none), last: $(ls -t "$OUT"/*.log 2>/dev/null | head -1), diag: $(diag status 2>/dev/null || echo 'no diag'), blackbox archive: $(stat -c %s /data/var/log/blackbox.log 2>/dev/null || echo 0) B"; exit 0 ;;
   bb-only)
+    armed --peek || exit 0
     bb_archive; exit 0 ;;
 esac
 
+armed || exit 0        # consumes one armed hour; disarmed = NOTHING is written (Thomas, 29/09)
 bb_archive
-armed || exit 0        # consumes one armed hour; disarmed = the card saw only the blackbox append
 journal_part
 exit 0

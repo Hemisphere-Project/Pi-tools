@@ -5,7 +5,7 @@ ConditionPathIsDirectory=/data
 [Service]
 Type=oneshot
 # No ExecCondition= here (Pi-tools HEAD has one; systemd 241 on the players would ignore it anyway):
-# the 29/09 journal-export gates internally — blackbox archive always, journal part only while
-# `diag armed` (one hour of the budget per armed run).
+# the 29/09 journal-export (v4.1) gates internally: with `diag` disarmed NOTHING scheduled writes the card —
+# blackbox archive included (Thomas, 29/09); armed = hourly, streamed and capped.
 ExecStart=/usr/local/bin/journal-export
 Nice=10
