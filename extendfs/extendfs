@@ -188,8 +188,12 @@ fi
 
 if [[ -n "$LAST_DRIVE_ID" && "$DRIVE_ID" == "$LAST_DRIVE_ID" ]]; then
         echo "drive-id is valid, no expansion needed"
-        # A seal reboot (reboot_to_seal) did its job: re-arm it for the next clone.
-        rm -f "$STATE_FILE_SEALREBOOT"
+        # A seal reboot (reboot_to_seal) did its job: say so — on a volatile journal
+        # this boot is the only one that can — and re-arm it for the next clone.
+        if [[ -f "$STATE_FILE_SEALREBOOT" ]]; then
+                log "previous boot rebooted to seal root — drive-id is valid, seal reboot re-armed"
+                rm -f "$STATE_FILE_SEALREBOOT"
+        fi
         exit 0
 fi
 

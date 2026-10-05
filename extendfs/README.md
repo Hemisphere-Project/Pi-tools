@@ -21,3 +21,10 @@ succeeded and recorded the drive-id, it was started by `extendfs.service` (never
 from a shell — `extendfs -f` by hand just tells you to reboot), and it never
 fires twice in a row (`drive-id-sealreboot`, cleared by the next valid boot).
 Otherwise root stays `rw`, the unit fails, and `ro-assert` keeps retrying.
+
+The boot after a seal reboot logs it — on a volatile journal the reboot itself
+is gone, so that line is the proof it happened:
+
+```bash
+journalctl -b -t extendfs | grep 'previous boot rebooted to seal root'
+```
