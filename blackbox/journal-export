@@ -1,83 +1,183 @@
 #!/bin/bash
-# journal-export — the post-mortem trail, written the way an SD card tolerates.
+# journal-export — the post-mortem trail, written the way an SD card tolerates: BOUNDED BY
+# CONSTRUCTION, and SILENT WHEN DISARMED (v4, pi-tools#t-053).
 #
-# journald itself stays in RAM (journald-ram.conf). Every 10 minutes (timer) this exports the lines
-# logged since the previous run; on an anomaly the blackbox calls `journal-export --now <reason>`
-# and the last 15 minutes go out at once. A crash therefore costs at most the last 10 minutes; a
-# wedge that the blackbox can see costs nothing.
+# journald itself stays in RAM (journald-ram.conf). Every hour (timer) this script:
+#   0. does NOTHING unless `diag armed` (Thomas, 2026-09-29: with diag disarmed nothing scheduled
+#      writes the card, the blackbox archive included). The gate lives HERE, not in the unit:
+#      RastaOS 7.3 runs systemd 241, which does not know `ExecCondition=` (systemd 243) and ignores
+#      it — the 28/09 fleet set ran this every hour ungated, and the `diag` countdown never moved.
+#      Each scheduled run consumes one armed hour.
+#   1. archives what blackbox appended to its live line (/run/blackbox.log) since the last run.
+#   2. exports the journal entries logged since the previous run — STREAMED through a scratch file
+#      on /run, never held in a bash variable (one did, and invoked the OOM killer on the garden's W1
+#      after a seek storm, 2026-09-29 02:03): the NEWEST LINES_CAP entries at most (a marker says
+#      when older ones were skipped), RUN_CAP bytes at most, DAY_CAP_MB a day at most — counted from
+#      what THIS script wrote, never from the size of a file it inherited — then one marker and
+#      silence until midnight.
+#   3. on an anomaly (`--now <reason>`, called by blackbox at most once per 15 min, only while
+#      armed): the last 60 blackbox lines + the newest bytes of 15 min of journal, DUMP_CAP in all.
 #
-# pi-tools#t-048: the export chunk (and blackbox's archived lines) now go to `flightbox` — a raw
-# ring-buffer partition, no filesystem in the write path at all — instead of /data. `$OUT` on /data
-# stays as the FALLBACK: any box without flightbox yet (pi-tools#t-049 not run, or a card whose
-# flightbox self-disabled this boot) keeps writing exactly the files it always has, unchanged.
+# Where it goes (pi-tools#t-048): to `flightbox` — a raw ring buffer, no filesystem in the write
+# path — whenever the box has one and it takes the write; otherwise to the /data files, exactly as
+# before flightbox: $OUT/<date>.log, $OUT/dumps/, the blackbox archive. Those fallback files are
+# pruned to KEEP_DAYS, MAX_MB and DUMPS_KEEP — never today's file.
 #
-# Why not journald on /data, and why not /data at all once flightbox exists: in-place updates of
-# 16 MB files plus a sync every minute — two SanDisk cards failed in three days under it (LEA
-# S06-48-P rolled back, KOUAGOU's master aborted /data, 2026-09-18/21). Fallback budget: KEEP_DAYS
-# daily files, MAX_MB in total, 20 dumps — irrelevant once flightbox is carrying the load, since
-# nothing then lands in $OUT to prune.
+# Scratch, cursor and the day's byte count live in /run (TMPDIR too: /tmp is the 102 MB tmpfs a
+# log storm fills, and /data/tmp put a write on the card). The cursor belongs with the RAM journal:
+# neither survives a reboot, so a stale cursor can never make a run export nothing. A reboot also
+# restarts the day's count; the timer bounds that (hourly, Persistent=false: no catch-up run).
+#
+# v4 = the MBA garden's v4.1 (2026-09-29, Runbooks biennale-MBA/pt-files-2026-09-29; in the field
+# on the garden and the 38 wall players since 29-30/09), merged with flightbox, plus what the field
+# taught it: the day cap counts bytes since v4 started (v4.1 read today's file size, and W1/W2/W4
+# were capped at install by 52-238 MB inherited from the storm); on systemd 241 `-n` after a cursor
+# keeps the OLDEST entries, so a run that hits LINES_CAP re-reads the journal's tail instead; the
+# archived blackbox slice is exactly the bytes measured; and one run at a time (flock).
+#
+#   journal-export              the hourly run (timer)
+#   journal-export --now [WHY]  anomaly dump (blackbox)
+#   journal-export bb-only      archive the blackbox line only
+#   journal-export status       one line: where it writes, what it wrote today, diag
 set -u
-OUT=${JOURNAL_EXPORT_DIR:-/data/var/log/journal-export}; CUR=$OUT/.cursor
-MAX_MB=${JOURNAL_EXPORT_MAX_MB:-300}; KEEP_DAYS=${JOURNAL_EXPORT_KEEP_DAYS:-7}
+DATA=${JOURNAL_EXPORT_DATA:-/data}
+RUN=${JOURNAL_EXPORT_RUN_DIR:-/run}
+OUT=${JOURNAL_EXPORT_DIR:-$DATA/var/log/journal-export}
+LIVE=${BLACKBOX_LOG:-$RUN/blackbox.log}
+ARCH=${BLACKBOX_ARCHIVE:-$DATA/var/log/blackbox.log}
+CUR=$RUN/journal-export.cursor
+DAY=$RUN/journal-export.day                      # "<date> <bytes written that day> [capped]"
+SCRATCH=$RUN/journal-export.tmp
+LINES_CAP=${JOURNAL_EXPORT_LINES:-15000}         # newest entries per run
+RUN_CAP=${JOURNAL_EXPORT_RUN_BYTES:-4194304}     # 4 MB per run
+DAY_CAP_MB=${JOURNAL_EXPORT_DAY_MB:-24}
+DUMP_CAP=${JOURNAL_EXPORT_DUMP_BYTES:-1048576}   # 1 MB per dump
+MAX_MB=${JOURNAL_EXPORT_MAX_MB:-300}
+KEEP_DAYS=${JOURNAL_EXPORT_KEEP_DAYS:-14}
+DUMPS_KEEP=20
 FB=$(command -v flightbox 2>/dev/null || true)
-[ -d /data ] || exit 0
-mkdir -p /data/tmp "$OUT" 2>/dev/null; export TMPDIR=/data/tmp
-# blackbox (v3b) writes its live line to /run/blackbox.log; archive what is new since the last
-# export (byte offset in /run/blackbox.exported, reset by blackbox on rotation) — to flightbox
-# first, falling back to the /data file unchanged if flightbox isn't taking writes right now.
+[ -d "$DATA" ] || exit 0
+mkdir -p "$SCRATCH" 2>/dev/null; export TMPDIR=$SCRATCH
+
+log() { logger -t journal-export "$*" 2>/dev/null || true; }
+armed() { command -v diag >/dev/null 2>&1 && diag armed "$@" >/dev/null 2>&1; }
+
+# one run at a time: blackbox's `--now` lands in the background whenever it likes, and two runs
+# would archive the same blackbox slice twice
+lock() { command -v flock >/dev/null 2>&1 || return 0; exec 9> "$RUN/journal-export.lock" && flock -w 60 9; }
+
+# put FILE TAG DEST — FILE's bytes as ONE flightbox record; on any refusal (no ring, self-disabled,
+# I/O error) appended to DEST on /data with one fsync, as before flightbox. Sets WENT (where).
+put() {
+  if [ -n "$FB" ] && "$FB" write --tag "$2" "$1" >/dev/null 2>&1; then WENT=flightbox; return 0; fi
+  mkdir -p "$(dirname "$3")" 2>/dev/null && cat "$1" >> "$3" || return 1
+  sync -d "$3" 2>/dev/null || true
+  WENT=$3
+}
+
+# 1. blackbox live line -> archive. blackbox EMPTIES /run/blackbox.exported when it rotates the
+#    live file: anything non-numeric reads 0 (the v3b script choked on the empty file and froze
+#    W3's archive 25->28/09). The offset moves only once the slice is written.
 bb_archive() {
-  local live=/run/blackbox.log arch=/data/var/log/blackbox.log off size
-  [ -f "$live" ] || return 0
-  off=$(cat /run/blackbox.exported 2>/dev/null || echo 0); size=$(stat -c %s "$live")
+  local off size S=$SCRATCH/bb.$$
+  [ -f "$LIVE" ] || return 0
+  off=$(cat "$RUN/blackbox.exported" 2>/dev/null); [[ "$off" =~ ^[0-9]+$ ]] && off=$((10#$off)) || off=0
+  size=$(stat -c %s "$LIVE" 2>/dev/null) || return 0
   [ "$off" -gt "$size" ] && off=0
   [ "$size" -gt "$off" ] || return 0
-  if [ -n "$FB" ] && tail -c +$((off+1)) "$live" | "$FB" write --tag blackbox - >/dev/null 2>&1; then
-    :
-  else
-    mkdir -p "$(dirname "$arch")"; tail -c +$((off+1)) "$live" >> "$arch"
-    sync -d "$arch" 2>/dev/null || true
-  fi
-  echo "$size" > /run/blackbox.exported
+  tail -c +$((off+1)) "$LIVE" | head -c $((size-off)) > "$S"    # what was measured, nothing appended since
+  [ -s "$S" ] && put "$S" blackbox "$ARCH" && echo "$size" > "$RUN/blackbox.exported"
+  rm -f "$S"
 }
+
+entries() { grep -c '^[0-9]' "$1" 2>/dev/null; }   # short-iso: an entry starts with its timestamp
+newest() { nice journalctl -n "$LINES_CAP" --show-cursor -o short-iso --no-pager > "$1" 2>/dev/null; }
+
+# 2. journal -> today's trail: streamed, capped by entries and bytes per run, and by bytes per day
+journal_part() {
+  local today F T=$SCRATCH/raw.$$ B=$SCRATCH/body.$$ P=$SCRATCH/out.$$ C n d u c size
+  local used=0 capped="" skipped="" cut="" room
+  today=$(date +%F); F=$OUT/$today.log
+  if [ -s "$DAY" ] && read -r d u c < "$DAY" && [ "$d" = "$today" ] && [[ "$u" =~ ^[0-9]+$ ]]; then
+    used=$u; capped=$c
+  fi
+  room=$((DAY_CAP_MB * 1048576 - used)); [ "$room" -lt "$RUN_CAP" ] || room=$RUN_CAP
+  if [ "$room" -le 0 ]; then
+    if [ -z "$capped" ]; then
+      echo "-- journal-export: daily cap ${DAY_CAP_MB} MB reached at $(date '+%T'); nothing more today" > "$P"
+      put "$P" journal "$F"; rm -f "$P"
+      echo "$today $used capped" > "$DAY"; log "daily cap ${DAY_CAP_MB} MB reached"
+    fi
+    C=$(nice journalctl -n 1 --show-cursor -o cat --no-pager 2>/dev/null | sed -n 's/^-- cursor: //p' | tail -1)
+    [ -n "$C" ] && printf '%s' "$C" > "$CUR"         # keep walking: tomorrow starts from now
+    return 0
+  fi
+  if [ -s "$CUR" ] && nice journalctl --after-cursor="$(cat "$CUR")" -n "$LINES_CAP" --show-cursor -o short-iso --no-pager > "$T" 2>/dev/null; then
+    n=$(entries "$T")
+    # systemd 241 (journalctl.c, the --after-cursor seek): `-n` after a cursor stops at the OLDEST n
+    # entries. LINES_CAP of them waiting = a storm: take the tail instead — the newest LINES_CAP,
+    # all past the cursor since at least that many are.
+    [ "$n" -ge "$LINES_CAP" ] && { newest "$T"; skipped=y; }
+  else
+    newest "$T"                                    # first run of this boot, or a cursor journalctl refuses
+    [ "$(entries "$T")" -ge "$LINES_CAP" ] && skipped=y
+  fi
+  C=$(sed -n 's/^-- cursor: //p' "$T" | tail -1)
+  n=$(entries "$T")
+  if [ "$n" -gt 0 ]; then
+    grep -vE '^-- (cursor: |Logs begin at )' "$T" > "$B"
+    size=$(stat -c %s "$B")
+    if [ "$size" -gt "$room" ]; then                # keep the NEWEST bytes, from a whole line on
+      tail -c "$room" "$B" | tail -n +2 > "$T"; mv -f "$T" "$B"; cut=y
+    fi
+    { [ -n "$skipped" ] && echo "-- journal-export: $LINES_CAP entries or more waiting: the newest $LINES_CAP kept, older ones skipped ($(date '+%T'))"
+      [ -n "$cut" ] && echo "-- journal-export: byte cap (run or day): the newest $room bytes kept, older ones skipped ($(date '+%T'))"
+      cat "$B"; } > "$P"
+    if put "$P" journal "$F"; then
+      echo "$today $((used + $(stat -c %s "$P"))) $capped" > "$DAY"
+    else
+      C=""                                         # not written: do not walk past it
+    fi
+  fi
+  [ -n "$C" ] && printf '%s' "$C" > "$CUR.tmp" && mv -f "$CUR.tmp" "$CUR"
+  rm -f "$T" "$B" "$P"
+  # prune the fallback files: older than KEEP_DAYS, then the oldest until under MAX_MB — never today's
+  [ -d "$OUT" ] || return 0
+  find "$OUT" -maxdepth 1 -name '*.log' -mtime +"$KEEP_DAYS" ! -name "$today.log" -delete 2>/dev/null
+  while [ "$(du -sm "$OUT" 2>/dev/null | cut -f1)" -gt "$MAX_MB" ]; do
+    local o; o=$(ls -t "$OUT"/*.log 2>/dev/null | tail -1)
+    [ -n "$o" ] && [ "$o" != "$F" ] || break
+    rm -f "$o"
+  done
+}
+
 case "${1:-}" in
   --now|dump)
-    D=$OUT/dumps
-    BODY=$( { echo "### blackbox, last 60 lines"; tail -n 60 /run/blackbox.log 2>/dev/null; echo "### journal, last 15 min"; nice journalctl --since -15min -o short-iso --no-pager; } 2>/dev/null )
-    if [ -n "$FB" ] && printf '%s' "$BODY" | "$FB" write --tag anomaly - >/dev/null 2>&1; then
-      echo "journal-export: dump -> flightbox ($(printf '%s\n' "$BODY" | wc -l) lines)"
-    else
-      mkdir -p "$D"; T=$D/$(date +%F_%H%M%S)-${2:-anomaly}.log
-      printf '%s' "$BODY" > "$T"
-      sync -d "$T" 2>/dev/null || sync
-      ls -t "$D" 2>/dev/null | tail -n +21 | while read -r f; do rm -f "$D/$f"; done
-      echo "journal-export: dump $T ($(wc -l < "$T") lines)"
-    fi
+    armed --peek || exit 0                         # disarmed: nothing reaches the card, the archive included
+    lock || exit 0
     bb_archive
-    exit 0 ;;
+    S=$SCRATCH/dump.$$; WHY=${2:-anomaly}
+    { echo "### anomaly: $WHY"; echo "### blackbox, last 60 lines"; tail -n 60 "$LIVE" 2>/dev/null
+      echo "### journal, last 15 min (the newest bytes up to the dump cap)"; } > "$S"
+    nice journalctl --since -15min -o short-iso --no-pager 2>/dev/null | tail -c $((DUMP_CAP - $(stat -c %s "$S"))) >> "$S"
+    D=$OUT/dumps
+    if put "$S" anomaly "$D/$(date +%F_%H%M%S)-$WHY.log"; then
+      [ "$WENT" = flightbox ] || ls -t "$D" 2>/dev/null | tail -n +$((DUMPS_KEEP + 1)) | while read -r f; do rm -f "$D/$f"; done
+      echo "journal-export: dump -> $WENT ($(wc -l < "$S") lines)"
+    fi
+    rm -f "$S"; exit 0 ;;
   status)
-    FBS="unavailable"; [ -n "$FB" ] && FBS=$("$FB" status 2>/dev/null || echo unavailable)
-    echo "dir $(du -sm "$OUT" 2>/dev/null | cut -f1) MB, files: $(ls "$OUT"/*.log 2>/dev/null | wc -l), dumps: $(ls "$OUT/dumps" 2>/dev/null | wc -l), cursor: $([ -f "$CUR" ] && echo yes || echo none), last: $(ls -t "$OUT"/*.log 2>/dev/null | head -1), $FBS"; exit 0 ;;
+    FBS=none; [ -n "$FB" ] && FBS=$("$FB" status 2>/dev/null || echo unavailable)
+    T=$(cat "$DAY" 2>/dev/null)
+    echo "dir $(du -sm "$OUT" 2>/dev/null | cut -f1) MB, files: $(ls "$OUT"/*.log 2>/dev/null | wc -l), dumps: $(ls "$OUT/dumps" 2>/dev/null | wc -l), cursor: $([ -s "$CUR" ] && echo yes || echo none), last: $(ls -t "$OUT"/*.log 2>/dev/null | head -1), diag: $(diag status 2>/dev/null || echo 'no diag'), blackbox archive: $(stat -c %s "$ARCH" 2>/dev/null || echo 0) B, written ${T:-none} (cap ${DAY_CAP_MB} MB), flightbox: $FBS"; exit 0 ;;
+  bb-only)
+    armed --peek || exit 0
+    lock || exit 0
+    bb_archive; exit 0 ;;
 esac
-if [ -s "$CUR" ]; then
-  R=$(nice journalctl --after-cursor="$(cat "$CUR")" --show-cursor -o short-iso --no-pager 2>/dev/null)
-else
-  R=$(nice journalctl --since -10min --show-cursor -o short-iso --no-pager 2>/dev/null)
-fi
-C=$(printf '%s\n' "$R" | grep -oE '^-- cursor: .*' | tail -1 | sed 's/^-- cursor: //')
-BODY=$(printf '%s\n' "$R" | grep -vE '^-- cursor: ')
-if [ -n "$FB" ] && printf '%s' "$BODY" | "$FB" write --tag journal - >/dev/null 2>&1; then
-  :
-else
-  F=$OUT/$(date +%F).log
-  printf '%s' "$BODY" >> "$F"
-  sync -d "$F" 2>/dev/null || sync
-fi
-[ -n "$C" ] && printf '%s' "$C" > "$CUR.tmp" && mv -f "$CUR.tmp" "$CUR"
+
+armed || exit 0        # consumes one armed hour; disarmed = NOTHING is written (Thomas, 29/09)
+lock || exit 0
 bb_archive
-# prune the fallback files: older than KEEP_DAYS, then the oldest until under MAX_MB (no-op once
-# flightbox is carrying the load — nothing lands in $OUT to prune)
-find "$OUT" -maxdepth 1 -name '*.log' -mtime +"$KEEP_DAYS" -delete 2>/dev/null
-while [ "$(du -sm "$OUT" 2>/dev/null | cut -f1)" -gt "$MAX_MB" ]; do
-  o=$(ls -t "$OUT"/*.log 2>/dev/null | tail -1); [ -n "$o" ] || break; rm -f "$o"
-done
+journal_part
 exit 0

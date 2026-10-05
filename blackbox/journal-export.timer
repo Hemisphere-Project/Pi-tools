@@ -1,13 +1,17 @@
 [Unit]
-Description=journal-export hourly, only while diagnostics are armed (diag arm)
+Description=journal-export hourly (writes only while diagnostics are armed: diag arm)
 
 [Timer]
-# hourly (was 10 min, 2026-09-27): /data sees one sequential append per hour; a power cut
-# costs at most the last hour of trail. An anomaly still dumps at once (journal-export --now).
-# OnCalendar (absolute), not OnUnitActiveSec: the service is skipped by `diag armed` most hours,
-# and a relative timer must never depend on how systemd counts a skipped run.
+# hourly (was 10 min, 2026-09-27): the card sees one sequential append per hour; a power cut costs
+# at most the last hour of trail. An anomaly still dumps at once (blackbox calls journal-export --now).
+# OnCalendar (absolute), never OnUnitActiveSec: the run writes nothing most hours once disarmed, and
+# a relative timer must not depend on how systemd counts such a run. Persistent=false: a boot after a
+# power cut must not fire a catch-up write on the card the cut just hit. The random delay spreads a
+# site's players over five minutes (from the MBA garden's set, 2026-09-29).
 OnCalendar=hourly
-AccuracySec=30s
+Persistent=false
+AccuracySec=2min
+RandomizedDelaySec=5min
 Unit=journal-export.service
 
 [Install]

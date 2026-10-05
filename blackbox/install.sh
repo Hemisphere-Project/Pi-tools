@@ -6,6 +6,7 @@
 # two SanDisk cards failed in three days (LEA S06-48-P rolled back, KOUAGOU's master aborted /data,
 # 2026-09-18/21). v3 reverses that: journald writes RAM, journal-export appends to /data every 10 min
 # and dumps the last 15 min on an anomaly (called by blackbox).
+# v4 (pi-tools#t-053): /run capped at 160 MB once per boot (blackbox-runcap.service); journal-export v4.
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 chmod 755 "$HERE/blackbox" "$HERE/nowde-probe.py" "$HERE/journal-export" "$HERE/diag"
@@ -16,6 +17,7 @@ ln -sf "$HERE/blackbox.service" /etc/systemd/system/blackbox.service
 ln -sf "$HERE/blackbox.timer" /etc/systemd/system/blackbox.timer
 ln -sf "$HERE/journal-export.service" /etc/systemd/system/journal-export.service
 ln -sf "$HERE/journal-export.timer" /etc/systemd/system/journal-export.timer
+ln -sf "$HERE/blackbox-runcap.service" /etc/systemd/system/blackbox-runcap.service
 mkdir -p /etc/systemd/journald.conf.d
 rm -f /etc/systemd/journald.conf.d/blackbox.conf                      # v2: Storage=persistent on /data
 cp "$HERE/journald-ram.conf" /etc/systemd/journald.conf.d/blackbox.conf
@@ -23,6 +25,7 @@ cp "$HERE/journald-ram.conf" /etc/systemd/journald.conf.d/blackbox.conf
 systemctl disable journal-persist.service 2>/dev/null || true
 rm -f /etc/systemd/system/journal-persist.service /etc/systemd/system/sysinit.target.wants/journal-persist.service
 systemctl daemon-reload 2>/dev/null || true
+systemctl enable blackbox-runcap.service 2>/dev/null || true          # v4: /run capped at 160 MB from the next boot
 systemctl enable blackbox.timer journal-export.timer 2>/dev/null || true
 echo "blackbox v3 installed: journald in RAM (32 MB), journal-export.timer + blackbox.timer enabled (next boot; --now to switch a running player)"
 if [ "${1:-}" = --now ]; then
@@ -39,8 +42,8 @@ if [ "${1:-}" = --now ]; then
     mv /data/var/log/journal /data/var/log/journal-v2 2>/dev/null || true   # archive, read with journalctl -D
   fi
   rm -rf /var/log/journal/*/ 2>/dev/null                                      # nothing must be left on the tmpfs dir
-  systemctl start blackbox.timer journal-export.timer
+  systemctl start blackbox-runcap.service blackbox.timer journal-export.timer
   /usr/local/bin/journal-export >/dev/null 2>&1 || true
   sleep 1
-  echo "  journal: $(journalctl --disk-usage 2>/dev/null | grep -oE '[0-9.]+[MG]') in RAM · storage=$(grep -h '^Storage' /etc/systemd/journald.conf.d/*.conf | tail -1 | cut -d= -f2) · export: $(/usr/local/bin/journal-export status) · timers: bb=$(systemctl is-active blackbox.timer) export=$(systemctl is-active journal-export.timer) · persist unit: $(systemctl is-active journal-persist.service 2>/dev/null)"
+  echo "  journal: $(journalctl --disk-usage 2>/dev/null | grep -oE '[0-9.]+[MG]') in RAM · storage=$(grep -h '^Storage' /etc/systemd/journald.conf.d/*.conf | tail -1 | cut -d= -f2) · export: $(/usr/local/bin/journal-export status) · timers: bb=$(systemctl is-active blackbox.timer) export=$(systemctl is-active journal-export.timer) · run: $(df -Pk /run | awk 'NR==2{printf "%d MB", $2/1024}') · persist unit: $(systemctl is-active journal-persist.service 2>/dev/null)"
 fi

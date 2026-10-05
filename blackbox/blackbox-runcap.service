@@ -1,0 +1,11 @@
+[Unit]
+Description=blackbox: cap the /run tmpfs at 160 MB, once per boot (an unknown writer there must not eat the RAM)
+
+[Service]
+Type=oneshot
+# shrink only, and a refusal (the tmpfs already holds more) is logged, never a failed boot: blackbox run-cap
+ExecStart=/usr/local/bin/blackbox run-cap
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

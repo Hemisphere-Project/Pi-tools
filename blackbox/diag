@@ -10,7 +10,7 @@
 #   diag arm [HOURS]     arm for HOURS of running time (default 72, max 336)
 #   diag disarm          stop now
 #   diag status          armed? how many hours left
-#   diag armed           exit 0 if armed, and count one hour down (journal-export's ExecCondition:
+#   diag armed           exit 0 if armed, and count one hour down (journal-export's own gate:
 #                        it fires hourly, so the budget is powered hours — the players' clocks are
 #                        fake and rewind at every power cut, so no expiry date could be trusted)
 #   diag armed --peek    exit 0 if armed, count nothing (blackbox's anomaly dump, fake-clock save)

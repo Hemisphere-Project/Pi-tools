@@ -13,6 +13,22 @@ described below. Those files are the FALLBACK: any box without a flightbox ring 
 `flightbox reserve` yet, or a card whose flightbox self-disabled this boot) keeps writing them
 exactly as before. See `flightbox/README.md`.
 
+**pi-tools#t-053 (v4, from the MBA garden's 29/09 card set):** nothing scheduled writes the card
+unless `diag` is armed — the blackbox archive, the journal export, the anomaly dumps and the
+fake-clock save alike. The gates sit inside the scripts and `ExecStart`, never in `ExecCondition=`:
+RastaOS 7.3 runs systemd 241, which ignores that key (it arrived in 243), so the 28/09 fleet set
+ran ungated and the `diag` countdown never moved. `journal-export` streams through `/run` instead
+of a bash variable (one OOM-killed the garden's W1 after a seek storm). Per hourly run it exports
+the newest 15 000 entries and 4 MB at most, and 24 MB a day at most, counted from what it wrote
+itself, not from a file it inherited. Dumps are capped at 1 MB. The cursor and the day count live
+in `/run` and go with the RAM journal at a reboot. Fallback files are pruned, but never today's.
+On systemd 241, `journalctl --after-cursor -n N` keeps the *oldest* N entries, so a run that hits
+the cap re-reads the journal's tail. Two guards on `blackbox` for writers nobody has met yet:
+every minute, at ≥ 90 % of `/tmp`, each regular file over 20 MB is truncated and logged
+(`tmp-guard:`); once per boot, `blackbox-runcap.service` caps the `/run` tmpfs at 160 MB (shrink
+only; a refusal is logged and the boot goes on). Desk test: `bash bench/journal-export-desk.sh`
+(part B needs root or `sudo -n` for a private `/tmp` and `/run`).
+
 ## 1. Persistent journal (`journal-persist.service` + `journald.conf.d/blackbox.conf`)
 
 `/data/var/log/journal` is bound over `/var/log/journal` before `systemd-journal-flush`, and
@@ -53,7 +69,7 @@ field is `key=value`, so one `grep` answers "what did X do at 19:31":
 | usb | `kusb` `urb` `kmiss` `usbfix` | USB bus events this minute; `urb status` errors in the last 60 s (ring buffer, fresh lines only) (a stalled node endpoint loops at ~7000/s — W6 2026-09-17: 3.4 M kernel messages dropped in 8 min, tmpfs full, hostapd blind, HPlayer2 freewheeling); times journald reported dropping kernel messages this minute; usbfix (Pi-side USB-link watchdog) resets this minute |
 | display | `disp` `dev` `pwr` | mode, device on the hotplug line, display power (video walls) |
 | VideoCore | `vc=yuvN/pxXM` | mpv's video layers on the dispmanx display (`vcgencmd dispmanx_list`: 1 while a video plays, 0 = black output with mpv alive) and the HDMI pixel clock in MHz (0 = output stopped). The two sensors the black-screen case lacked (CONTAINER, 2026-09-17) |
-| system | `thr` `t` `load` `free` `tmp` `tasks` `spawn` | throttling flags, temperature, load, RAM, `/tmp` use (= `/var/log` on rorw), and threads. **`free` is MemAvailable, not MemFree** — what a new allocation can get, cache discounted; on a player with a warm page cache the two differ by hundreds of MB, so read it as headroom. `tasks` = the HPlayer2 unit's live thread count (`TasksMax` is 1803); **`spawn` = threads and processes created system-wide THIS MINUTE** (per-minute delta of `/proc/stat`'s `processes`, which counts every `fork` and `clone`) |
+| system | `thr` `t` `load` `free` `tmp` `run` `tasks` `spawn` | throttling flags, temperature, load, RAM, `/tmp` use (= `/var/log` on rorw) and `/run` use (journald's RAM, this log; capped at 160 MB since v4), and threads. **`free` is MemAvailable, not MemFree** — what a new allocation can get, cache discounted; on a player with a warm page cache the two differ by hundreds of MB, so read it as headroom. `tasks` = the HPlayer2 unit's live thread count (`TasksMax` is 1803); **`spawn` = threads and processes created system-wide THIS MINUTE** (per-minute delta of `/proc/stat`'s `processes`, which counts every `fork` and `clone`) |
 | zyre | `sync` `drift` | sync interface address and signal; last wallclock drift window (video walls) |
 | events | `ev` | stop/play/lock-out/crash/traceback/empty-playlist lines this minute |
 
