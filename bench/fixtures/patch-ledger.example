@@ -26,6 +26,12 @@
 #   detect         the command, run ON the box. LAST, so it may contain `|`.
 #                  exit 0 = there · exit 1 = not there · anything else = could
 #                  not read, which probe-level reports as `?` and never as `n`.
+#                  The most common negative is usually NOT a bare 1 — a command
+#                  that fails one way when a module is simply absent (a unit
+#                  systemd has never heard of, a file that is not there) and
+#                  another way for a real error. `probe-level` exports a helper
+#                  for exactly this: `cmd || absent_on CODE...` re-exits 1 for a
+#                  listed code, unchanged for anything else. See P1/P2/P3/P5/P6.
 #
 # Only a line whose first non-blank character is `#` is a comment. A trailing
 # `#` is not — detect commands contain them.
@@ -40,11 +46,17 @@
 # the worked example of that class, and of where the values actually live.
 
 # --- units a module installs: the plain case -----------------------------------
-P1 | hdmi-rehandshake v2 (the late re-handshake pass)   | 7.3 | ./setup.sh hdmi-rehandshake      | systemctl is-enabled hdmi-rehandshake-late.timer >/dev/null 2>&1
-P2 | blackbox state logger                              | 7.3 | ./setup.sh blackbox             | systemctl is-enabled blackbox.timer >/dev/null 2>&1
-P3 | blackbox persistent journal on /data               | 7.3 | ./setup.sh blackbox             | systemctl is-enabled journal-persist.service >/dev/null 2>&1
-P5 | linkwatch sync-link watchdog                       | -   | ./setup.sh linkwatch            | systemctl is-enabled linkwatch.timer >/dev/null 2>&1
-P6 | extendfs                                           | 7.3 | ./setup.sh extendfs             | systemctl is-enabled extendfs.service >/dev/null 2>&1
+# `is-enabled` exits 4 for a unit systemd has never heard of — never 0, never 1
+# — which is exactly the card a module that was never installed should read as
+# `n` on, not `?` (pi-tools#t-044: measured `probe-level --here` on a box with
+# none of these installed came back `missing: UNKNOWN`, not `missing: P1 P2 P3
+# P5 P6`). `absent_on 4` maps that one code to 1 and leaves every other code —
+# 127 no systemd, 124 timeout, a dead transport — reaching `?` unchanged.
+P1 | hdmi-rehandshake v2 (the late re-handshake pass)   | 7.3 | ./setup.sh hdmi-rehandshake      | systemctl is-enabled hdmi-rehandshake-late.timer >/dev/null 2>&1 || absent_on 4
+P2 | blackbox state logger                              | 7.3 | ./setup.sh blackbox             | systemctl is-enabled blackbox.timer >/dev/null 2>&1 || absent_on 4
+P3 | blackbox persistent journal on /data               | 7.3 | ./setup.sh blackbox             | systemctl is-enabled journal-persist.service >/dev/null 2>&1 || absent_on 4
+P5 | linkwatch sync-link watchdog                       | -   | ./setup.sh linkwatch            | systemctl is-enabled linkwatch.timer >/dev/null 2>&1 || absent_on 4
+P6 | extendfs                                           | 7.3 | ./setup.sh extendfs             | systemctl is-enabled extendfs.service >/dev/null 2>&1 || absent_on 4
 
 # --- a module whose fix is a SETTING: enabled is not the same as fixed ----------
 # P4 sat in the block above as `systemctl is-enabled usbfix.timer` until 2026-09-22.
@@ -79,7 +91,10 @@ P6 | extendfs                                           | 7.3 | ./setup.sh exten
 #      card that never got the module, i.e. the answer this ledger exists to give.
 #      Left alone it lands in the `?` column and makes `missing:` unanswerable, so
 #      the row maps 4 -> 1 by hand. 127 (no systemd here at all) is deliberately NOT
-#      mapped: that one really is "could not read".
+#      mapped: that one really is "could not read". (This row still does the
+#      mapping inline — `rc=$?; [ "$rc" = 4 ] && rc=1` — because the enabled bit
+#      only gates whether the REST of the check runs; a plain row states the same
+#      idea with the `absent_on 4` helper this file's P1/P2/P3/P5/P6 now use.)
 #
 # `-le`, not `=`: the row asks whether the box is at or past the fix, so a fleet
 # tuned tighter later still reads y. Bump these two numbers when the ledger's fleet
@@ -95,12 +110,24 @@ P7 | man-db.timer masked (it starves the audio path)    | 7.3 | systemctl mask m
 # The forwarder gained a flow watch on the usb branch; the marker is the line it
 # logs when it acts. A marker beats a version string because it is what the fix
 # IS, and it does not drift when someone bumps a number.
-P8 | audiohub usb forwarder flow watch                  | -   | cd /opt/Pi-tools && git pull --ff-only && systemctl restart 'audiohub@usb' | grep -q 'usb sink .* stalled' /opt/Pi-tools/audiohub/audiohub-fwd
+# `grep` exits 2 when the file it is asked to read is not there at all (module
+# never installed, so /opt/Pi-tools/audiohub does not exist) — a different exit
+# than the 1 it gives for "file exists, pattern not found". Both mean `n` here.
+# `absent_on 2` accepts the same trade P4 documents for is-enabled's 4: grep's 2
+# is a general error bucket (bad regex, permission denied land there too, not
+# only ENOENT), but the case this row exists to catch — the module never
+# installed at all — is overwhelmingly the one that fires it on a real fleet.
+P8 | audiohub usb forwarder flow watch                  | -   | cd /opt/Pi-tools && git pull --ff-only && systemctl restart 'audiohub@usb' | grep -q 'usb sink .* stalled' /opt/Pi-tools/audiohub/audiohub-fwd || absent_on 2
 
 # --- a patch that really is just a file in the checkout ------------------------
 # The checkout form, used where it is honest: nothing has to be running for this
 # one to be true. Replace the sha with the commit that introduced the patch.
-P9 | Pi-tools checkout carries <sha>                    | -   | cd /opt/Pi-tools && git pull --ff-only | git -C /opt/Pi-tools merge-base --is-ancestor 4fb2c2a HEAD
+# `git -C DIR ...` exits 128 when DIR itself does not exist (Pi-tools never
+# installed at all) — the same bucket other fatal git errors land in (not a
+# repo, bad revision), same trade as P8's grep and P4's is-enabled: `absent_on
+# 128` accepts that imprecision because the case this row exists to catch —
+# the checkout being entirely absent — is the one that actually fires it.
+P9 | Pi-tools checkout carries <sha>                    | -   | cd /opt/Pi-tools && git pull --ff-only | git -C /opt/Pi-tools merge-base --is-ancestor 4fb2c2a HEAD || absent_on 128
 
 # --- a deliberate UNREADABLE row ------------------------------------------------
 # Keep one like this the first time you use a new ledger: it is how you see, in

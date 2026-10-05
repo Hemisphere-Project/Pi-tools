@@ -303,11 +303,38 @@ Two traps worth knowing before they cost a round:
 * **Grep a marker, not a version.** The marker is what the fix *is*, and it
   survives someone bumping a number.
 
+And one that costs the whole answer, not just a round: **a module that was never
+installed is the most common negative there is, and the plain detect commands
+above do not land it on `n`.** `systemctl is-enabled` exits **4**, not 1, for a
+unit it has never heard of; `grep` exits **2** on a file that is not there; `git
+-C` exits **128** on a directory that is not there. None of 4/2/128 is 0 or 1, so
+every one of them lands in `?` — measured on dev37, `probe-level --here` against
+`fixtures/patch-ledger.example` before this fix came back `missing: UNKNOWN`, not
+naming a single one of the (correctly) absent modules (pi-tools#t-044). `probe-
+level` exports a helper for exactly this, into every detect command's own
+execution context:
+
+```sh
+systemctl is-enabled some.timer >/dev/null 2>&1 || absent_on 4
+```
+
+`absent_on CODE...` reads the exit code of the command that just failed: a code
+in its list re-exits as 1 (`n`); anything else re-exits **unchanged**, so an
+undeclared code — 127 no such command, 124 timeout, a dead transport — still
+reaches `?`. Nothing is mapped unless a row asks for it, and asking is a row's
+own call: `fixtures/patch-ledger.example`'s P1/P2/P3/P5/P6 (`is-enabled`/4), P8
+(`grep`/2) and P9 (`git -C`/128) all use it now; P4's check does not end at the
+enabled bit, so it maps the same code inline instead — see its comment.
+
 ### Status
 
 The reader, the ledger parser, the three states, `--only`, the refusals and both
 transports are exercised — `--here` against controlled ledgers, and a timeout and
-a dead ssh target both landing in `?`. **No detect line in
+a dead ssh target both landing in `?`. `absent_on` is exercised the same way,
+`--here` on dev37 against `fixtures/patch-ledger.example` (no Pi-tools module
+installed there): before the fix, `missing: UNKNOWN — 8 of 10 could not be
+read`; after, `missing: P1 P2 P3 P4 P5 P6 P7 P8 P9` with only the deliberately
+unrunnable `P99` left `unread`. **No detect line in
 `fixtures/patch-ledger.example` has been run against a real player from this
 repo**: the example rows are grounded on units this repo ships, not on a probed
 card. The first run against a card is the one that proves the ledger, and the

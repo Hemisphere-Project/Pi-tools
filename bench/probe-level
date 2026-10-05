@@ -46,6 +46,23 @@
 #   sends someone to re-apply a patch that is already there, or — worse — reads
 #   as a clean fleet when it is an unread one.
 #
+#   BUT the most common negative is NOT a bare exit 1. `systemctl is-enabled`
+#   exits 4 for a unit it has never heard of (never 0, never 1); `grep` exits 2
+#   on a file that is not there; `git -C` exits 128 on a directory that is not
+#   there. Every one of those is "the module was never installed" — exactly the
+#   card this tool exists to report — and left alone every one lands in `?`
+#   instead of `n` (pi-tools#t-044). A detect command may call the helper
+#   `absent_on CODE...` this program exports, at the tail of a `||`:
+#
+#     systemctl is-enabled some.timer >/dev/null 2>&1 || absent_on 4
+#
+#   `absent_on` reads the exit code of the command that just failed: a code in
+#   its list re-exits as 1 (n); any other code re-exits UNCHANGED, so an
+#   undeclared code (127 no such command, 124 timeout, a dead transport) still
+#   reaches `?` — nothing is mapped unless a row asks for it. See P4 in
+#   fixtures/patch-ledger.example for a row whose check does not end at the
+#   enabled bit and hand-rolls the same idea inline instead.
+#
 #   Exit: 0 nothing missing and nothing unread · 1 something missing · 2 could
 #         not run, or something could not be read.
 #
@@ -63,7 +80,7 @@ set -uo pipefail
 
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-usage() { sed -n '2,61p' "$0" | sed 's/^# \?//'; }
+usage() { sed -n '2,78p' "$0" | sed 's/^# \?//'; }
 
 LEDGER=""; TARGET="root@10.0.0.1"; HERE=0; ONLY=""; BUDGET=15; SSHB=10
 DRY=0; QUIET=0
@@ -156,10 +173,16 @@ sq() { printf "'%s'" "${1//\'/\'\\\'\'}"; }   # single-quote for the remote sh
 build_program() {
   printf '%s\n' "PROBE_T=$BUDGET"
   cat <<'PROG'
+# ABSENT_HELPER is prepended to EVERY detect command's own `sh -c`, below — not
+# run inline in this session shell, so a detect command that calls `exit`
+# itself (P4 does) only ends its own subshell, never the whole probe.
+ABSENT_HELPER='absent_on() { rc=$?; for c; do [ "$rc" = "$c" ] && exit 1; done; exit "$rc"; }'
 if command -v timeout >/dev/null 2>&1; then
-  _run() { timeout "$PROBE_T" sh -c "$1" >/dev/null 2>&1; }
+  _run() { timeout "$PROBE_T" sh -c "$ABSENT_HELPER
+$1" >/dev/null 2>&1; }
 else
-  _run() { sh -c "$1" >/dev/null 2>&1; }
+  _run() { sh -c "$ABSENT_HELPER
+$1" >/dev/null 2>&1; }
 fi
 p() { _run "$2"; printf 'PROBE %s %s\n' "$1" "$?"; }
 PROG
