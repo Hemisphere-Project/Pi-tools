@@ -51,13 +51,52 @@ ensure_rw() {
         fi
 }
 
+# The reseal can fail on a clone's first boot: something started alongside us
+# pins the root, `ro` gives up ("RO Failed after 5 attempts", `mount point is
+# busy`) and the box runs rw until somebody reboots it (kmini-002, 2026-09-13 —
+# the second boot sealed it). So reboot ourselves, but only when that reboot is
+# guaranteed to be the last one:
+#   * the run succeeded AND recorded this drive-id — the next boot then exits at
+#     "drive-id is valid" before ensure_rw, so root comes up read-only and stays
+#     so. A failed run would go rw again on the next boot and fail the same way.
+#   * we are extendfs.service (systemd sets INVOCATION_ID) — never under the
+#     hands of someone running `extendfs -f` from a shell.
+#   * never twice in a row: the marker is cleared only by a boot that finds the
+#     drive-id valid, so a drive-id that does not hold across boots cannot loop.
+reboot_to_seal() {
+        local exit_code=$1
+        if [[ "$exit_code" -ne 0 ]]; then
+                log "reseal failed after a failed run (exit $exit_code) — root stays rw, not rebooting (the next boot retries)"
+                return 1
+        fi
+        if [[ "$(cat "$STATE_FILE" 2>/dev/null || true)" != "${DRIVE_ID:-}" ]]; then
+                log "reseal failed and drive-id is not recorded — root stays rw, not rebooting"
+                return 1
+        fi
+        if [[ -z "${INVOCATION_ID:-}" ]]; then
+                log "reseal failed — root is still rw: reboot to seal it"
+                return 1
+        fi
+        if [[ -f "$STATE_FILE_SEALREBOOT" ]]; then
+                log "reseal failed again right after a seal reboot — root stays rw, not rebooting twice in a row"
+                return 1
+        fi
+        log "reseal failed — rebooting to seal root (drive-id is recorded: the next boot stays read-only)"
+        echo "$DRIVE_ID" > "$STATE_FILE_SEALREBOOT"
+        echo "Rebooting in 5 seconds..."
+        sleep 5
+        reboot
+}
+
 # Cleanup: restore read-only mode, but only if we actually switched to rw.
 cleanup() {
         local exit_code=$?
         if [[ "$DID_RW" == true ]]; then
                 echo ""
                 echo "Restoring read-only mode..."
-                ro
+                if ! ro; then
+                        reboot_to_seal "$exit_code" || exit_code=1
+                fi
         fi
         exit $exit_code
 }
@@ -94,6 +133,7 @@ fi
 STATE_DIR="/data/var"
 STATE_FILE="$STATE_DIR/drive-id"
 STATE_FILE_STAGE1="$STATE_DIR/drive-id-stage1"
+STATE_FILE_SEALREBOOT="$STATE_DIR/drive-id-sealreboot"
 
 # extendfs tracks the drive fingerprint in /data; without /data mounted (a
 # degraded boot) there is no safe persistent store — skip rather than fail the
@@ -148,6 +188,8 @@ fi
 
 if [[ -n "$LAST_DRIVE_ID" && "$DRIVE_ID" == "$LAST_DRIVE_ID" ]]; then
         echo "drive-id is valid, no expansion needed"
+        # A seal reboot (reboot_to_seal) did its job: re-arm it for the next clone.
+        rm -f "$STATE_FILE_SEALREBOOT"
         exit 0
 fi
 
