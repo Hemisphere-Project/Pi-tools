@@ -1,54 +1,81 @@
 #!/bin/bash
-# journal-export — the post-mortem trail on /data, written the way an SD card tolerates.
+# journal-export — the post-mortem trail, written the way an SD card tolerates.
 #
-# journald itself stays in RAM (journald-ram.conf). Every 10 minutes (timer) this appends the lines
-# logged since the previous run to /data/var/log/journal-export/<date>.log — ONE sequential append
-# and one fsync, nothing rewritten in place. On an anomaly the blackbox calls `journal-export --now
-# <reason>` and the last 15 minutes go to journal-export/dumps/ at once. A crash therefore costs at
-# most the last 10 minutes; a wedge that the blackbox can see costs nothing.
+# journald itself stays in RAM (journald-ram.conf). Every 10 minutes (timer) this exports the lines
+# logged since the previous run; on an anomaly the blackbox calls `journal-export --now <reason>`
+# and the last 15 minutes go out at once. A crash therefore costs at most the last 10 minutes; a
+# wedge that the blackbox can see costs nothing.
 #
-# Why not journald on /data: in-place updates of 16 MB files plus a sync every minute — two SanDisk
-# cards failed in three days under it (LEA S06-48-P rolled back, KOUAGOU's master aborted /data,
-# 2026-09-18/21). Budget: KEEP_DAYS daily files, MAX_MB in total, 20 dumps.
+# pi-tools#t-048: the export chunk (and blackbox's archived lines) now go to `flightbox` — a raw
+# ring-buffer partition, no filesystem in the write path at all — instead of /data. `$OUT` on /data
+# stays as the FALLBACK: any box without flightbox yet (pi-tools#t-049 not run, or a card whose
+# flightbox self-disabled this boot) keeps writing exactly the files it always has, unchanged.
+#
+# Why not journald on /data, and why not /data at all once flightbox exists: in-place updates of
+# 16 MB files plus a sync every minute — two SanDisk cards failed in three days under it (LEA
+# S06-48-P rolled back, KOUAGOU's master aborted /data, 2026-09-18/21). Fallback budget: KEEP_DAYS
+# daily files, MAX_MB in total, 20 dumps — irrelevant once flightbox is carrying the load, since
+# nothing then lands in $OUT to prune.
 set -u
 OUT=${JOURNAL_EXPORT_DIR:-/data/var/log/journal-export}; CUR=$OUT/.cursor
 MAX_MB=${JOURNAL_EXPORT_MAX_MB:-300}; KEEP_DAYS=${JOURNAL_EXPORT_KEEP_DAYS:-7}
+FB=$(command -v flightbox 2>/dev/null || true)
 [ -d /data ] || exit 0
 mkdir -p /data/tmp "$OUT" 2>/dev/null; export TMPDIR=/data/tmp
-# blackbox (v3b) writes its live line to /run/blackbox.log; append what is new since the last export to
-# the archive on /data (byte offset in /run/blackbox.exported, reset by blackbox on rotation)
+# blackbox (v3b) writes its live line to /run/blackbox.log; archive what is new since the last
+# export (byte offset in /run/blackbox.exported, reset by blackbox on rotation) — to flightbox
+# first, falling back to the /data file unchanged if flightbox isn't taking writes right now.
 bb_archive() {
   local live=/run/blackbox.log arch=/data/var/log/blackbox.log off size
   [ -f "$live" ] || return 0
   off=$(cat /run/blackbox.exported 2>/dev/null || echo 0); size=$(stat -c %s "$live")
   [ "$off" -gt "$size" ] && off=0
   [ "$size" -gt "$off" ] || return 0
-  mkdir -p "$(dirname "$arch")"; tail -c +$((off+1)) "$live" >> "$arch" && echo "$size" > /run/blackbox.exported
-  sync -d "$arch" 2>/dev/null || true
+  if [ -n "$FB" ] && tail -c +$((off+1)) "$live" | "$FB" write --tag blackbox - >/dev/null 2>&1; then
+    :
+  else
+    mkdir -p "$(dirname "$arch")"; tail -c +$((off+1)) "$live" >> "$arch"
+    sync -d "$arch" 2>/dev/null || true
+  fi
+  echo "$size" > /run/blackbox.exported
 }
 case "${1:-}" in
   --now|dump)
-    D=$OUT/dumps; mkdir -p "$D"; T=$D/$(date +%F_%H%M%S)-${2:-anomaly}.log
-    { echo "### blackbox, last 60 lines"; tail -n 60 /run/blackbox.log 2>/dev/null; echo "### journal, last 15 min"; nice journalctl --since -15min -o short-iso --no-pager; } > "$T" 2>/dev/null
+    D=$OUT/dumps
+    BODY=$( { echo "### blackbox, last 60 lines"; tail -n 60 /run/blackbox.log 2>/dev/null; echo "### journal, last 15 min"; nice journalctl --since -15min -o short-iso --no-pager; } 2>/dev/null )
+    if [ -n "$FB" ] && printf '%s' "$BODY" | "$FB" write --tag anomaly - >/dev/null 2>&1; then
+      echo "journal-export: dump -> flightbox ($(printf '%s\n' "$BODY" | wc -l) lines)"
+    else
+      mkdir -p "$D"; T=$D/$(date +%F_%H%M%S)-${2:-anomaly}.log
+      printf '%s' "$BODY" > "$T"
+      sync -d "$T" 2>/dev/null || sync
+      ls -t "$D" 2>/dev/null | tail -n +21 | while read -r f; do rm -f "$D/$f"; done
+      echo "journal-export: dump $T ($(wc -l < "$T") lines)"
+    fi
     bb_archive
-    sync -d "$T" 2>/dev/null || sync
-    ls -t "$D" 2>/dev/null | tail -n +21 | while read -r f; do rm -f "$D/$f"; done
-    echo "journal-export: dump $T ($(wc -l < "$T") lines)"; exit 0 ;;
+    exit 0 ;;
   status)
-    echo "dir $(du -sm "$OUT" 2>/dev/null | cut -f1) MB, files: $(ls "$OUT"/*.log 2>/dev/null | wc -l), dumps: $(ls "$OUT/dumps" 2>/dev/null | wc -l), cursor: $([ -f "$CUR" ] && echo yes || echo none), last: $(ls -t "$OUT"/*.log 2>/dev/null | head -1)"; exit 0 ;;
+    FBS="unavailable"; [ -n "$FB" ] && FBS=$("$FB" status 2>/dev/null || echo unavailable)
+    echo "dir $(du -sm "$OUT" 2>/dev/null | cut -f1) MB, files: $(ls "$OUT"/*.log 2>/dev/null | wc -l), dumps: $(ls "$OUT/dumps" 2>/dev/null | wc -l), cursor: $([ -f "$CUR" ] && echo yes || echo none), last: $(ls -t "$OUT"/*.log 2>/dev/null | head -1), $FBS"; exit 0 ;;
 esac
-F=$OUT/$(date +%F).log
 if [ -s "$CUR" ]; then
   R=$(nice journalctl --after-cursor="$(cat "$CUR")" --show-cursor -o short-iso --no-pager 2>/dev/null)
 else
   R=$(nice journalctl --since -10min --show-cursor -o short-iso --no-pager 2>/dev/null)
 fi
 C=$(printf '%s\n' "$R" | grep -oE '^-- cursor: .*' | tail -1 | sed 's/^-- cursor: //')
-printf '%s\n' "$R" | grep -vE '^-- cursor: ' >> "$F"
+BODY=$(printf '%s\n' "$R" | grep -vE '^-- cursor: ')
+if [ -n "$FB" ] && printf '%s' "$BODY" | "$FB" write --tag journal - >/dev/null 2>&1; then
+  :
+else
+  F=$OUT/$(date +%F).log
+  printf '%s' "$BODY" >> "$F"
+  sync -d "$F" 2>/dev/null || sync
+fi
 [ -n "$C" ] && printf '%s' "$C" > "$CUR.tmp" && mv -f "$CUR.tmp" "$CUR"
-sync -d "$F" 2>/dev/null || sync
 bb_archive
-# prune: older than KEEP_DAYS, then the oldest until under MAX_MB
+# prune the fallback files: older than KEEP_DAYS, then the oldest until under MAX_MB (no-op once
+# flightbox is carrying the load — nothing lands in $OUT to prune)
 find "$OUT" -maxdepth 1 -name '*.log' -mtime +"$KEEP_DAYS" -delete 2>/dev/null
 while [ "$(du -sm "$OUT" 2>/dev/null | cut -f1)" -gt "$MAX_MB" ]; do
   o=$(ls -t "$OUT"/*.log 2>/dev/null | tail -1); [ -n "$o" ] || break; rm -f "$o"

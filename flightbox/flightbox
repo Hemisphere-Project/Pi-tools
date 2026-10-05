@@ -1,0 +1,359 @@
+#!/usr/bin/env python3
+"""flightbox — raw ring-buffer partition for the post-mortem trail (pi-tools#t-048).
+
+Design (Thomas, 2026-09-22, notes/2026-09-22-flightbox-ring-buffer-log-partition.md): a fourth
+partition (~512 MB) with NO filesystem — nothing to mount, nothing to fsck, no fstab line, so a
+broken or absent partition cannot touch the boot. Records are appended sequentially and the
+partition wraps: once the tail reaches the end it continues at offset 0, overwriting the oldest
+data. On-disk record, exactly as ratified:
+
+    [magic][seq][timestamp][len][crc32][payload]   (big-endian, 28-byte header + payload)
+
+A `seq` is a global counter that never resets — it only ever goes up, wrap or no wrap — so the
+record with the highest `seq` anywhere on the partition is always the most recently written one,
+and sorting every record found by `seq` always gives chronological order regardless of where the
+ring currently wraps. That property is what makes both the boot-time tail-scan and `dump` simple:
+neither has to reason about ring geometry, only "find every valid record, then look at seq".
+
+Every record starts at a 512-byte-aligned offset (payload is zero-padded up to the next 512 B) —
+512 is the logical block size `dd oflag=direct` needs to align to on SD/mmc/USB block devices, and
+it also means a scan that fails to parse a record only ever needs to resync at 512 B boundaries,
+never byte by byte.
+
+The ratified record format carries no type field, so a one-line marker is prepended to the
+PAYLOAD itself (`#flightbox:<tag>\n`) to tell a journal chunk from a blackbox chunk on `dump` —
+layered on top of the ratified wire format, not a change to it.
+
+Commands:
+    flightbox scan                    boot-time: rebuild (offset, seq) into /run/flightbox.state
+    flightbox write --tag TAG FILE    append FILE's bytes (FILE=- for stdin) as one record
+    flightbox dump [N]                print the last N records (default: all), oldest first
+    flightbox status                  one line: device, size, scan state, disabled marker
+
+Exit codes from `write` (callers branch on zero-vs-nonzero to fall back to their own /data path;
+the exact code is for a human reading the log): 0 ok · 1 I/O error (disable marker written) ·
+2 payload rejected (too large — not an I/O fault, no marker) · 3 partition absent (no marker: the
+live-migration unit, pi-tools#t-049, has not created it yet, or this box predates it).
+"""
+import os
+import subprocess
+import struct
+import sys
+import tempfile
+import time
+import zlib
+
+HEADER_FMT = '>4sQQII'          # magic, seq, timestamp, len, crc32
+HEADER_SIZE = struct.calcsize(HEADER_FMT)   # 28 bytes
+MAGIC = b'FBX1'
+ALIGN = 512                     # O_DIRECT alignment for SD/mmc/USB logical blocks
+MAX_PAYLOAD = int(os.environ.get('FLIGHTBOX_MAX_PAYLOAD', 8 * 1024 * 1024))
+DD_TIMEOUT = int(os.environ.get('FLIGHTBOX_DD_TIMEOUT', 10))   # seconds; a wedged card must not stall the caller
+SCAN_CHUNK = 4 * 1024 * 1024
+
+RUN_DIR = os.environ.get('FLIGHTBOX_RUN_DIR', '/run')   # override for bench/dry-run testing off-Pi
+STATE_FILE = os.path.join(RUN_DIR, 'flightbox.state')
+DISABLE_MARKER = os.path.join(RUN_DIR, 'flightbox.disabled')
+
+
+class FlightboxError(Exception):
+    pass
+
+
+# ── device resolution ───────────────────────────────────────────────────────
+
+def resolve_device():
+    """The 4th partition of the disk root/ is on — same disk-detection technique as extendfs.
+    FLIGHTBOX_DEVICE overrides (bench: a loop device, or even a plain file for a dry run — ext4
+    supports O_DIRECT opens too, so the write path works unmodified against a regular file)."""
+    override = os.environ.get('FLIGHTBOX_DEVICE')
+    if override:
+        return override
+    root_src = _run(['findmnt', '-nro', 'SOURCE', '/'])
+    if not root_src:
+        return None
+    root_dev = os.path.realpath(root_src)
+    disk_name = _run(['lsblk', '-nro', 'PKNAME', root_dev])
+    if not disk_name:
+        return None
+    disk_dev = '/dev/' + disk_name
+    if not os.path.exists(disk_dev):
+        return None
+    out = _run(['lsblk', '-nrpo', 'NAME,TYPE', disk_dev]) or ''
+    parts = []
+    for line in out.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[1] == 'part':
+            parts.append(fields[0])
+    if len(parts) < 4:
+        return None
+    return parts[3]     # p1=boot p2=root p3=data p4=flightbox
+
+
+def _run(cmd):
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        return r.stdout.strip() or None
+    except Exception:
+        return None
+
+
+def device_size(path):
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        return os.lseek(fd, 0, os.SEEK_END)
+    finally:
+        os.close(fd)
+
+
+# ── record parsing ──────────────────────────────────────────────────────────
+
+def align_up(n, a=ALIGN):
+    return (n + a - 1) // a * a
+
+
+def _parse_at(fd, pos, size):
+    """Try to parse one valid record at `pos`. None if magic/length/crc don't check out."""
+    if pos + HEADER_SIZE > size:
+        return None
+    os.lseek(fd, pos, os.SEEK_SET)
+    hdr = os.read(fd, HEADER_SIZE)
+    if len(hdr) != HEADER_SIZE:
+        return None
+    magic, seq, ts, ln, crc = struct.unpack(HEADER_FMT, hdr)
+    if magic != MAGIC or ln > MAX_PAYLOAD or pos + HEADER_SIZE + ln > size:
+        return None
+    payload = os.read(fd, ln)
+    if len(payload) != ln or (zlib.crc32(payload) & 0xffffffff) != crc:
+        return None
+    total = HEADER_SIZE + ln
+    return {'offset': pos, 'seq': seq, 'ts': ts, 'payload': payload,
+            'padded': align_up(total)}
+
+
+def scan_records(dev):
+    """Every syntactically valid, checksummed record on the device, in ascending BYTE offset
+    (not necessarily ascending seq — the wrap seam is exactly where that breaks). Fast path:
+    a valid record's own length says where the next one starts, no search needed. Resync path
+    (only reached after an invalid/torn record, or on a fresh unwritten partition): search for
+    the next MAGIC at a 512-aligned offset, in chunks — never byte by byte."""
+    size = device_size(dev)
+    records = []
+    fd = os.open(dev, os.O_RDONLY)
+    try:
+        pos = 0
+        while pos + HEADER_SIZE <= size:
+            rec = _parse_at(fd, pos, size)
+            if rec:
+                records.append(rec)
+                pos += rec['padded']
+                continue
+            # resync: chunked MAGIC search at ALIGN-aligned offsets
+            os.lseek(fd, pos, os.SEEK_SET)
+            chunk = os.read(fd, SCAN_CHUNK)
+            if not chunk:
+                break
+            idx = 0
+            advanced = False
+            while True:
+                i = chunk.find(MAGIC, idx)
+                if i == -1:
+                    break
+                cand = pos + i
+                if cand % ALIGN != 0:
+                    idx = i + 1
+                    continue
+                rec = _parse_at(fd, cand, size)
+                if rec:
+                    records.append(rec)
+                    pos = cand + rec['padded']
+                    advanced = True
+                    break
+                idx = i + 1
+            if not advanced:
+                pos += len(chunk)
+    finally:
+        os.close(fd)
+    return records
+
+
+# ── writer ───────────────────────────────────────────────────────────────────
+
+def read_state():
+    try:
+        with open(STATE_FILE) as f:
+            d = dict(line.strip().split('=', 1) for line in f if '=' in line)
+        return int(d['offset']), int(d['seq'])
+    except Exception:
+        return None
+
+
+def write_state(offset, seq):
+    with open(STATE_FILE + '.tmp', 'w') as f:
+        f.write(f'offset={offset}\nseq={seq}\n')
+    os.replace(STATE_FILE + '.tmp', STATE_FILE)
+
+
+def set_disabled(reason):
+    try:
+        with open(DISABLE_MARKER, 'w') as f:
+            f.write(f'{time.strftime("%Y-%m-%dT%H:%M:%S")} {reason}\n')
+    except OSError:
+        pass
+
+
+def write_record(dev, offset, seq, tag, payload):
+    if len(payload) > MAX_PAYLOAD:
+        raise FlightboxError(f'payload {len(payload)}B exceeds MAX_PAYLOAD {MAX_PAYLOAD}B — rejected, not attempted')
+    marked = ('#flightbox:%s\n' % tag).encode() + payload
+    ts = int(time.time())
+    crc = zlib.crc32(marked) & 0xffffffff
+    body = struct.pack(HEADER_FMT, MAGIC, seq, ts, len(marked), crc) + marked
+    padded = align_up(len(body))
+    size = device_size(dev)
+    if padded > size:
+        raise FlightboxError(f'record {padded}B larger than device {size}B — rejected, not attempted')
+    if offset + padded > size:
+        offset = 0                       # ring wrap: not enough room left before the end
+    body += b'\x00' * (padded - len(body))
+    fd, tmp = tempfile.mkstemp(dir=RUN_DIR, prefix='flightbox-')
+    try:
+        os.write(fd, body)
+    finally:
+        os.close(fd)
+    try:
+        cmd = ['nice', '-n', '10', 'timeout', str(DD_TIMEOUT), 'dd',
+               f'if={tmp}', f'of={dev}', 'bs=512', f'seek={offset // 512}',
+               'conv=notrunc', 'oflag=direct', 'status=none']
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            raise FlightboxError(f'dd exit {r.returncode}: {r.stderr.strip()}')
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+    return offset + padded, seq + 1
+
+
+# ── commands ─────────────────────────────────────────────────────────────────
+
+def cmd_scan(_args):
+    dev = resolve_device()
+    if not dev or not os.path.exists(dev):
+        print('flightbox: partition absent — callers fall back to /data', file=sys.stderr)
+        return 0
+    try:
+        records = scan_records(dev)
+    except OSError as e:
+        print(f'flightbox: scan read error on {dev}: {e}', file=sys.stderr)
+        set_disabled(f'scan read error: {e}')
+        return 1
+    if records:
+        last = max(records, key=lambda r: r['seq'])
+        offset, seq = last['offset'] + last['padded'], last['seq'] + 1
+        size = device_size(dev)
+        if offset + HEADER_SIZE > size:
+            offset = 0
+    else:
+        offset, seq = 0, 0
+    write_state(offset, seq)
+    print(f'flightbox: scan complete — {dev}, {len(records)} record(s), next seq={seq} at offset={offset}')
+    return 0
+
+
+def cmd_write(args):
+    if len(args) < 3 or args[0] != '--tag':
+        print('usage: flightbox write --tag TAG FILE', file=sys.stderr)
+        return 2
+    tag, path = args[1], args[2]
+    payload = sys.stdin.buffer.read() if path == '-' else open(path, 'rb').read()
+    if os.path.exists(DISABLE_MARKER):
+        print('flightbox: disabled this boot — see', DISABLE_MARKER, file=sys.stderr)
+        return 1
+    dev = resolve_device()
+    if not dev or not os.path.exists(dev):
+        print('flightbox: partition absent', file=sys.stderr)
+        return 3
+    state = read_state()
+    if state is None:
+        # scan hasn't run yet this boot (unit ordering, or a manual invocation) — self-heal
+        if cmd_scan([]) != 0:
+            return 1
+        state = read_state()
+        if state is None:
+            return 3
+    offset, seq = state
+    try:
+        new_offset, new_seq = write_record(dev, offset, seq, tag, payload)
+    except FlightboxError as e:
+        msg = str(e)
+        if 'exceeds MAX_PAYLOAD' in msg or 'larger than device' in msg:
+            print(f'flightbox: {msg}', file=sys.stderr)
+            return 2
+        print(f'flightbox: {msg}', file=sys.stderr)
+        set_disabled(msg)
+        return 1
+    write_state(new_offset, new_seq)
+    return 0
+
+
+def cmd_dump(args):
+    dev = resolve_device()
+    if not dev or not os.path.exists(dev):
+        print('flightbox: partition absent', file=sys.stderr)
+        return 1
+    n = int(args[0]) if args else None
+    records = sorted(scan_records(dev), key=lambda r: r['seq'])
+    if n:
+        records = records[-n:]
+    for rec in records:
+        payload = rec['payload']
+        tag = '-'
+        if payload.startswith(b'#flightbox:'):
+            nl = payload.find(b'\n')
+            if nl != -1:
+                tag = payload[len(b'#flightbox:'):nl].decode(errors='replace')
+                payload = payload[nl + 1:]
+        when = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(rec['ts']))
+        print(f'--- seq={rec["seq"]} {when} tag={tag} len={len(payload)} offset={rec["offset"]} ---')
+        sys.stdout.flush()      # `print` and `.buffer.write` are different buffers — order isn't
+        sys.stdout.buffer.write(payload)   # guaranteed across them unless flushed in between
+        if not payload.endswith(b'\n'):
+            sys.stdout.write('\n')
+        sys.stdout.flush()
+    return 0
+
+
+def cmd_status(_args):
+    dev = resolve_device()
+    disabled = 'yes' if os.path.exists(DISABLE_MARKER) else 'no'
+    if not dev or not os.path.exists(dev):
+        print(f'flightbox: device=none (fewer than 4 partitions — pi-tools#t-049 not run yet) disabled={disabled}')
+        return 0
+    size = device_size(dev)
+    state = read_state()
+    if state:
+        offset, seq = state
+        print(f'flightbox: device={dev} size={size / 1e6:.1f}MB scanned=yes offset={offset} seq={seq} disabled={disabled}')
+    else:
+        print(f'flightbox: device={dev} size={size / 1e6:.1f}MB scanned=no disabled={disabled}')
+    return 0
+
+
+COMMANDS = {'scan': cmd_scan, 'write': cmd_write, 'dump': cmd_dump, 'status': cmd_status}
+
+
+USAGE = ('usage: flightbox scan | write --tag TAG FILE | dump [N] | status\n'
+         '       (FILE=- reads the payload from stdin)')
+
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
+        print(USAGE, file=sys.stderr)
+        return 2
+    return COMMANDS[sys.argv[1]](sys.argv[2:]) or 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

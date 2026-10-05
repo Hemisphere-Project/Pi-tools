@@ -1,0 +1,12 @@
+[Unit]
+Description=flightbox: boot-time ring-buffer tail-scan (rebuild write position into /run)
+After=systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/flightbox scan
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
