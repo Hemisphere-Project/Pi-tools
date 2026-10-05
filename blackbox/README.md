@@ -9,9 +9,9 @@ mattered were gone. Two pieces, both under `/data/var/log`, both capped.
 **pi-tools#t-048 (2026-09-24):** `journal-export`'s 10-minute chunk and the archived blackbox
 lines now go to `flightbox` — a raw ring-buffer partition, no filesystem, no `/data` write in
 normal operation — instead of the `/data/var/log/journal-export` and `blackbox.log` files
-described below. Those files are the FALLBACK: any box without `flightbox` (pi-tools#t-049 not run
-yet, or a card whose flightbox self-disabled this boot) keeps writing them exactly as before. See
-`flightbox/README.md`.
+described below. Those files are the FALLBACK: any box without a flightbox ring (no p4 and no
+`flightbox reserve` yet, or a card whose flightbox self-disabled this boot) keeps writing them
+exactly as before. See `flightbox/README.md`.
 
 ## 1. Persistent journal (`journal-persist.service` + `journald.conf.d/blackbox.conf`)
 

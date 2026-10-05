@@ -24,18 +24,33 @@ The ratified record format carries no type field, so a one-line marker is prepen
 PAYLOAD itself (`#flightbox:<tag>\n`) to tell a journal chunk from a blackbox chunk on `dump` —
 layered on top of the ratified wire format, not a change to it.
 
+FILE MODE (pi-tools#t-051, Thomas 2026-09-27, notes/2026-09-27-flightbox-live-upgrade-path.md): a
+card in service is never repartitioned, so where there is no p4 the ring lives in a reserved file,
+/data/.flightbox — 512 MB plus one allocation unit, zero-filled once by `flightbox reserve` at a
+supervised moment. Every later write is an in-place overwrite of blocks already allocated and
+written: no allocation, no size change, no directory update (and /data remounted `lazytime` keeps
+the inode's times in RAM — flightbox-lazytime.service). The writer only uses the card's allocation
+units the file owns OUTRIGHT, read from the file's extents: a torn rewrite of a unit spoils what
+is in that unit, so a unit shared with another file or with ext4's own metadata is left alone.
+Page-mapped controllers garbage-collect across units, so this raises the odds; it cannot
+guarantee them. p4 is still preferred wherever it exists (the reflash lays it out at burn time).
+
 Commands:
     flightbox scan                    boot-time: rebuild (offset, seq) into /run/flightbox.state
     flightbox write --tag TAG FILE    append FILE's bytes (FILE=- for stdin) as one record
     flightbox dump [N]                print the last N records (default: all), oldest first
-    flightbox status                  one line: device, size, scan state, disabled marker
+    flightbox status                  one line: mode, device, size, window, scan state, disabled
+    flightbox reserve [MB]            create the file-mode ring (default 512 MB) — supervised, once
 
 Exit codes from `write` (callers branch on zero-vs-nonzero to fall back to their own /data path;
 the exact code is for a human reading the log): 0 ok · 1 I/O error (disable marker written) ·
-2 payload rejected (too large — not an I/O fault, no marker) · 3 partition absent (no marker: the
-live-migration unit, pi-tools#t-049, has not created it yet, or this box predates it).
+2 payload rejected (too large — not an I/O fault, no marker) · 3 ring absent (no marker: no p4 and
+no reserved file on this card, or a file whose unit-aligned window could not be placed).
 """
+import errno
+import fcntl
 import os
+import stat
 import subprocess
 import struct
 import sys
@@ -55,20 +70,59 @@ RUN_DIR = os.environ.get('FLIGHTBOX_RUN_DIR', '/run')   # override for bench/dry
 STATE_FILE = os.path.join(RUN_DIR, 'flightbox.state')
 DISABLE_MARKER = os.path.join(RUN_DIR, 'flightbox.disabled')
 
+MB = 1024 * 1024
+FLIGHTBOX_FILE = os.environ.get('FLIGHTBOX_FILE', '/data/.flightbox')   # file mode (pi-tools#t-051)
+FILE_MIN = 64 * MB              # a smaller file (or window) is not a ring worth using
+RESERVE_MB = 512
+RESERVE_HEADROOM_MB = 2048      # `reserve` refuses unless this much stays free on /data after it
+DEFAULT_UNIT = 4 * MB           # allocation unit when the card does not report one
+
+# FIEMAP — the ioctl `filefrag` itself is built on, called directly so no output format is parsed.
+FS_IOC_FIEMAP = 0xC020660B
+FIEMAP_HDR = '=QQIIII'          # fm_start, fm_length, fm_flags, fm_mapped_extents, fm_extent_count, fm_reserved
+FIEMAP_EXT = '=QQQQQIIII'       # fe_logical, fe_physical, fe_length, 2 reserved, fe_flags, 3 reserved
+FIEMAP_EXTENT_LAST = 0x1
+# Anything but plain, allocated, already-written blocks: writing into one of these makes the
+# filesystem update its own metadata — the very thing file mode is there to avoid.
+# UNKNOWN · DELALLOC · ENCODED · DATA_ENCRYPTED · NOT_ALIGNED · DATA_INLINE · DATA_TAIL · UNWRITTEN · SHARED
+FIEMAP_EXTENT_UNSAFE = 0x2 | 0x4 | 0x8 | 0x80 | 0x100 | 0x200 | 0x400 | 0x800 | 0x2000
+
 
 class FlightboxError(Exception):
     pass
 
 
+class Absent(FlightboxError):
+    """No ring to use on this box — the callers' /data fallback, never a disable marker."""
+
+
 # ── device resolution ───────────────────────────────────────────────────────
 
 def resolve_device():
-    """The 4th partition of the disk root/ is on — same disk-detection technique as extendfs.
-    FLIGHTBOX_DEVICE overrides (bench: a loop device, or even a plain file for a dry run — ext4
-    supports O_DIRECT opens too, so the write path works unmodified against a regular file)."""
+    """(path, mode) of the ring this box writes, or (None, None).
+
+    mode 'device' — FLIGHTBOX_DEVICE override (bench: a loop device, or even a plain file for a dry
+                    run — ext4 supports O_DIRECT opens too), used whole.
+    mode 'p4'     — the 4th partition of the disk root/ is on, same disk-detection technique as
+                    extendfs; used whole. Always preferred when it exists.
+    mode 'file'   — no p4: FLIGHTBOX_FILE (default /data/.flightbox), if it is a regular file of at
+                    least 64 MB. Only its unit-aligned window is used (ring_segments)."""
     override = os.environ.get('FLIGHTBOX_DEVICE')
     if override:
-        return override
+        return override, 'device'
+    p4 = _p4()
+    if p4:
+        return p4, 'p4'
+    try:
+        st = os.stat(FLIGHTBOX_FILE)
+    except OSError:
+        return None, None
+    if stat.S_ISREG(st.st_mode) and st.st_size >= FILE_MIN:
+        return FLIGHTBOX_FILE, 'file'
+    return None, None
+
+
+def _p4():
     root_src = _run(['findmnt', '-nro', 'SOURCE', '/'])
     if not root_src:
         return None
@@ -98,12 +152,121 @@ def _run(cmd):
         return None
 
 
+def _read_int(path):
+    try:
+        with open(path) as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
 def device_size(path):
     fd = os.open(path, os.O_RDONLY)
     try:
         return os.lseek(fd, 0, os.SEEK_END)
     finally:
         os.close(fd)
+
+
+# ── file mode: the unit-aligned window ───────────────────────────────────────
+
+def disk_geometry(path):
+    """(byte offset of path's filesystem on its disk, allocation unit in bytes, where the unit
+    came from). The unit is the card's own `preferred_erase_size` (the mmc driver fills it from the
+    SD allocation unit) unless FLIGHTBOX_UNIT overrides it; absent both, DEFAULT_UNIT."""
+    st = os.stat(path)
+    sysdev = os.path.realpath('/sys/dev/block/%d:%d' % (os.major(st.st_dev), os.minor(st.st_dev)))
+    if not os.path.isdir(sysdev):
+        raise FlightboxError(f'no block device behind {path} — cannot place a unit-aligned window')
+    start = _read_int(os.path.join(sysdev, 'start'))    # present on a partition: its first sector
+    disk = os.path.dirname(sysdev) if start is not None else sysdev
+    if os.environ.get('FLIGHTBOX_UNIT'):
+        unit, src = int(os.environ['FLIGHTBOX_UNIT']), 'FLIGHTBOX_UNIT'
+    else:
+        unit = _read_int(os.path.join(disk, 'device', 'preferred_erase_size'))
+        src = 'preferred_erase_size'
+        if not unit:
+            unit, src = DEFAULT_UNIT, 'default'
+    if unit < ALIGN or unit % ALIGN:
+        raise FlightboxError(f'allocation unit {unit}B ({src}) is not a multiple of {ALIGN}B')
+    return (start or 0) * 512, unit, src
+
+
+def file_extents(path):
+    """[(logical, physical, length, flags)] of a regular file, in logical order."""
+    hdr, ext = struct.calcsize(FIEMAP_HDR), struct.calcsize(FIEMAP_EXT)
+    count = 256
+    out = []
+    pos = 0
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        while True:
+            buf = bytearray(struct.pack(FIEMAP_HDR, pos, 0xFFFFFFFFFFFFFFFF, 0, 0, count, 0)
+                            + bytes(count * ext))
+            fcntl.ioctl(fd, FS_IOC_FIEMAP, buf, True)
+            mapped = struct.unpack_from(FIEMAP_HDR, buf)[3]
+            if not mapped:
+                return out
+            for i in range(mapped):
+                lo, ph, ln, _, _, fl, _, _, _ = struct.unpack_from(FIEMAP_EXT, buf, hdr + i * ext)
+                out.append((lo, ph, ln, fl))
+            if fl & FIEMAP_EXTENT_LAST or mapped < count:
+                return out
+            pos = lo + ln
+    finally:
+        os.close(fd)
+
+
+def file_window(path):
+    """([(start, end)], unit, unit source) — the byte ranges of the reserved file the ring may use,
+    in order: every physically contiguous run of written extents, trimmed inwards to whole
+    allocation units of the CARD (the unit grid starts at the disk's first byte, not the
+    partition's). A run too short to hold one whole unit contributes nothing."""
+    try:
+        size = os.stat(path).st_size
+        part_off, unit, src = disk_geometry(path)
+        extents = file_extents(path)
+    except OSError as e:
+        raise FlightboxError(f'cannot read the extents of {path}: {e}')
+    runs = []       # [logical, physical, length]
+    for lo, ph, ln, fl in extents:
+        if fl & FIEMAP_EXTENT_UNSAFE or lo >= size:
+            continue
+        ln = min(ln, size - lo)
+        if runs and runs[-1][0] + runs[-1][2] == lo and runs[-1][1] + runs[-1][2] == ph:
+            runs[-1][2] += ln
+        else:
+            runs.append([lo, ph, ln])
+    segments = []
+    for lo, ph, ln in runs:
+        a = part_off + ph
+        s = (a + unit - 1) // unit * unit
+        e = (a + ln) // unit * unit
+        if e > s:
+            segments.append((lo + s - a, lo + e - a))
+    usable = sum(e - s for s, e in segments)
+    if usable < FILE_MIN:
+        raise FlightboxError(f'{path}: only {usable // MB} MB of whole {unit // 1024} KB units '
+                             f'({len(runs)} run(s)) — under the {FILE_MIN // MB} MB floor')
+    return segments, unit, src
+
+
+def ring_segments(dev, mode):
+    """The [(start, end)] byte ranges the ring is made of: the whole device, or a file's window."""
+    if mode == 'file':
+        return file_window(dev)[0]
+    return [(0, device_size(dev))]
+
+
+def open_ring():
+    """(dev, mode, segments) of the ring this box writes; raises Absent when there is none."""
+    dev, mode = resolve_device()
+    if not dev or not os.path.exists(dev):
+        raise Absent(f'absent (no p4, no usable {FLIGHTBOX_FILE})')
+    try:
+        return dev, mode, ring_segments(dev, mode)
+    except FlightboxError as e:
+        raise Absent(f'file mode unusable: {e}')
 
 
 # ── record parsing ──────────────────────────────────────────────────────────
@@ -131,47 +294,48 @@ def _parse_at(fd, pos, size):
             'padded': align_up(total)}
 
 
-def scan_records(dev):
-    """Every syntactically valid, checksummed record on the device, in ascending BYTE offset
-    (not necessarily ascending seq — the wrap seam is exactly where that breaks). Fast path:
-    a valid record's own length says where the next one starts, no search needed. Resync path
-    (only reached after an invalid/torn record, or on a fresh unwritten partition): search for
-    the next MAGIC at a 512-aligned offset, in chunks — never byte by byte."""
-    size = device_size(dev)
+def scan_records(dev, segments):
+    """Every syntactically valid, checksummed record inside the ring's segments, in ascending BYTE
+    offset (not necessarily ascending seq — the wrap seam is exactly where that breaks). No record
+    ever straddles a segment end, so each segment is scanned on its own. Fast path: a valid
+    record's own length says where the next one starts, no search needed. Resync path (only
+    reached after an invalid/torn record, or on a fresh unwritten ring): search for the next MAGIC
+    at a 512-aligned offset, in chunks — never byte by byte."""
     records = []
     fd = os.open(dev, os.O_RDONLY)
     try:
-        pos = 0
-        while pos + HEADER_SIZE <= size:
-            rec = _parse_at(fd, pos, size)
-            if rec:
-                records.append(rec)
-                pos += rec['padded']
-                continue
-            # resync: chunked MAGIC search at ALIGN-aligned offsets
-            os.lseek(fd, pos, os.SEEK_SET)
-            chunk = os.read(fd, SCAN_CHUNK)
-            if not chunk:
-                break
-            idx = 0
-            advanced = False
-            while True:
-                i = chunk.find(MAGIC, idx)
-                if i == -1:
-                    break
-                cand = pos + i
-                if cand % ALIGN != 0:
-                    idx = i + 1
-                    continue
-                rec = _parse_at(fd, cand, size)
+        for start, end in segments:
+            pos = start
+            while pos + HEADER_SIZE <= end:
+                rec = _parse_at(fd, pos, end)
                 if rec:
                     records.append(rec)
-                    pos = cand + rec['padded']
-                    advanced = True
+                    pos += rec['padded']
+                    continue
+                # resync: chunked MAGIC search at ALIGN-aligned offsets
+                os.lseek(fd, pos, os.SEEK_SET)
+                chunk = os.read(fd, min(SCAN_CHUNK, end - pos))
+                if not chunk:
                     break
-                idx = i + 1
-            if not advanced:
-                pos += len(chunk)
+                idx = 0
+                advanced = False
+                while True:
+                    i = chunk.find(MAGIC, idx)
+                    if i == -1:
+                        break
+                    cand = pos + i
+                    if cand % ALIGN != 0:
+                        idx = i + 1
+                        continue
+                    rec = _parse_at(fd, cand, end)
+                    if rec:
+                        records.append(rec)
+                        pos = cand + rec['padded']
+                        advanced = True
+                        break
+                    idx = i + 1
+                if not advanced:
+                    pos += len(chunk)
     finally:
         os.close(fd)
     return records
@@ -202,7 +366,20 @@ def set_disabled(reason):
         pass
 
 
-def write_record(dev, offset, seq, tag, payload):
+def place(segments, offset, padded):
+    """Where a `padded`-byte record goes: at `offset` if it fits inside the segment holding it,
+    else at the start of the next segment big enough, wrapping to the first. None = fits nowhere."""
+    for s, e in segments:
+        if s <= offset and offset + padded <= e:
+            return offset
+    fits = [s for s, e in segments if e - s >= padded]
+    if not fits:
+        return None
+    later = [s for s in fits if s > offset]
+    return later[0] if later else fits[0]      # the wrap: back to the oldest data
+
+
+def write_record(dev, segments, offset, seq, tag, payload):
     if len(payload) > MAX_PAYLOAD:
         raise FlightboxError(f'payload {len(payload)}B exceeds MAX_PAYLOAD {MAX_PAYLOAD}B — rejected, not attempted')
     marked = ('#flightbox:%s\n' % tag).encode() + payload
@@ -210,11 +387,9 @@ def write_record(dev, offset, seq, tag, payload):
     crc = zlib.crc32(marked) & 0xffffffff
     body = struct.pack(HEADER_FMT, MAGIC, seq, ts, len(marked), crc) + marked
     padded = align_up(len(body))
-    size = device_size(dev)
-    if padded > size:
-        raise FlightboxError(f'record {padded}B larger than device {size}B — rejected, not attempted')
-    if offset + padded > size:
-        offset = 0                       # ring wrap: not enough room left before the end
+    offset = place(segments, offset, padded)
+    if offset is None:
+        raise FlightboxError(f'record {padded}B larger than any ring segment — rejected, not attempted')
     body += b'\x00' * (padded - len(body))
     fd, tmp = tempfile.mkstemp(dir=RUN_DIR, prefix='flightbox-')
     try:
@@ -239,12 +414,13 @@ def write_record(dev, offset, seq, tag, payload):
 # ── commands ─────────────────────────────────────────────────────────────────
 
 def cmd_scan(_args):
-    dev = resolve_device()
-    if not dev or not os.path.exists(dev):
-        print('flightbox: partition absent — callers fall back to /data', file=sys.stderr)
+    try:
+        dev, mode, segments = open_ring()
+    except Absent as e:
+        print(f'flightbox: ring {e} — callers fall back to /data', file=sys.stderr)
         return 0
     try:
-        records = scan_records(dev)
+        records = scan_records(dev, segments)
     except OSError as e:
         print(f'flightbox: scan read error on {dev}: {e}', file=sys.stderr)
         set_disabled(f'scan read error: {e}')
@@ -252,13 +428,10 @@ def cmd_scan(_args):
     if records:
         last = max(records, key=lambda r: r['seq'])
         offset, seq = last['offset'] + last['padded'], last['seq'] + 1
-        size = device_size(dev)
-        if offset + HEADER_SIZE > size:
-            offset = 0
     else:
-        offset, seq = 0, 0
-    write_state(offset, seq)
-    print(f'flightbox: scan complete — {dev}, {len(records)} record(s), next seq={seq} at offset={offset}')
+        offset, seq = segments[0][0], 0
+    write_state(offset, seq)        # an offset at a segment's end is moved on by place()
+    print(f'flightbox: scan complete — {dev} ({mode}), {len(records)} record(s), next seq={seq} at offset={offset}')
     return 0
 
 
@@ -271,9 +444,10 @@ def cmd_write(args):
     if os.path.exists(DISABLE_MARKER):
         print('flightbox: disabled this boot — see', DISABLE_MARKER, file=sys.stderr)
         return 1
-    dev = resolve_device()
-    if not dev or not os.path.exists(dev):
-        print('flightbox: partition absent', file=sys.stderr)
+    try:
+        dev, _, segments = open_ring()
+    except Absent as e:
+        print(f'flightbox: ring {e}', file=sys.stderr)
         return 3
     state = read_state()
     if state is None:
@@ -285,10 +459,10 @@ def cmd_write(args):
             return 3
     offset, seq = state
     try:
-        new_offset, new_seq = write_record(dev, offset, seq, tag, payload)
+        new_offset, new_seq = write_record(dev, segments, offset, seq, tag, payload)
     except FlightboxError as e:
         msg = str(e)
-        if 'exceeds MAX_PAYLOAD' in msg or 'larger than device' in msg:
+        if 'exceeds MAX_PAYLOAD' in msg or 'larger than any ring segment' in msg:
             print(f'flightbox: {msg}', file=sys.stderr)
             return 2
         print(f'flightbox: {msg}', file=sys.stderr)
@@ -299,12 +473,13 @@ def cmd_write(args):
 
 
 def cmd_dump(args):
-    dev = resolve_device()
-    if not dev or not os.path.exists(dev):
-        print('flightbox: partition absent', file=sys.stderr)
+    try:
+        dev, _, segments = open_ring()
+    except Absent as e:
+        print(f'flightbox: ring {e}', file=sys.stderr)
         return 1
     n = int(args[0]) if args else None
-    records = sorted(scan_records(dev), key=lambda r: r['seq'])
+    records = sorted(scan_records(dev, segments), key=lambda r: r['seq'])
     if n:
         records = records[-n:]
     for rec in records:
@@ -326,25 +501,112 @@ def cmd_dump(args):
 
 
 def cmd_status(_args):
-    dev = resolve_device()
     disabled = 'yes' if os.path.exists(DISABLE_MARKER) else 'no'
-    if not dev or not os.path.exists(dev):
-        print(f'flightbox: device=none (fewer than 4 partitions — pi-tools#t-049 not run yet) disabled={disabled}')
+    try:
+        dev, mode, segments = open_ring()
+    except Absent as e:
+        hint = '' if os.path.lexists(FLIGHTBOX_FILE) else ' — `flightbox reserve` creates the file'
+        print(f'flightbox: mode=none ring {e}{hint} disabled={disabled}')
         return 0
     size = device_size(dev)
+    window = ''
+    if mode == 'file':
+        usable = sum(e - s for s, e in segments)
+        _, unit, src = disk_geometry(dev)
+        window = f' window={usable / MB:.1f}MB/{len(segments)}run(s) unit={unit // 1024}KB({src})'
     state = read_state()
-    if state:
-        offset, seq = state
-        print(f'flightbox: device={dev} size={size / 1e6:.1f}MB scanned=yes offset={offset} seq={seq} disabled={disabled}')
-    else:
-        print(f'flightbox: device={dev} size={size / 1e6:.1f}MB scanned=no disabled={disabled}')
+    scanned = 'yes offset=%d seq=%d' % state if state else 'no'
+    print(f'flightbox: mode={mode} device={dev} size={size / MB:.1f}MB{window} scanned={scanned} disabled={disabled}')
     return 0
 
 
-COMMANDS = {'scan': cmd_scan, 'write': cmd_write, 'dump': cmd_dump, 'status': cmd_status}
+def cmd_reserve(args):
+    """Create the file-mode ring once — at a supervised moment, power on. Idempotent: an existing
+    file is reported, never rewritten (`rm` it to start over); a `.tmp` left by a cut mid-reserve
+    is deleted first. The zeros go down in one sequential pass over blocks fallocate'd in one
+    request (never fallocate alone: unwritten extents would turn every first write into an extent
+    update), and the file is renamed into place only once they are on the card."""
+    try:
+        mb = int(args[0]) if args else RESERVE_MB
+    except ValueError:
+        print('usage: flightbox reserve [MB]', file=sys.stderr)
+        return 2
+    if mb * MB < FILE_MIN:
+        print(f'flightbox reserve: {mb} MB is under the {FILE_MIN // MB} MB floor', file=sys.stderr)
+        return 2
+    dev, mode = resolve_device()
+    if mode in ('p4', 'device'):
+        print(f'flightbox reserve: refused — this box already writes {dev} ({mode}); file mode is for cards without p4', file=sys.stderr)
+        return 1
+    path = FLIGHTBOX_FILE
+    data = os.path.dirname(path)
+    if not os.path.ismount(data):
+        print(f'flightbox reserve: refused — {data} is not a mounted filesystem', file=sys.stderr)
+        return 1
+    tmp = path + '.tmp'
+    if os.path.exists(tmp):
+        os.unlink(tmp)
+        print(f'flightbox reserve: removed {tmp} left by an interrupted reserve')
+    if os.path.lexists(path):
+        try:
+            open_ring()
+        except Absent as e:
+            print(f'flightbox reserve: refused — {path} exists but the ring is {e}; `rm` it to start over', file=sys.stderr)
+            return 1
+        print(f'flightbox reserve: {path} already reserved — `rm` it to start over')
+        return cmd_status([])
+    try:
+        _, unit, src = disk_geometry(data)
+    except FlightboxError as e:
+        print(f'flightbox reserve: refused — {e}', file=sys.stderr)
+        return 1
+    total = align_up(mb * MB + unit, MB)        # 512 MB + one unit, so the trimmed window keeps 512
+    vfs = os.statvfs(data)
+    free = vfs.f_bavail * vfs.f_frsize
+    if free < total + RESERVE_HEADROOM_MB * MB:
+        print(f'flightbox reserve: refused — {free // MB} MB free on {data}, need {total // MB} MB '
+              f'+ {RESERVE_HEADROOM_MB} MB headroom', file=sys.stderr)
+        return 1
+    print(f'flightbox reserve: writing {total // MB} MB of zeros to {tmp} '
+          f'(unit {unit // 1024} KB from {src}) — keep the power on')
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.posix_fallocate(fd, 0, total)
+    except OSError as e:
+        if e.errno != errno.EOPNOTSUPP:     # unsupported: the dd below allocates as it goes
+            print(f'flightbox reserve: fallocate failed: {e} — {tmp} left for the next reserve to delete', file=sys.stderr)
+            return 1
+    finally:
+        os.close(fd)
+    r = subprocess.run(['dd', 'if=/dev/zero', f'of={tmp}', 'bs=1M', f'count={total // MB}',
+                        'oflag=direct', 'conv=notrunc,fsync', 'status=none'],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f'flightbox reserve: dd exit {r.returncode}: {r.stderr.strip()} — {tmp} left for the next reserve to delete', file=sys.stderr)
+        return 1
+    os.rename(tmp, path)
+    dfd = os.open(data, os.O_RDONLY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
+    try:
+        segments, unit, src = file_window(path)
+    except FlightboxError as e:
+        print(f'flightbox reserve: {path} written, but {e} — `rm` it; the callers keep /data', file=sys.stderr)
+        return 1
+    usable = sum(e - s for s, e in segments)
+    print(f'flightbox reserve: {path} — window {usable // MB} MB in {len(segments)} run(s) of whole {unit // 1024} KB units')
+    if usable < mb * MB:
+        print(f'  (under the {mb} MB asked: the file landed in {len(segments)} separate runs, each trimmed to whole units)')
+    return cmd_scan([])
 
 
-USAGE = ('usage: flightbox scan | write --tag TAG FILE | dump [N] | status\n'
+COMMANDS = {'scan': cmd_scan, 'write': cmd_write, 'dump': cmd_dump, 'status': cmd_status,
+            'reserve': cmd_reserve}
+
+
+USAGE = ('usage: flightbox scan | write --tag TAG FILE | dump [N] | status | reserve [MB]\n'
          '       (FILE=- reads the payload from stdin)')
 
 

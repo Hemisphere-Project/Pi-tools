@@ -2,11 +2,16 @@
 Description=flightbox: boot-time ring-buffer tail-scan (rebuild write position into /run)
 After=systemd-udev-settle.service
 Wants=systemd-udev-settle.service
+# File mode (pi-tools#t-051) reads /data/.flightbox; harmless for p4. If /data does not mount the
+# scan does not run, and the first `flightbox write` self-heals by scanning on the spot.
+RequiresMountsFor=/data
 
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/flightbox scan
 Nice=10
+# The scan reads the whole ring once, at the moment HPlayer2 opens its film.
+IOSchedulingClass=idle
 
 [Install]
 WantedBy=multi-user.target

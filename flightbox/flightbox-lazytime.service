@@ -1,0 +1,17 @@
+[Unit]
+Description=flightbox: remount /data lazytime, so file-mode writes leave the inode alone
+# pi-tools#t-051. A file-mode write overwrites blocks already allocated — the only metadata it
+# still touches is the inode's mtime/ctime, and lazytime keeps those in RAM (flushed at most
+# daily, or at a clean unmount). Only on a card that carries the reserved file: any other card
+# sees no change at all. Reapplied each boot, no fstab edit; `systemctl disable` to undo.
+ConditionPathExists=/data/.flightbox
+ConditionPathIsMountPoint=/data
+RequiresMountsFor=/data
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/mount -o remount,lazytime /data
+
+[Install]
+WantedBy=multi-user.target
