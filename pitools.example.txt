@@ -44,10 +44,12 @@
 #   no   = skip
 #   ask  = prompt during install (default for optional modules)
 
-# system — read-only root filesystem + USB automount
+# system — read-only root filesystem + USB automount + persistent
+#          journal (blackbox) + USB-link watchdog (usbfix)
 # system = yes
 
-# network — WiFi profile management + dynamic hostname
+# network — WiFi profile management + dynamic hostname + sync-link
+#           watchdog (linkwatch)
 # network = yes
 
 # web — webconf + filebrother + 3615-disco web UIs
