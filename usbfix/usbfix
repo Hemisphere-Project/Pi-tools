@@ -23,11 +23,25 @@
 PRODUCT=Nowde; STORM_MIN=20; MISSED_MIN=5; COOLDOWN=90
 [ -f /etc/default/usbfix ] && . /etc/default/usbfix
 IF=/run/usbfix.last
+INHIBIT_SEEN=/run/usbfix.inhibit.seen
 # Deliberate maintenance (a node OTA, a USB test) inhibits the watchdog: `touch /run/usbfix.inhibit`
 # before, remove it after. Without this the OTA's own conditions look exactly like a fault — and on
 # 2026-09-22 they did: HPlayer2 is stopped for a flash, so it logs no HELLO, trigger C concluded the
 # node had gone silent and re-enumerated the port at 88 % of a transfer, killing the session.
-[ -f /run/usbfix.inhibit ] && exit 0
+# A leftover inhibit disables the WHOLE watchdog with no trace: `journalctl -t usbfix` then reads
+# exactly like a box that saw no storms. Log the TRANSITION only (set / cleared), not every 60 s
+# tick — the timer runs that often and blackbox v3b just cut the journal ~1.9 GB/day -> ~10 MB/day,
+# so a per-tick line would give part of that straight back. State is a tmpfs marker: a reboot
+# clears it, so a still-inhibited box logs once more on its first run after boot — the same
+# "still paused" signal a fresh boot should give anyway.
+if [ -f /run/usbfix.inhibit ]; then
+  [ -f "$INHIBIT_SEEN" ] || { logger -t usbfix "inhibited — /run/usbfix.inhibit present, watchdog paused (remove the file to re-arm)"; touch "$INHIBIT_SEEN"; }
+  exit 0
+fi
+if [ -f "$INHIBIT_SEEN" ]; then
+  logger -t usbfix "inhibit cleared — watchdog re-armed"
+  rm -f "$INHIBIT_SEEN"
+fi
 now=$(date +%s); last=$(cat $IF 2>/dev/null || echo 0)
 [ $((now - last)) -lt "$COOLDOWN" ] && exit 0
 
