@@ -12,6 +12,7 @@ ln -sf "$HERE/usbfix.service" /etc/systemd/system/usbfix.service
 ln -sf "$HERE/usbfix.timer" /etc/systemd/system/usbfix.timer
 systemctl daemon-reload 2>/dev/null || true
 systemctl enable usbfix.timer 2>/dev/null || true
+bash "$HERE/../setup/module-manifest" record usbfix "$HERE" || true   # what this pass laid down (#t-047)
 if [ "$RSYSLOG" = 1 ] && [ -f /etc/rsyslog.conf ]; then
   # Under a kernel storm rsyslog read ~7000 lines/s from /proc/kmsg and wrote them twice into the
   # 102 MB tmpfs (kern.log + syslog): full in a minute, CPU burnt for nothing. The persistent journal

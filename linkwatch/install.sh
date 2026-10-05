@@ -8,6 +8,7 @@ ln -sf "$HERE/linkwatch.service" /etc/systemd/system/linkwatch.service
 ln -sf "$HERE/linkwatch.timer" /etc/systemd/system/linkwatch.timer
 systemctl daemon-reload 2>/dev/null || true
 systemctl enable linkwatch.timer 2>/dev/null || true
+bash "$HERE/../setup/module-manifest" record linkwatch "$HERE" || true   # what this pass laid down (#t-047)
 echo "linkwatch installed: linkwatch.timer enabled (effective at the next boot; 'install.sh --now' to start now)"
 if [ "${1:-}" = --now ]; then
   systemctl restart linkwatch.timer

@@ -43,6 +43,9 @@ systemctl daemon-reload
 # Don't auto-enable tailscaled — let starter.txt control it
 systemctl disable tailscaled 2>/dev/null || true
 
+# What this pass laid down (#t-047) — before `ro`, which would refuse the write
+bash "$BASEPATH/../setup/module-manifest" record tailscale "$BASEPATH" || true
+
 # Switch back to read-only if rorw is active
 if command -v ro >/dev/null 2>&1; then
     ro

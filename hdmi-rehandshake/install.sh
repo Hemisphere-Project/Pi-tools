@@ -12,4 +12,5 @@ for u in hdmi-rehandshake.service hdmi-rehandshake-late.service hdmi-rehandshake
 done
 systemctl daemon-reload 2>/dev/null || true
 systemctl enable hdmi-rehandshake.service hdmi-rehandshake-late.timer hdmi-rehandshake-watch.timer 2>/dev/null || true
+bash "$HERE/../setup/module-manifest" record hdmi-rehandshake "$HERE" || true   # what this pass laid down (#t-047)
 echo "hdmi-rehandshake installed and enabled (boot pass + late timer + daytime watch timer)"

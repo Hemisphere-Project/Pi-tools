@@ -24,6 +24,7 @@ systemctl disable journal-persist.service 2>/dev/null || true
 rm -f /etc/systemd/system/journal-persist.service /etc/systemd/system/sysinit.target.wants/journal-persist.service
 systemctl daemon-reload 2>/dev/null || true
 systemctl enable blackbox.timer journal-export.timer 2>/dev/null || true
+bash "$HERE/../setup/module-manifest" record blackbox "$HERE" || true   # what this pass laid down (#t-047)
 echo "blackbox v3 installed: journald in RAM (32 MB), journal-export.timer + blackbox.timer enabled (next boot; --now to switch a running player)"
 if [ "${1:-}" = --now ]; then
   # Order matters (kouagou02/03, 2026-09-21): journald holds the persistent files open, so the bind

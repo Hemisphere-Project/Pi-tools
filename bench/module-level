@@ -1,0 +1,186 @@
+#!/usr/bin/env bash
+# module-level — which version of each Pi-tools module does THIS player carry?
+#
+# probe-level's sibling, for modules instead of patches. Every install pass writes one line into
+# the box's /etc/pi-tools-modules.txt (setup/module-manifest): the module, a CONTENT fingerprint of
+# the directory it installed from, when, and the box checkout's sha. This reads that manifest in
+# one session and compares each module with the laptop's own clone — the tree the field deployers
+# copy from — naming the commit the box's version came from when this clone has it.
+#
+#   Usage: module-level [options] [module ...]
+#
+#     -t, --target SSH    ssh target to read                    (default root@10.0.0.1)
+#         --here          read this machine's manifest — you are on the player
+#     -m, --manifest FILE read a manifest file, e.g. <card>/etc/pi-tools-modules.txt in a reader
+#     -C, --clone DIR     the clone to compare with      (default: the checkout this script is in)
+#         --ssh-timeout SEC  connect budget                    (default 10)
+#     -q, --quiet         only the summary lines
+#     -h, --help
+#
+#   Modules named on the command line are the question; with none, every module the manifest
+#   lists. A named module the box never recorded is `?`, not a match.
+#
+#   STATE, per module:
+#
+#     =      the box carries exactly what this clone's module directory holds right now
+#     drift  it does not — BOX CARRIES names the clone's commit that matches the box, or says
+#            the box's version is not in this clone (uncommitted on whichever laptop deployed it)
+#     ?      COULD NOT READ — the box never recorded the module (installed before the manifest
+#            existed, or by a deployer that bypasses install.sh), or this clone has no such module
+#
+#   `drift: none` is printed only when every module was read AND every one matched; it is the last
+#   line, as probe-level's `missing:` is, because it is the one that gets grepped.
+#
+#   Exit: 0 no drift and nothing unread · 1 drift · 2 could not run, or something could not be read.
+#
+#   Examples:
+#     module-level                                   # the player on this hotspot
+#     module-level usbfix blackbox                   # just these
+#     module-level -m /media/$USER/rootfs/etc/pi-tools-modules.txt
+#     ./fleet-run --local -- ./bench/module-level -t %t -q      # the whole fleet
+set -uo pipefail
+
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+HELPER="$SELF_DIR/../setup/module-manifest"
+
+usage() { sed -n '2,40p' "$0" | sed 's/^# \?//'; }
+
+TARGET="root@10.0.0.1"; HERE=0; FILE=""; CLONE=""; SSHB=10; QUIET=0; ASKED=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -t|--target)   TARGET="${2:?--target needs an ssh target}"; shift ;;
+    --here)        HERE=1 ;;
+    -m|--manifest) FILE="${2:?--manifest needs a file}"; shift ;;
+    -C|--clone)    CLONE="${2:?--clone needs a directory}"; shift ;;
+    --ssh-timeout) SSHB="${2:?--ssh-timeout needs seconds}"; shift ;;
+    -q|--quiet)    QUIET=1 ;;
+    -h|--help)     usage; exit 0 ;;
+    --)            shift; ASKED+=("$@"); break ;;
+    -*)            echo "module-level: unknown argument: $1" >&2; usage >&2; exit 2 ;;
+    *)             ASKED+=("$1") ;;
+  esac
+  shift
+done
+
+say() { [ "$QUIET" = 1 ] || printf '%s\n' "$*"; }
+die() { printf 'module-level: %s\n' "$*" >&2; exit 2; }
+
+case "$SSHB" in ''|*[!0-9]*) die "--ssh-timeout must be an integer" ;; esac
+[ -x "$HELPER" ] || die "no setup/module-manifest beside this script"
+CLONE="$(cd "${CLONE:-$SELF_DIR/..}" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null)" \
+  || die "the clone to compare with is not a git checkout"
+
+# ── read the box ────────────────────────────────────────────────────
+#
+# Hostname first: every player answers on 10.0.0.1, so nothing read before it can be trusted.
+
+PROGRAM='printf "HOST %s\n" "$(hostname)"
+M="${PITOOLS_MODULE_MANIFEST:-/etc/pi-tools-modules.txt}"
+if [ -r "$M" ]; then sed "s/^/LINE /" "$M"; else echo NOMANIFEST; fi'
+
+if [ -n "$FILE" ]; then
+  [ -r "$FILE" ] || die "manifest not readable: $FILE"
+  OUT="HOST (file)"$'\n'"$(sed 's/^/LINE /' "$FILE")"; rc=0; BOX="$FILE"
+elif [ "$HERE" = 1 ]; then
+  OUT="$(sh -c "$PROGRAM" 2>/dev/null)"; rc=$?; BOX="HERE (this machine)"
+else
+  command -v ssh >/dev/null 2>&1 || die "no ssh on this machine (--here reads locally)"
+  OUT="$(printf '%s\n' "$PROGRAM" | ssh -o BatchMode=yes -o ConnectTimeout="$SSHB" \
+          -o StrictHostKeyChecking=accept-new ${PROBE_SSH_KEY:+-i "$PROBE_SSH_KEY"} \
+          "$TARGET" 'sh -s' 2>/dev/null)"; rc=$?
+  BOX="$TARGET"
+fi
+
+HOST=""; NOMANIFEST=0
+declare -A FP=() AT=() SRC=()
+ORDER=()
+while IFS= read -r line; do
+  case "$line" in
+    "HOST "*)   HOST="${line#HOST }" ;;
+    NOMANIFEST) NOMANIFEST=1 ;;
+    "LINE "*)
+      read -r mod fp at src rest <<< "${line#LINE }"
+      case "$mod" in ''|'#'*|*[!A-Za-z0-9._-]*) continue ;; esac
+      case "$fp" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;; *) continue ;; esac
+      [ -n "${FP[$mod]:-}" ] || ORDER+=("$mod")
+      FP[$mod]="$fp"; AT[$mod]="${at:-?}"; SRC[$mod]="${src:--}" ;;
+  esac
+done <<< "${OUT:-}"
+
+# A dead transport is every module UNREAD, never every module clean or drifted.
+[ -n "$HOST" ] || die "the box did not answer (rc $rc) — nothing was read"
+
+head_sha="$(git -C "$CLONE" rev-parse --short HEAD)"
+branch="$(git -C "$CLONE" rev-parse --abbrev-ref HEAD)"
+say "== pi-tools module-level =="
+say "   box    : $BOX$([ "$HOST" = "(file)" ] || echo " — answered as $HOST")"
+say "   clone  : $CLONE ($branch @ $head_sha)"
+say ""
+
+if [ "${#ASKED[@]}" -gt 0 ]; then ROWS=("${ASKED[@]}"); else ROWS=(${ORDER[@]+"${ORDER[@]}"}); fi
+if [ "${#ROWS[@]}" -eq 0 ]; then
+  if [ "$NOMANIFEST" = 1 ]; then
+    echo "drift: UNKNOWN — no module manifest on this box: nothing was installed since it existed"
+  else
+    echo "drift: UNKNOWN — the manifest on this box lists no module"
+  fi
+  exit 2
+fi
+
+# ── compare with the clone ──────────────────────────────────────────
+
+fp_at()   { ( cd "$CLONE" && "$HELPER" fingerprint-at "$1" "$2" 2>/dev/null ); }
+commit_of() {   # newest commit in the clone (any branch) whose <module> matches <fp>
+  local mod="$1" want="$2" sha date
+  while read -r sha date; do
+    [ "$(fp_at "$sha" "$mod")" = "$want" ] && { echo "$sha $date"; return 0; }
+  done < <(git -C "$CLONE" log --all --format='%h %cs' -n 300 -- "$mod/")
+  return 1
+}
+
+DRIFT=(); UNREAD=(); RECORDED=0
+say "$(printf '%-18s %-6s %-16s %-36s %s' MODULE STATE INSTALLED 'BOX CARRIES' CLONE)"
+for mod in "${ROWS[@]}"; do
+  if [ ! -d "$CLONE/$mod" ]; then
+    mine="no such module"
+  else
+    wt="$("$HELPER" fingerprint "$CLONE/$mod" 2>/dev/null)"
+    [ "$wt" = "$(fp_at HEAD "$mod")" ] && mine="$head_sha" || mine="$head_sha+uncommitted"
+  fi
+  box="${FP[$mod]:-}"
+  if [ -z "$box" ]; then
+    state='?'; at='-'; carries="not recorded on the box"; UNREAD+=("$mod")
+  else
+    RECORDED=$((RECORDED + 1))
+    at="${AT[$mod]:0:16}"; at="${at/T/ }"
+    if [ "$mine" = "no such module" ]; then
+      state='?'; carries="${SRC[$mod]} (as the box says)"; UNREAD+=("$mod")
+    elif [ "$box" = "$wt" ]; then
+      state='='; carries="$mine"
+    else
+      state=drift; DRIFT+=("$mod")
+      carries="$(commit_of "$mod" "$box")" || carries="not in this clone (box: ${SRC[$mod]})"
+    fi
+  fi
+  say "$(printf '%-18s %-6s %-16s %-36s %s' "$mod" "$state" "$at" "$carries" "$mine")"
+done
+say ""
+
+# Exactly ONE `drift:` line, always the last one. `none` only when everything was read and matched.
+printf 'recorded: %d of %d\n' "$RECORDED" "${#ROWS[@]}"
+[ "${#UNREAD[@]}" -gt 0 ] && printf 'unread: %s\n' "${UNREAD[*]}"
+if [ "${#UNREAD[@]}" -gt 0 ]; then
+  if [ "${#DRIFT[@]}" -gt 0 ]; then
+    printf 'drift: %s — and %d of %d could not be read, so this is not a full answer\n' \
+           "${DRIFT[*]}" "${#UNREAD[@]}" "${#ROWS[@]}"
+  else
+    printf 'drift: UNKNOWN — %d of %d could not be read, so this is not a clean answer\n' \
+           "${#UNREAD[@]}" "${#ROWS[@]}"
+  fi
+  exit 2
+fi
+if [ "${#DRIFT[@]}" -gt 0 ]; then
+  printf 'drift: %s\n' "${DRIFT[*]}"
+  exit 1
+fi
+echo "drift: none"

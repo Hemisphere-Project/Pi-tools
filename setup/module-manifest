@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# module-manifest — what each module's last install pass actually laid down on THIS box.
+#
+#   module-manifest record <module> <module-dir>   rewrite <module>'s line (install.sh calls this)
+#   module-manifest fingerprint <module-dir>       print the fingerprint, write nothing
+#   module-manifest fingerprint-at <rev> <module>  the same, for <module> as committed at <rev>
+#                                                  (run inside a checkout — the laptop side)
+#   module-manifest show                           print the manifest
+#
+# A round that deploys one module per player, while that module is being fixed, leaves each box on
+# whatever the module was when ITS pass ran — and nothing on the box says which (pi-tools#t-047:
+# usbfix corrected three times during a six-player round on 22/09, caught by hand at the end). So
+# every install pass records one line in /etc/pi-tools-modules.txt:
+#
+#   <module> <fingerprint> <installed-at> <source>
+#
+# FINGERPRINT is the identity, and it is a CONTENT hash, not a commit: 12 hex of sha1 over the
+# sorted `<git-blob-id> <path>` lines of the module directory's files. Field deployers copy a
+# laptop's working tree onto the box, so the box's own `git HEAD` says nothing about what the
+# module directory holds — but the same content always gives the same fingerprint, so
+# `bench/module-level` can find the commit that produced it in the laptop's clone (`git ls-tree`
+# gives the blob ids without hashing anything).
+#
+# SOURCE is a hint for reading the box alone: the checkout's short HEAD, `+dirty` when the module
+# directory differs from it (loose files copied over the checkout), `-` outside a checkout.
+#
+# Files are listed the way git sees the directory: tracked + untracked-not-ignored inside a
+# checkout, everything but __pycache__/node_modules/.venv/*.pyc outside one. The manifest is
+# written to a temp file and moved over, and the root must be writable (`rw`) — install passes
+# run there anyway. A failure warns and exits 1; install.sh calls it with `|| true`, because a
+# module must never fail to install over its own receipt. The reader shows an unrecorded module
+# as `?`, never as matching.
+#
+# PITOOLS_MODULE_MANIFEST overrides the manifest path (tests, a card mounted in a reader).
+set -uo pipefail
+
+MANIFEST="${PITOOLS_MODULE_MANIFEST:-/etc/pi-tools-modules.txt}"
+
+die() { printf 'module-manifest: %s\n' "$*" >&2; exit 1; }
+
+list_files() {   # NUL-separated paths relative to the current directory
+  if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git ls-files -z -co --exclude-standard -- .
+  else
+    find . -type f ! -path '*/__pycache__/*' ! -path '*/node_modules/*' ! -path '*/.venv/*' \
+      ! -name '*.pyc' -printf '%P\0'
+  fi
+}
+
+blob_id() { { printf 'blob %s\0' "$(stat -c %s "$1")"; cat "$1"; } | sha1sum | cut -d' ' -f1; }
+
+fingerprint() {
+  [ -d "$1" ] || die "not a directory: $1"
+  ( cd "$1" || exit 1
+    list_files | while IFS= read -r -d '' f; do
+      [ -f "$f" ] || continue          # tracked but deleted on disk
+      printf '%s %s\n' "$(blob_id "$f")" "$f"
+    done | LC_ALL=C sort | sha1sum | cut -c1-12 )
+}
+
+fingerprint_at() {   # same lines, blob ids straight from the tree — nothing is hashed but the list
+  local rev="$1" mod="$2" l meta
+  git rev-parse -q --verify "$rev:$mod" >/dev/null 2>&1 || die "no $mod at $rev"
+  git ls-tree -r -z "$rev" -- "$mod/" | while IFS= read -r -d '' l; do
+    meta=${l%%$'\t'*}
+    printf '%s %s\n' "${meta##* }" "${l#*$'\t'"$mod"/}"
+  done | LC_ALL=C sort | sha1sum | cut -c1-12
+}
+
+source_of() {
+  ( cd "$1" 2>/dev/null || { echo -; exit 0; }
+    head=$(git rev-parse --short HEAD 2>/dev/null) || { echo -; exit 0; }
+    [ -z "$(git status --porcelain -- . 2>/dev/null)" ] && echo "$head" || echo "$head+dirty" )
+}
+
+record() {
+  local mod="$1" dir="$2" fp src tmp
+  case "$mod" in ''|*[!A-Za-z0-9._-]*) die "bad module name: '$mod'" ;; esac
+  fp=$(fingerprint "$dir") || die "$mod: could not fingerprint $dir — not recorded"
+  src=$(source_of "$dir")
+  tmp=$(mktemp "$MANIFEST.XXXXXX" 2>/dev/null) \
+    || die "$mod: cannot write beside $MANIFEST (read-only root? run under rw) — not recorded"
+  {
+    echo "# Pi-tools module manifest — one line per module, rewritten by its own install pass."
+    echo "# <module> <fingerprint> <installed-at> <source>  ·  read it with bench/module-level"
+    [ -f "$MANIFEST" ] && grep -v -e '^#' -e "^$mod " "$MANIFEST"
+    printf '%s %s %s %s\n' "$mod" "$fp" "$(date -Is)" "$src"
+  } | { read -r h1; read -r h2; printf '%s\n%s\n' "$h1" "$h2"; LC_ALL=C sort; } > "$tmp" \
+    && chmod 644 "$tmp" && mv -f "$tmp" "$MANIFEST" \
+    || { rm -f "$tmp"; die "$mod: writing $MANIFEST failed — not recorded"; }
+  echo "$mod: recorded $fp ($src) in $MANIFEST"
+}
+
+case "${1:-}" in
+  record)      [ $# -eq 3 ] || die "usage: module-manifest record <module> <module-dir>"; record "$2" "$3" ;;
+  fingerprint) [ $# -eq 2 ] || die "usage: module-manifest fingerprint <module-dir>"; fingerprint "$2" ;;
+  fingerprint-at) [ $# -eq 3 ] || die "usage: module-manifest fingerprint-at <rev> <module>"
+               fingerprint_at "$2" "$3" ;;
+  show)        cat "$MANIFEST" ;;
+  *)           sed -n '2,8p' "$0" | sed 's/^# \?//'; exit 2 ;;
+esac

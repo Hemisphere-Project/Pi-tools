@@ -130,3 +130,6 @@ else
     echo "audiohub: NO hub graph for $(uname -m) — forwarders left DISABLED (would"
     echo "          crash-loop). Provide an asound.conf hub graph and re-run."
 fi
+
+# What this pass laid down (#t-047) — read by bench/module-level
+bash "$BASEPATH/../setup/module-manifest" record audiohub "$BASEPATH" || true

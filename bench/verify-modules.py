@@ -11,7 +11,11 @@ So, per module.ini (parsed with configparser, exactly as the installer does):
 
   * every path in files.bins / files.services / files.timers / files.udev_rules
     exists in the module directory
-  * `script = yes` implies an install.sh
+  * `script = yes` implies an install.sh, and that install.sh records the module
+    in the box's manifest (`setup/module-manifest record <module>`, #t-047) —
+    the installer records the standard path itself, but field deployers run
+    install.sh directly, and a module that never records reads `?` in
+    bench/module-level forever
   * `npm = yes` implies a package.json (utils.npm_install runs npm there)
   * platforms names only tokens check_platform knows — anything else is not a
     platform, it is a module that silently skips on every machine
@@ -33,6 +37,7 @@ and, past it, a bench.
 """
 
 import ast
+import re
 import configparser
 import os
 import sys
@@ -100,9 +105,16 @@ for entry in sorted(os.listdir(ROOT)):
             f'{entry}/module.ini: platforms {sorted(unknown)} — '
             f'not in {sorted(PLATFORMS)}, so the module installs nowhere')
 
-    if ini.getboolean('install', 'script', fallback=False) \
-            and not os.path.isfile(os.path.join(module_dir, 'install.sh')):
-        errors.append(f'{entry}/module.ini: script = yes but {entry}/install.sh is missing')
+    if ini.getboolean('install', 'script', fallback=False):
+        script = os.path.join(module_dir, 'install.sh')
+        if not os.path.isfile(script):
+            errors.append(f'{entry}/module.ini: script = yes but {entry}/install.sh is missing')
+        else:
+            with open(script, encoding='utf-8') as fh:
+                body = fh.read()
+            if not re.search(rf'module-manifest"?\s+record\s+{re.escape(entry)}\s', body):
+                errors.append(f'{entry}/install.sh never runs `setup/module-manifest record {entry}`'
+                              ' — the box would carry it unrecorded')
 
     if ini.getboolean('files', 'npm', fallback=False) \
             and not os.path.isfile(os.path.join(module_dir, 'package.json')):
