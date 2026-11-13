@@ -19,8 +19,15 @@ made fully public / widely forked; or any deployment handling data that matters 
 
 ### 1. Committed Wi-Fi PSKs (network profiles)
 
-WPA-PSK values are committed in NetworkManager keyfiles (and in history). These are real
-venue/hotspot passwords, not placeholders.
+**Remediated in the tree, 2026-11-13 (RastaOS-7.5 network defaults, pi-tools#t-055):** the
+five files below left `network-tools/profiles/`; no PSK value remains in any tracked file.
+The values **stay in git history** (no rewrite: a force push is off the table), so the
+venue and fleet-hotspot passwords are still readable by anyone with the repo — rotating
+them is the owner's call, out of band. Site Wi-Fi profiles now live in the per-site
+`/boot` role sets, outside Pi-tools. The table is kept as the record of what was exposed.
+
+WPA-PSK values were committed in NetworkManager keyfiles (and remain in history). These
+are real venue/hotspot passwords, not placeholders.
 
 | File | Identity | PSK at | Note |
 |------|----------|--------|------|
@@ -88,7 +95,7 @@ hostname charset and reject newlines server-side.
 | Item | Location | Default |
 |------|----------|---------|
 | Root password | `setup/config.py:11`, `setup/bootstrap.py:128` | `rootpi` |
-| Hotspot password | `setup/config.py:16` | `raspberry` |
+| Hotspot password | `setup/config.py` (`hotspot_password`) | `raspberry` — moot unless `hotspot = yes`: the hotspot is off by default since RastaOS-7.5 (2026-11-13) |
 
 _Exposure:_ known-by-default SSH root login + AP password across the fleet unless overridden
 in `pitools.txt`. This is an intentional convenience default; the exposure is only real when

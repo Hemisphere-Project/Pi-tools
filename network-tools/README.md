@@ -57,21 +57,30 @@ reachable over `fe80::…%<laptop-iface>` with no DHCP at all. Never write
 `ipv6.method=disabled` in a profile: NM < 1.20 (Buster's 1.14) rejects the value
 and silently voids the whole profile — use `ignore`.
 
-## Hotspot
+## Hotspot — off by default
 
-The internal Wi-Fi is renamed **`wint`** and runs an AP (`wint-hotspot.nmconnection`,
-`10.0.0.1/16`, dnsmasq serves DHCP). Set `hotspot = no` in `pitools.txt` to skip
-it. On **x86** the installer strips the 5 GHz pin (Intel radios refuse AP on
-5 GHz) so NM falls back to 2.4 GHz. The hotspot SSID follows the hostname — change
-it with `hostrename <name>`.
+RastaOS-7.5 (decided 2026-11-13): a fresh card raises **no AP**; its first start
+is configured over Ethernet (above). Set `hotspot = yes` (and your own
+`hotspot_password`) in `pitools.txt` and the installer generates
+`wint-hotspot.nmconnection` on the boot partition: the internal Wi-Fi, renamed
+**`wint`**, runs an AP (`10.0.0.1/16`, dnsmasq serves DHCP). The hotspot SSID
+follows the hostname — change it with `hostrename <name>`. On **x86** the
+installer strips a 5 GHz pin from an older profile (Intel radios refuse AP on
+5 GHz) so NM falls back to 2.4 GHz.
+
+**No PSK lives in this tree.** The fleet hotspot template and the venue profiles
+that carried real passwords left `profiles/` (they stay in git history; rotating
+them is an owner call). A site's Wi-Fi profiles belong to its `/boot` role set,
+kept with the site's secrets outside Pi-tools, dropped into the boot `wifi/` folder.
 
 ## Sync-role profiles (`profiles/_disabled/`)
 
 The four `eth0-sync-*` / `wlan0-sync-*` keyfiles are **templates for stamping a
 sync card**, not defaults. The installer's profile copy skips subdirectories, so
-`_disabled/` never reaches a card by itself — a card gets `eth0-dhcp` +
-`wint-hotspot`, and you make it a sync card by hand-moving the AP or the STA pair
-into `/boot/firmware/wifi/`.
+`_disabled/` never reaches a card by itself — a card gets `eth0-dhcp` (plus
+`wint-hotspot` when `hotspot = yes`), and you make it a sync card by hand-moving
+the AP or the STA pair into `/boot/firmware/wifi/`, or with webconf's SYNC panel,
+which takes the template from the card's `wifi/_disabled/` else from this folder.
 
 - All four carry **`autoconnect-priority=10`**. A card stamped from the golden
   image still has its `eth0-dhcp` profile, which has no priority key (= `0`), and

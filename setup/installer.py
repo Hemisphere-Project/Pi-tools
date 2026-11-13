@@ -218,10 +218,10 @@ def hook_network_tools(module_dir, platinfo, cfg):
     wifi_dir = os.path.join(boot_dir, 'wifi')
     os.makedirs(wifi_dir, exist_ok=True)
 
-    # Honor hotspot=no: never seed an always-on AP profile. The shipped
-    # *-hotspot.nmconnection has autoconnect=true, so copying it would bring up a
-    # hotspot (with the default PSK) even when the operator disabled it.
-    hotspot_enabled = cfg.get('network', 'hotspot', fallback='yes') == 'yes'
+    # Honor hotspot=no: never seed an always-on AP profile from profiles/. None
+    # ships since RastaOS-7.5 (the tree holds no PSK; setup_wifi_from_config
+    # generates wint-hotspot from pitools.txt), so this guards a stray template.
+    hotspot_enabled = cfg.get('network', 'hotspot', fallback='no') == 'yes'
 
     # Copy default profiles
     profiles_dir = os.path.join(module_dir, 'profiles')
@@ -237,8 +237,8 @@ def hook_network_tools(module_dir, platinfo, cfg):
             if not os.path.exists(dst):
                 shutil.copy2(src, dst)
 
-    # x86: the wint-hotspot template pins 5GHz (band=a/chan36 — tuned on the Pi's
-    # Broadcom). Intel iwlwifi refuses AP on 5GHz until LAR regulatory settles and
+    # x86: a wint-hotspot profile from an older image pins 5GHz (band=a/chan36 —
+    # tuned on the Pi's Broadcom). Intel iwlwifi refuses AP on 5GHz until LAR regulatory settles and
     # NM then fails the whole hotspot (N100 pilot 2026-07-21); strip the pin so NM
     # falls back to 2.4GHz — the proven 2024 behaviour.
     if platinfo['is_x86']:
@@ -379,8 +379,10 @@ def setup_wifi_from_config(cfg, platinfo):
     wifi_dir = os.path.join(boot_dir, 'wifi')
     os.makedirs(wifi_dir, exist_ok=True)
 
-    # Hotspot AP profile (SSID = hostname)
-    if cfg.get('network', 'hotspot', fallback='yes') == 'yes':
+    # Hotspot AP profile (SSID = hostname) — only when pitools.txt asks for it
+    # (off by default since RastaOS-7.5). The one hotspot source: no hotspot
+    # template ships in network-tools/profiles/, so no PSK is committed.
+    if cfg.get('network', 'hotspot', fallback='no') == 'yes':
         hostname = cfg.get('system', 'hostname', fallback='') or 'pitools'
         hotspot_pw = cfg.get('network', 'hotspot_password', fallback='raspberry')
         hotspot_file = os.path.join(wifi_dir, 'wint-hotspot.nmconnection')
@@ -402,7 +404,7 @@ def setup_wifi_from_config(cfg, platinfo):
                         f"address1=10.0.0.1/16,10.0.0.1\n"
                         f"method=manual\n\n"
                         f"[ipv6]\n"
-                        f"method=disabled\n")
+                        f"method=ignore\n")
             os.chmod(hotspot_file, 0o600)
             ui.success(f"Hotspot profile created: {hostname} (wint)")
 
@@ -435,7 +437,7 @@ def setup_wifi_from_config(cfg, platinfo):
                         f"[ipv4]\n"
                         f"method=auto\n\n"
                         f"[ipv6]\n"
-                        f"method=disabled\n")
+                        f"method=ignore\n")
             os.chmod(filepath, 0o600)
             ui.success(f"WiFi profile created: {ssid}")
 

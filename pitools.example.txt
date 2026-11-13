@@ -32,8 +32,11 @@
 # wifi_1 = MyNetwork=password123
 # wifi_2 = Gallery=artshow2024
 
-# Enable hotspot (SSID = hostname)
-# hotspot = yes
+# Hotspot (SSID = hostname). OFF by default since RastaOS-7.5: a fresh card is
+# configured over Ethernet (eth0 DHCP, or IPv6 link-local fe80::...%<iface>).
+# Set yes to have the installer generate wint-hotspot.nmconnection — and set
+# your own password: the default below is public.
+# hotspot = no
 # hotspot_password = raspberry
 
 [modules]
