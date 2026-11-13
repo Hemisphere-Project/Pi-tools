@@ -1,0 +1,172 @@
+#!/usr/bin/env bash
+# rastaos-bake — the RastaOS-7.5 recipe: converge a booted 7.4 card into the 7.5 golden, the card
+# that is then captured (dd) and burned fresh. Every change made to the bench card lives here, so the
+# image can be rebuilt instead of only copied (rastaos 13/11: "a recipe can be re-run, a capture cannot").
+#
+#   sudo image/rastaos-bake                      # on the card itself (root = /), as root
+#   sudo image/rastaos-bake --root /mnt/p2 --boot /mnt/p1   # offline, on a mounted card or .img
+#   image/rastaos-bake --list                    # the steps, in order
+#   sudo image/rastaos-bake --only dns,wifi      # a subset (comma-separated step names)
+#
+# Idempotent: a second run changes nothing and says so. Each step names the defect it removes.
+# Steps so far (pi-tools#t-058; later slices add converge / strip / identity / p4):
+#   stamps   /etc/rastaos-patches.txt: the 7.4 bake stacked one anna74 line per run (5 on bench-01);
+#            keep its LAST one and every older line, then ONE rastaos75 line (replaced, never stacked).
+#   version  /boot/VERSION = 7.5. On 7.4 it still read "7.0 -- bootstraped from …", so nothing on a
+#            card said 7.3 or 7.4 — and the burn rules read that file.
+#   units    mask fake-hwclock (rorw's fake-clock keeps the clock; both ran on 7.4), rpi-eeprom-update
+#            (a Pi 3 has no EEPROM; no firmware writes at a show), nfs-client.target, rsync.service.
+#   rtc      the DS3231 overlay goes off by default: a board without the RTC logged "rtc-ds1307 probe
+#            failed -5" at every boot. Per card: uncomment the line in config.txt.
+#   dns      static /etc/resolv.conf on public resolvers + NM dns=none (knowledge: openresolv pointed
+#            it at 127.0.0.1 → no DNS → no datesync/apt/git). Live root also purges openresolv/resolvconf.
+#   wifi     /boot/wifi and the NM store lose wint-hotspot.nmconnection (it carries the fleet hotspot
+#            PSK: hotspot off is only an installer default, a converged 7.4 card still held it) and the
+#            store loses the _anna74-removed dir (NM "keyfile: error loading connection" every boot).
+#
+# Exit 0 done (or nothing to do), 1 a step failed, 2 usage / not a RastaOS root.
+set -uo pipefail
+
+ROOT=/ BOOT="" ONLY="" LIVE=0
+STEPS="stamps version units rtc dns wifi"
+HERE=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
+STAMP=rastaos75
+MASK_UNITS="fake-hwclock.service rpi-eeprom-update.service nfs-client.target rsync.service"
+
+say()  { echo "[bake] $*"; }
+die()  { echo "[bake] FATAL: $*" >&2; exit "${2:-1}"; }
+CHANGED=0
+did()  { CHANGED=$((CHANGED + 1)); say "  $*"; }
+
+usage() { sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --root) ROOT=${2:?--root DIR}; shift 2 ;;
+    --boot) BOOT=${2:?--boot DIR}; shift 2 ;;
+    --only) ONLY=${2:?--only step,step}; shift 2 ;;
+    --list) for s in $STEPS; do echo "$s"; done; exit 0 ;;
+    -h|--help) usage ;;
+    *) echo "unknown argument: $1" >&2; usage ;;
+  esac
+done
+ROOT=${ROOT%/}; [ -z "$ROOT" ] && ROOT=/
+[ "$ROOT" = / ] && LIVE=1
+[ -n "$BOOT" ] || { [ "$ROOT" = / ] && BOOT=/boot || BOOT=$ROOT/boot; }
+r() { [ "$ROOT" = / ] && echo "$1" || echo "$ROOT$1"; }    # path inside the target root
+
+[ -d "$(r /etc)" ] || die "$ROOT has no /etc: not a root filesystem" 2
+[ -f "$BOOT/config.txt" ] || die "$BOOT/config.txt missing: pass --boot <the card's p1>" 2
+[ "$LIVE" = 0 ] || [ "$(id -u)" = 0 ] || die "on a live card this runs as root" 2
+if [ -n "$ONLY" ]; then
+  for s in ${ONLY//,/ }; do case " $STEPS " in *" $s "*) ;; *) die "unknown step: $s (see --list)" 2 ;; esac; done
+fi
+
+REV=$(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo unknown)
+
+# --- live root on rorw is read-only: open it for the bake, close it after (rorw's own counter).
+RW_OPENED=0
+if [ "$LIVE" = 1 ] && findmnt -rno OPTIONS / | tr , '\n' | grep -qx ro; then
+  command -v rw >/dev/null || die "root is read-only and rorw's rw is absent"
+  rw >/dev/null || die "rw failed"; RW_OPENED=1
+fi
+cleanup() { [ "$RW_OPENED" = 1 ] && { sync; ro >/dev/null 2>&1 || say "WARN: ro failed — root left writable"; }; }
+trap cleanup EXIT
+
+# ---------------------------------------------------------------- steps
+step_stamps() {
+  local f; f=$(r /etc/rastaos-patches.txt)
+  local tmp; tmp=$(mktemp)
+  # keep every line except the anna74 ones before the last, and any previous rastaos75 line
+  local last_anna; last_anna=$(grep -n '^anna74 ' "$f" 2>/dev/null | tail -1 | cut -d: -f1)
+  if [ -f "$f" ]; then
+    awk -v last="${last_anna:-0}" -v st="$STAMP" '
+      $1 == "anna74" && NR != last { next }
+      $1 == st { next }
+      { print }' "$f" > "$tmp"
+  fi
+  echo "$STAMP $(date +%F): RastaOS-7.5 from 7.4 — Pi-tools image/rastaos-bake@$REV (steps: $STEPS)" >> "$tmp"
+  # idempotent: compare without the date/rev of our own line
+  if [ -f "$f" ] && diff -q <(grep -v "^$STAMP " "$f") <(grep -v "^$STAMP " "$tmp") >/dev/null \
+     && [ "$(grep -c "^$STAMP " "$f")" = 1 ]; then
+    rm -f "$tmp"; return 0
+  fi
+  local before; before=$(grep -c '^anna74 ' "$f" 2>/dev/null)
+  install -m 644 "$tmp" "$f"; rm -f "$tmp"
+  did "stamps: anna74 lines ${before:-0} → $(grep -c '^anna74 ' "$f"), one $STAMP line"
+}
+
+step_version() {
+  local f=$BOOT/VERSION
+  if [ -f "$f" ] && head -1 "$f" | grep -q '^7\.5 -- '; then return 0; fi
+  local was; was=$(head -1 "$f" 2>/dev/null | cut -c1-60)
+  printf '7.5 -- RastaOS-7.5, baked from a 7.4 card by Pi-tools image/rastaos-bake@%s\n' "$REV" > "$f"
+  did "version: /boot/VERSION '${was:-absent}' → 7.5"
+}
+
+step_units() {
+  local S u w; S=$(r /etc/systemd/system)
+  mkdir -p "$S"
+  for u in $MASK_UNITS; do
+    for w in "$S"/*.wants/"$u" "$S"/*.requires/"$u"; do
+      [ -e "$w" ] || [ -L "$w" ] || continue
+      rm -f "$w"; did "units: $u unwired from $(basename "$(dirname "$w")")"
+    done
+    if [ "$(readlink "$S/$u" 2>/dev/null)" != /dev/null ]; then
+      [ -e "$S/$u" ] && [ ! -L "$S/$u" ] && { say "WARN: $S/$u is a real file, not masking it"; continue; }
+      ln -sfn /dev/null "$S/$u"; did "units: $u masked"
+    fi
+  done
+  # fake-hwclock's hourly save writes /etc on a read-only root: it can only fail
+  local c; c=$(r /etc/cron.hourly/fake-hwclock)
+  [ -e "$c" ] && { rm -f "$c"; did "units: cron.hourly/fake-hwclock removed"; }
+  [ "$LIVE" = 1 ] && [ "$CHANGED" -gt 0 ] && systemctl daemon-reload 2>/dev/null
+  return 0
+}
+
+step_rtc() {
+  local f=$BOOT/config.txt
+  grep -qE '^[[:space:]]*dtoverlay=i2c-rtc' "$f" || return 0
+  sed -i -E 's/^[[:space:]]*(dtoverlay=i2c-rtc.*)$/#\1    # per card: uncomment on a board WITH the DS3231 (rastaos 7.5)/' "$f"
+  did "rtc: i2c-rtc overlay commented out in config.txt (per card)"
+}
+
+step_dns() {
+  local f want=$'nameserver 1.1.1.1\nnameserver 1.0.0.1'; f=$(r /etc/resolv.conf)
+  if [ "$LIVE" = 1 ]; then
+    local p; for p in openresolv resolvconf; do
+      dpkg -s "$p" >/dev/null 2>&1 && { DEBIAN_FRONTEND=noninteractive dpkg --purge "$p" >/dev/null && did "dns: $p purged"; }
+    done
+  fi
+  if [ -L "$f" ] || [ "$(cat "$f" 2>/dev/null)" != "$want" ]; then
+    rm -f "$f"; printf '%s\n' "$want" > "$f"; chmod 644 "$f"
+    did "dns: static resolv.conf (1.1.1.1, 1.0.0.1)"
+  fi
+  local nm; nm=$(r /etc/NetworkManager)
+  if ! grep -qsx 'dns=none' "$nm/NetworkManager.conf" "$nm"/conf.d/*.conf; then
+    mkdir -p "$nm/conf.d"; printf '[main]\ndns=none\n' > "$nm/conf.d/90-rastaos-dns.conf"
+    did "dns: NetworkManager dns=none (conf.d/90-rastaos-dns.conf)"
+  fi
+}
+
+step_wifi() {
+  local p; for p in "$BOOT/wifi/wint-hotspot.nmconnection" \
+                    "$(r /etc/NetworkManager/system-connections/wint-hotspot.nmconnection)"; do
+    [ -e "$p" ] && { rm -f "$p"; did "wifi: $p removed (fleet hotspot PSK; hotspot off by default)"; }
+  done
+  local d; d=$(r /etc/NetworkManager/system-connections/_anna74-removed)
+  [ -d "$d" ] && { rm -rf "$d"; did "wifi: NM store _anna74-removed/ removed"; }
+  return 0
+}
+
+# ---------------------------------------------------------------- run
+say "RastaOS-7.5 bake @ $REV — root $ROOT, boot $BOOT$([ "$LIVE" = 1 ] && echo ' (live)')"
+rc=0
+for s in $STEPS; do
+  if [ -n "$ONLY" ]; then case ",$ONLY," in *",$s,"*) ;; *) continue ;; esac; fi
+  before=$CHANGED
+  "step_$s" || { say "step $s FAILED"; rc=1; continue; }
+  [ "$CHANGED" = "$before" ] && say "$s: already done"
+done
+[ "$rc" = 0 ] && say "done — $CHANGED change(s)" || say "finished with a failed step"
+exit "$rc"
