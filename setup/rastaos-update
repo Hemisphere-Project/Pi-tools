@@ -13,13 +13,18 @@
 # this moves it, so a box says what it runs in one read:
 #
 #   /etc/rastaos-release     the RECEIPT — KEY=value lines (shell-sourceable):
-#                              RASTAOS_TAG  PITOOLS_COMMIT  UPDATED_AT  SOURCE  PREVIOUS
+#                              RASTAOS_TAG  PITOOLS_COMMIT  UPDATED_AT  SOURCE  PREVIOUS  MODULES
 #   refs/rastaos/rollback    the ROLLBACK POINT — a ref in the checkout naming the commit the box
 #                            ran before the last move. It also keeps that commit reachable: the 7.4
 #                            golden's six image-only commits exist on no origin branch, and a bare
 #                            detached checkout would leave them to `git gc`.
 #   /etc/rastaos-release.prev  the receipt that went with the rollback point (absent on a box that
 #                            never had one — 7.4 has none).
+#
+# MODULES: after a move it runs setup/converge.py from the NEW checkout — the box's installed
+# modules re-applied for its platform (x86 skips RPi-only ones), see that file. MODULES=ok|failed|
+# none (the tag predates converge.py, or RASTAOS_NO_CONVERGE). A `failed` receipt is never "already
+# there": the next run converges again.
 #
 # IDEMPOTENT by construction: when HEAD is already the tag's commit and the receipt already says
 # so, the run prints `already at <tag>` and writes nothing — not the receipt, not the rollback
@@ -38,10 +43,10 @@
 #
 # Exit: 0 converged or already there · 1 usage · 2 not root / no checkout · 3 refused · 4 fetch
 # failed · 5 a git step failed mid-way (the receipt is not written, the rollback point names
-# where the box was).
+# where the box was) · 6 moved, but a module failed to converge (the receipt says MODULES=failed).
 #
 # Overrides (tests, a card in a reader): PITOOLS_DIR, RASTAOS_RELEASE, RASTAOS_LOCK,
-# RASTAOS_REMOTE (default origin), RASTAOS_NO_RORW=1, RASTAOS_ALLOW_NONROOT=1.
+# RASTAOS_REMOTE (default origin), RASTAOS_NO_RORW=1, RASTAOS_ALLOW_NONROOT=1, RASTAOS_NO_CONVERGE=1.
 set -uo pipefail
 
 if [ -z "${RASTAOS_UPDATE_COPY:-}" ]; then
@@ -159,8 +164,9 @@ fi
 
 rec_tag=$(receipt_get "$RELEASE" RASTAOS_TAG)
 rec_commit=$(receipt_get "$RELEASE" PITOOLS_COMMIT)
+rec_modules=$(receipt_get "$RELEASE" MODULES)
 if [ "$head" = "$target" ] && [ "$rec_tag" = "$target_tag" ] && [ "$rec_commit" = "$target" ] \
-   && [ "$force" = 0 ]; then
+   && [ "$rec_modules" != failed ] && [ "$force" = 0 ]; then
     say "already at $target_tag ($(short "$target")) — nothing to do"
     exit 0
 fi
@@ -183,7 +189,7 @@ if [ -z "${RASTAOS_NO_RORW:-}" ] && command -v rw >/dev/null 2>&1 && command -v 
     trap 'rm -f "$RASTAOS_UPDATE_COPY"; [ $took_rw = 1 ] && ro >/dev/null' EXIT
 fi
 
-write_receipt() {   # write_receipt <tag> <commit> <source> <previous>
+write_receipt() {   # write_receipt <tag> <commit> <source> <previous> <modules>
     local tmp
     tmp=$(mktemp "$(dirname "$RELEASE")/.rastaos-release.XXXXXX") || return 1
     {
@@ -192,6 +198,7 @@ write_receipt() {   # write_receipt <tag> <commit> <source> <previous>
         printf 'UPDATED_AT=%s\n' "$(date -Iseconds)"
         printf 'SOURCE=%s\n' "$3"
         printf 'PREVIOUS=%s\n' "$4"
+        printf 'MODULES=%s\n' "$5"
     } > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$RELEASE"
 }
 
@@ -210,10 +217,23 @@ if [ $move = 1 ]; then
         || die 5 "checkout of $(short "$target") failed — the box is still on $(short "$head") (rollback point set)"
 fi
 
-# Module convergence (re-run the box's installed modules for its platform) lands in the next
-# slice of pi-tools#t-057; until then a move updates the checkout and the receipt only.
+# Modules: on a move, a --force, or a receipt that says the last convergence failed.
+modules=${rec_modules:-none}; rc=0
+if [ $move = 1 ] || [ "$force" = 1 ] || [ "$rec_modules" = failed ]; then
+    if [ -n "${RASTAOS_NO_CONVERGE:-}" ]; then
+        modules=none
+    elif [ -f "$PITOOLS_DIR/setup/converge.py" ]; then
+        say "re-applying this box's modules (setup/converge.py)"
+        if python3 "$PITOOLS_DIR/setup/converge.py"; then modules=ok; else modules=failed; rc=6; fi
+    else
+        say "$target_tag predates setup/converge.py — modules not re-run"
+        modules=none
+    fi
+fi
 
 prev="${rec_tag:-$(short "$head")}"
-write_receipt "$target_tag" "$target" "$source" "$prev" || die 5 "could not write $RELEASE"
-say "at $target_tag ($(short "$target")) — receipt $RELEASE$([ $move = 1 ] && echo ", rollback point $(short "$head")")"
-exit 0
+[ $move = 0 ] && [ -n "$rec_tag" ] && prev=$(receipt_get "$RELEASE" PREVIOUS)
+write_receipt "$target_tag" "$target" "$source" "$prev" "$modules" || die 5 "could not write $RELEASE"
+say "at $target_tag ($(short "$target")) — receipt $RELEASE$([ $move = 1 ] && echo ", rollback point $(short "$head")"), modules: $modules"
+[ $rc = 0 ] || say "a module failed to converge — fix it, then run again (the receipt says MODULES=failed)"
+exit $rc

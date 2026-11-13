@@ -22,7 +22,7 @@ check(){ local what=$1; shift; if "$@"; then ok "$what"; else bad "$what"; fi; }
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 export GIT_CONFIG_NOSYSTEM=1 HOME="$T/home"; mkdir -p "$HOME"
 export RASTAOS_RELEASE="$T/etc/rastaos-release" RASTAOS_LOCK="$T/lock" \
-       RASTAOS_NO_RORW=1 RASTAOS_ALLOW_NONROOT=1 TMPDIR="$T"
+       RASTAOS_NO_RORW=1 RASTAOS_ALLOW_NONROOT=1 RASTAOS_NO_CONVERGE=1 TMPDIR="$T"
 mkdir -p "$T/etc"
 
 git init -q "$T/origin"
@@ -106,6 +106,55 @@ check "status prints the receipt" grep -q '^RASTAOS_TAG=rastaos-7.5.1' "$T/out"
 
 # 9. the copy on TMPDIR is cleaned up
 check "no leftover self-copies" [ -z "$(ls "$T" | grep '^rastaos-update\.')" ]
+
+# 10. module convergence: a failing converge.py on the tag -> exit 6, MODULES=failed, and the next
+#     run converges again instead of saying "already at"
+o checkout -q --detach rastaos-7.5.1 2>/dev/null; o checkout -q -B main 2>/dev/null
+printf 'import sys; sys.exit(int(open("%s").read()))\n' "$T/conv-rc" > "$T/origin/setup/converge.py"
+echo 1 > "$T/conv-rc"
+o add setup/converge.py; o commit -q -m conv -- setup/converge.py; o tag rastaos-7.6
+unset RASTAOS_NO_CONVERGE
+run rastaos-7.6 >"$T/out" 2>&1; rc=$?
+check "failed convergence: exit 6" [ $rc = 6 ]
+check "failed convergence is in the receipt" grep -qx "MODULES=failed" "$RASTAOS_RELEASE"
+echo 0 > "$T/conv-rc"
+run rastaos-7.6 >"$T/out" 2>&1; rc=$?
+check "after a failure the next run converges again" grep -q 're-applying' "$T/out"
+check "  and records MODULES=ok" grep -qx "MODULES=ok" "$RASTAOS_RELEASE"
+check "  keeping PREVIOUS" grep -qx "PREVIOUS=rastaos-7.5.1" "$RASTAOS_RELEASE"
+run rastaos-7.6 >"$T/out" 2>&1
+check "then a run is a no-op again" grep -q 'already at rastaos-7.6' "$T/out"
+
+# 11. converge.py --plan on a fake checkout + box: what is re-applied, per platform
+P="$T/pt"; R="$T/root"; mkdir -p "$P/setup" "$R/usr/local/bin" "$R/etc/systemd/system" "$R/etc"
+cp "$here/setup/converge.py" "$P/setup/"
+mod() { mkdir -p "$P/$1"; printf '%s\n' "[module]" "name = $1" "platforms = $2" "$3" > "$P/$1/module.ini"; }
+mod rorw     pi,x86 $'[install]\nscript = yes'
+mod usbfix   pi     $'[install]\nscript = yes\nrerun = yes'
+mod linkwatch pi    $'[install]\nscript = yes\nrerun = yes'
+mod splash   pi,x86 $'[install]\nscript = yes\nrerun = yes'
+mod webconf  pi,x86 $'[files]\nbins = webconf\nservices = webconf.service'
+mod synczinc pi,x86 $'[files]\nbins = synczinc newbin'
+mod xrun     pi,x86 $'[files]\nbins = xrun'
+mod audiohub pi     $'[files]\nbins = audiohub'
+touch "$R/usr/local/bin/webconf" "$R/etc/systemd/system/webconf.service" "$R/usr/local/bin/synczinc" "$R/usr/local/bin/audiohub"
+printf 'rorw abc 2026-11-13T00:00 x\nusbfix def 2026-11-13T00:00 x\nsplash 0 2026-11-13T00:00 x\n' > "$R/etc/pi-tools-modules.txt"
+cp_plan() { PITOOLS_ROOT="$R" python3 "$P/setup/converge.py" --plan --platform "$1"; }
+cp_plan pi > "$T/plan-pi"; cp_plan x86 > "$T/plan-x86"
+row() { grep -qE "^$2 +$3( |$)" "$T/plan-$1"; }
+check "pi: recorded rerun-safe script re-runs" row pi script splash
+check "pi: script not marked rerun-safe held" row pi  held rorw
+check "pi: recorded RPi-only script re-runs"  row pi  script usbfix
+check "pi: unrecorded script is reported"     row pi  unrecorded linkwatch
+check "pi: fully linked module untouched"     row pi  linked webconf
+check "pi: partly linked module reinstalls"   row pi  install synczinc
+check "pi: module not on the box is absent"   bash -c "! grep -q xrun '$T/plan-pi'"
+check "x86: RPi-only script module skipped"   row x86 skip usbfix
+check "x86: RPi-only linked module skipped"   row x86 skip audiohub
+check "x86: dual-platform script still runs"  row x86 script splash
+check "x86: unmarked script still held"       row x86 held rorw
+rm "$R/etc/pi-tools-modules.txt"; cp_plan pi > "$T/plan-pi"
+check "no receipts file: script modules unrecorded, never run" bash -c "! grep -q '^script' '$T/plan-pi'"
 
 [ $fail = 0 ] && echo "green" || echo "RED"
 exit $fail

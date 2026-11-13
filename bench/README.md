@@ -507,11 +507,21 @@ It refuses (exit 3, nothing changed) local edits in the checkout and a tag that 
 hotfix is a new tag.
 
 `bench/test-rastaos-update` builds a throwaway origin and checkout and drives every one of those
-paths (30 checks), with `/etc` and `/run` redirected. It does not prove `rw`/`ro` on a real
+paths, with `/etc` and `/run` redirected. It does not prove `rw`/`ro` on a real
 read-only root, nor anything on hardware — that is the bench proof on bench-01 (pi-tools#t-057).
+
+After a move the updater runs `setup/converge.py` from the new checkout: the box's OWN modules
+(named in `/etc/pi-tools-modules.txt`, or with a declared bin/unit present), never one it did not
+have, never one its platform cannot run (`platforms = pi` is skipped on an N100). A fully linked
+standard module needs nothing (its symlinks already carry the new code); a partly linked one is
+reinstalled; a script module's `install.sh` runs again ONLY if its module.ini says
+`[install] rerun = yes`, else it is `held`. `python3 setup/converge.py --plan` prints that table
+and changes nothing. A failed module writes `MODULES=failed` in the receipt (exit 6), and the next
+run converges again instead of saying `already at`.
 
 ### Status
 
-Slice 1 of pi-tools#t-057: checkout, receipt, rollback point. Re-running the box's installed
-modules for its platform (x86 skipping `platforms = pi`) is the next slice, so for now a move
-updates the code and the receipt only.
+pi-tools#t-057, slices 1-2: checkout, receipt, rollback point, module convergence (47 checks).
+No module is marked `rerun = yes` yet — rorw/install.sh stacks its cmdline.txt edits and its
+fstab/.bashrc lines on every pass — so today every script module reads `held`. Making each
+installer re-runnable, then marking it, is the next slice; then the bench proof on bench-01.
