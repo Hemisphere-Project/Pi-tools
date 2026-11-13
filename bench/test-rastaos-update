@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# test-rastaos-update — exercise setup/rastaos-update against throwaway repos, no root, no box.
+#
+#   ./bench/test-rastaos-update        exit 0 = every case green
+#
+# Builds an "origin" with two tags and a "player" checkout of it, then drives the updater through
+# what a box sees: first move (receipt + rollback point), the second run that must change NOTHING,
+# an offline move from a git bundle, a rollback and its swap, and the refusals (local edits, a tag
+# that moved, a missing tag). Paths are redirected with the updater's own overrides; nothing under
+# /etc or /run is touched. What it cannot prove: rw/ro on a real read-only root, and the hardware —
+# that is the bench proof on bench-01 (pi-tools#t-057).
+set -uo pipefail
+
+here=$(cd "$(dirname "$0")/.." && pwd)
+UPD="$here/setup/rastaos-update"
+T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+fail=0
+ok()   { printf 'ok    %s\n' "$*"; }
+bad()  { printf 'FAIL  %s\n' "$*"; fail=1; }
+check(){ local what=$1; shift; if "$@"; then ok "$what"; else bad "$what"; fi; }
+
+export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+export GIT_CONFIG_NOSYSTEM=1 HOME="$T/home"; mkdir -p "$HOME"
+export RASTAOS_RELEASE="$T/etc/rastaos-release" RASTAOS_LOCK="$T/lock" \
+       RASTAOS_NO_RORW=1 RASTAOS_ALLOW_NONROOT=1 TMPDIR="$T"
+mkdir -p "$T/etc"
+
+git init -q "$T/origin"
+o() { git -C "$T/origin" "$@"; }
+mkdir -p "$T/origin/setup"; cp "$UPD" "$T/origin/setup/rastaos-update"
+echo one > "$T/origin/f"; o add -A; o commit -qm one; o tag rastaos-7.4.9
+echo two > "$T/origin/f"; o commit -qam two; o tag -a -m 7.5 rastaos-7.5
+git clone -q "$T/origin" "$T/box" && git -C "$T/box" checkout -q --detach rastaos-7.4.9
+b() { git -C "$T/box" "$@"; }
+run() { PITOOLS_DIR="$T/box" bash "$UPD" "$@"; }
+c75=$(o rev-parse 'rastaos-7.5^{commit}'); c749=$(o rev-parse 'rastaos-7.4.9^{commit}')
+
+# 1. first move: checkout, receipt, rollback point
+run rastaos-7.5 >"$T/out" 2>&1; rc=$?
+check "first run exits 0" [ $rc = 0 ]
+check "HEAD is the tag's commit" [ "$(b rev-parse HEAD)" = "$c75" ]
+check "receipt names tag + commit" grep -qx "RASTAOS_TAG=rastaos-7.5" "$RASTAOS_RELEASE"
+check "receipt commit is full sha" grep -qx "PITOOLS_COMMIT=$c75" "$RASTAOS_RELEASE"
+check "rollback point is the old HEAD" [ "$(b rev-parse refs/rastaos/rollback)" = "$c749" ]
+
+# 2. second run changes nothing — receipt bytes, mtime, refs, HEAD
+sum() { { sha1sum "$RASTAOS_RELEASE"; stat -c %Y "$RASTAOS_RELEASE"; b for-each-ref; b rev-parse HEAD; ls -la "$T/etc"; } | sha1sum; }
+before=$(sum); sleep 1
+run rastaos-7.5 >"$T/out" 2>&1; rc=$?
+check "second run exits 0" [ $rc = 0 ]
+check "second run says already at" grep -q 'already at rastaos-7.5' "$T/out"
+check "second run changed nothing" [ "$before" = "$(sum)" ]
+
+# 3. receipt lost, HEAD right: receipt only, rollback point untouched
+rm -f "$RASTAOS_RELEASE"; run rastaos-7.5 >"$T/out" 2>&1
+check "missing receipt is rewritten" grep -qx "PITOOLS_COMMIT=$c75" "$RASTAOS_RELEASE"
+check "receipt-only run keeps the rollback point" [ "$(b rev-parse refs/rastaos/rollback)" = "$c749" ]
+
+# 4. rollback, then rollback again (swap)
+run --rollback >"$T/out" 2>&1; rc=$?
+check "rollback exits 0" [ $rc = 0 ]
+check "rollback returns HEAD" [ "$(b rev-parse HEAD)" = "$c749" ]
+check "rollback point now holds 7.5" [ "$(b rev-parse refs/rastaos/rollback)" = "$c75" ]
+run --rollback >"$T/out" 2>&1
+check "second rollback swaps back" [ "$(b rev-parse HEAD)" = "$c75" ]
+check "receipt after swap says 7.5" grep -qx "RASTAOS_TAG=rastaos-7.5" "$RASTAOS_RELEASE"
+
+# 5. offline: a hotfix tag from a bundle, origin unreachable
+echo three > "$T/origin/f"; o commit -qam three; o tag rastaos-7.5.1
+o bundle create -q "$T/hotfix.bundle" rastaos-7.5..rastaos-7.5.1 refs/tags/rastaos-7.5.1 2>/dev/null \
+  || o bundle create "$T/hotfix.bundle" rastaos-7.5..rastaos-7.5.1 refs/tags/rastaos-7.5.1 >/dev/null 2>&1
+mv "$T/origin" "$T/origin.gone"
+run --bundle "$T/hotfix.bundle" rastaos-7.5.1 >"$T/out" 2>&1; rc=$?
+check "bundle run exits 0 offline" [ $rc = 0 ]
+check "bundle moves HEAD" [ "$(b rev-parse HEAD)" = "$(git -C "$T/origin.gone" rev-parse 'rastaos-7.5.1^{commit}')" ]
+check "bundle receipt names its source" grep -qx "SOURCE=bundle:hotfix.bundle" "$RASTAOS_RELEASE"
+run --bundle "$T/hotfix.bundle" rastaos-7.5.1 >"$T/out" 2>&1
+check "bundle second run is a no-op" grep -q 'already at rastaos-7.5.1' "$T/out"
+run --bundle "$T/hotfix.bundle" rastaos-9 >"$T/out" 2>&1; rc=$?
+check "bundle without the tag: exit 4" [ $rc = 4 ]
+run rastaos-9 >"$T/out" 2>&1; rc=$?
+check "origin down, unknown tag: exit 4" [ $rc = 4 ]
+mv "$T/origin.gone" "$T/origin"
+
+# 6. refusals change nothing
+before=$(sum)
+echo patch >> "$T/box/f"; run rastaos-7.5 >"$T/out" 2>&1; rc=$?
+check "local edits refused: exit 3" [ $rc = 3 ]
+b checkout -q -- f
+check "refusal changed nothing" [ "$before" = "$(sum)" ]
+o tag -d rastaos-7.5.1 >/dev/null; echo moved > "$T/origin/f"; o commit -qam moved; o tag rastaos-7.5.1
+run rastaos-7.5.1 >"$T/out" 2>&1; rc=$?
+check "a moved tag is refused: exit 3" [ $rc = 3 ]
+check "moved-tag refusal changed nothing" [ "$before" = "$(sum)" ]
+run 'bad..tag' >"$T/out" 2>&1; rc=$?
+check "invalid tag name: exit 1" [ $rc = 1 ]
+
+# 7. dry run writes nothing
+run -n rastaos-7.5 >"$T/out" 2>&1; rc=$?
+check "dry run exits 0" [ $rc = 0 ]
+check "dry run changed nothing" [ "$before" = "$(sum)" ]
+
+# 8. status reads it back
+run --status >"$T/out" 2>&1
+check "status prints the receipt" grep -q '^RASTAOS_TAG=rastaos-7.5.1' "$T/out"
+
+# 9. the copy on TMPDIR is cleaned up
+check "no leftover self-copies" [ -z "$(ls "$T" | grep '^rastaos-update\.')" ]
+
+[ $fail = 0 ] && echo "green" || echo "RED"
+exit $fail

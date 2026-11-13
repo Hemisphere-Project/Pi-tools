@@ -494,3 +494,24 @@ across a real hub, the re-resolve after a reset, `dd` to a genuine card, and the
 worn-card failure the `cmp` pass exists for. That is a bench session with the
 reader and a lot of cards; until it has run, the fallback is the by-hand
 procedure this tool was written from.
+
+## `test-rastaos-update` — the updater, exercised without a box
+
+`setup/rastaos-update <tag>` converges a player's `/opt/Pi-tools` checkout to a release tag, from
+origin or (`--bundle FILE`) an offline git bundle. It writes `/etc/rastaos-release` (the receipt:
+tag, full commit, when, from where, what it replaced) and `refs/rastaos/rollback` in the checkout
+(the rollback point, which also keeps image-only commits from `git gc`). `--rollback` swaps back,
+`--status` reads both, `-n` changes nothing. A box already on the tag with a matching receipt gets
+`already at <tag>` and **no write at all** — that is what makes a second run provably a no-op.
+It refuses (exit 3, nothing changed) local edits in the checkout and a tag that moved: a field
+hotfix is a new tag.
+
+`bench/test-rastaos-update` builds a throwaway origin and checkout and drives every one of those
+paths (30 checks), with `/etc` and `/run` redirected. It does not prove `rw`/`ro` on a real
+read-only root, nor anything on hardware — that is the bench proof on bench-01 (pi-tools#t-057).
+
+### Status
+
+Slice 1 of pi-tools#t-057: checkout, receipt, rollback point. Re-running the box's installed
+modules for its platform (x86 skipping `platforms = pi`) is the next slice, so for now a move
+updates the code and the receipt only.
