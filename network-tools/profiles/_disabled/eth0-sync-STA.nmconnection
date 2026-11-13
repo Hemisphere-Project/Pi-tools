@@ -3,6 +3,7 @@ id=sync-sta-eth0
 type=ethernet
 autoconnect=true
 autoconnect-priority=10
+autoconnect-retries=0
 interface-name=eth0
 
 [ipv4]

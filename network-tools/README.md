@@ -46,7 +46,8 @@ RastaOS-7.5 (decided 2026-11-13; it reverses the 2026-07-22 additive-only rule):
 - A USB stick stays **additive**: an incoming profile that differs from the one
   in `/boot/wifi` wins, the old copy goes to `wifi/_legacy/`; a stick never
   deletes from `/boot/wifi`.
-- Desk proof of the rule: `bench/setnet-desk.sh`.
+- Desk proof of the rule: `bench/setnet-desk.sh`; of the defaults around it
+  (hotspot off, no PSK in the tree, webconf's SYNC switch): `bench/netdefaults-desk.sh`.
 
 ## eth0 is the way in
 
@@ -87,6 +88,9 @@ which takes the template from the card's `wifi/_disabled/` else from this folder
   on an equal tie-break NM can pick that one instead — the card then sits on DHCP
   and never raises the static `10.1.0.1` the sync group is addressed on. `10`
   settles it while both profiles stay in `/boot/wifi`.
+- The two **STA** roles carry **`autoconnect-retries=0`**, like `eth0-dhcp`: a
+  slave that boots before its master's DHCP server is up keeps asking instead of
+  giving up after NM 1.14's 4 tries and waiting for a power cycle.
 - `wlan0-sync-AP` / `-STA` are the only Wi-Fi profiles here with **no
   `interface-name=` pin**. That is deliberate and safe: `setnet` arbitrates the AP
   role per interface and falls back to the filename prefix, and it never hands an
