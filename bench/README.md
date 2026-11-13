@@ -428,8 +428,11 @@ against this repo's own history: manifests built from the 22/09 shas
 (`1fb89ce`, `51142e7`, `eaf9b35`) resolve to exactly those commits, a module
 installed from an uncommitted tree reads `=` while the tree is unchanged and
 `not in this clone` once it is reverted, and every `install.sh`'s record line
-was run as written. **No real install pass has written a manifest on a player
-yet**: that is the first box this reaches.
+was run as written. On a real player (bench-02, a RastaOS-7.4 card, 14/11):
+`usbfix/install.sh` from a clean checkout of this branch printed `usbfix:
+recorded d30b8c7d6f8b (a14d08b)`, the fingerprint the laptop computes for
+`a14d08b`; `module-level` then read `usbfix =` and `linkwatch ?` (exit 2), and
+against a clone at `c9ed73f` read `usbfix drift`, naming `a14d08b` (exit 1).
 
 ---
 
