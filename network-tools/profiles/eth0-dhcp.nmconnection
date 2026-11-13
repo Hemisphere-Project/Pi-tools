@@ -2,9 +2,11 @@
 id=eth0-dhcp
 type=ethernet
 interface-name=eth0
+autoconnect=true
+autoconnect-retries=0
 
 [ipv4]
 method=auto
 
 [ipv6]
-method=ignore
+method=link-local

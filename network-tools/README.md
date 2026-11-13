@@ -25,21 +25,37 @@ psk=secret123
 [ipv4]
 method=auto
 [ipv6]
-method=disabled
+method=ignore
 ```
 
 `setnet` syncs `USB wifi/ → boot wifi/ → NetworkManager` (fixing keyfile
 permissions on the way), then reloads NM.
 
-## setnet is ADDITIVE — it never deletes
+## setnet is AUTHORITATIVE — the NM store is exactly `/boot/wifi`
 
-- A profile you add in the field (or via `nmcli`) is **never removed** by setnet.
-- If an incoming profile (from a USB stick) differs from one already in the boot
-  `wifi/`, the **incoming wins** and the old copy is archived to
-  `wifi/_legacy/` — nothing is silently lost.
-- An empty `wifi/` source is a **no-op** (it can't wipe your profiles). It was a
-  brick risk before: a stray empty `wifi/` on a USB stick used to delete
-  everything, including the hotspot.
+RastaOS-7.5 (decided 2026-11-13; it reverses the 2026-07-22 additive-only rule):
+
+- After the sync, any entry of `/etc/NetworkManager/system-connections/` that
+  `/boot/wifi` does not hold — a stale golden profile, a profile added with
+  `nmcli` in the field, a stray directory such as `_anna74-removed` — is **moved**
+  to `/etc/NetworkManager/setnet-pruned/` (never deleted). To keep a profile,
+  put it in `/boot/wifi`. To drop one, remove it from `/boot/wifi`.
+- **Empty-source guard kept**: a missing `/boot/wifi`, or one holding no
+  `.nmconnection` file at all, prunes nothing — a damaged boot folder can never
+  take eth0 away.
+- A USB stick stays **additive**: an incoming profile that differs from the one
+  in `/boot/wifi` wins, the old copy goes to `wifi/_legacy/`; a stick never
+  deletes from `/boot/wifi`.
+- Desk proof of the rule: `bench/setnet-desk.sh`.
+
+## eth0 is the way in
+
+`eth0-dhcp` carries `autoconnect-retries=0` (NM 1.14's default gives up DHCP
+after 4 tries, ~3 min: a card booted while the DHCP server was down stayed
+unreachable until a power cycle) and `ipv6.method=link-local`, so a card is
+reachable over `fe80::…%<laptop-iface>` with no DHCP at all. Never write
+`ipv6.method=disabled` in a profile: NM < 1.20 (Buster's 1.14) rejects the value
+and silently voids the whole profile — use `ignore`.
 
 ## Hotspot
 
@@ -61,8 +77,7 @@ into `/boot/firmware/wifi/`.
   image still has its `eth0-dhcp` profile, which has no priority key (= `0`), and
   on an equal tie-break NM can pick that one instead — the card then sits on DHCP
   and never raises the static `10.1.0.1` the sync group is addressed on. `10`
-  settles it without deleting anything, which keeps the ADDITIVE rule above
-  intact.
+  settles it while both profiles stay in `/boot/wifi`.
 - `wlan0-sync-AP` / `-STA` are the only Wi-Fi profiles here with **no
   `interface-name=` pin**. That is deliberate and safe: `setnet` arbitrates the AP
   role per interface and falls back to the filename prefix, and it never hands an
