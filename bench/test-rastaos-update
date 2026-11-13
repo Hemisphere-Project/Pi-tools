@@ -129,7 +129,8 @@ check "then a run is a no-op again" grep -q 'already at rastaos-7.6' "$T/out"
 P="$T/pt"; R="$T/root"; mkdir -p "$P/setup" "$R/usr/local/bin" "$R/etc/systemd/system" "$R/etc"
 cp "$here/setup/converge.py" "$P/setup/"
 mod() { mkdir -p "$P/$1"; printf '%s\n' "[module]" "name = $1" "platforms = $2" "$3" > "$P/$1/module.ini"; }
-mod rorw     pi,x86 $'[install]\nscript = yes'
+mod rorw     pi,x86 $'[install]\nscript = yes\nrerun = yes\nupgrade = upgrade.sh'
+mod tailscale pi,x86 $'[install]\nscript = yes\nrerun = no'
 mod usbfix   pi     $'[install]\nscript = yes\nrerun = yes'
 mod linkwatch pi    $'[install]\nscript = yes\nrerun = yes'
 mod splash   pi,x86 $'[install]\nscript = yes\nrerun = yes'
@@ -138,12 +139,14 @@ mod synczinc pi,x86 $'[files]\nbins = synczinc newbin'
 mod xrun     pi,x86 $'[files]\nbins = xrun'
 mod audiohub pi     $'[files]\nbins = audiohub'
 touch "$R/usr/local/bin/webconf" "$R/etc/systemd/system/webconf.service" "$R/usr/local/bin/synczinc" "$R/usr/local/bin/audiohub"
-printf 'rorw abc 2026-11-13T00:00 x\nusbfix def 2026-11-13T00:00 x\nsplash 0 2026-11-13T00:00 x\n' > "$R/etc/pi-tools-modules.txt"
+printf 'rorw abc 2026-11-13T00:00 x\nusbfix def 2026-11-13T00:00 x\nsplash 0 2026-11-13T00:00 x\ntailscale 0 2026-11-13T00:00 x\n' > "$R/etc/pi-tools-modules.txt"
 cp_plan() { PITOOLS_ROOT="$R" python3 "$P/setup/converge.py" --plan --platform "$1"; }
 cp_plan pi > "$T/plan-pi"; cp_plan x86 > "$T/plan-x86"
 row() { grep -qE "^$2 +$3( |$)" "$T/plan-$1"; }
 check "pi: recorded rerun-safe script re-runs" row pi script splash
-check "pi: script not marked rerun-safe held" row pi  held rorw
+check "pi: script marked rerun = no held"     row pi  held tailscale
+check "pi: own upgrade script wins over rerun" row pi  upgrade rorw
+check "  and is told --converging (no rw bracket)" grep -qE '^upgrade +rorw +upgrade\.sh --converging$' "$T/plan-pi"
 check "pi: recorded RPi-only script re-runs"  row pi  script usbfix
 check "pi: unrecorded script is reported"     row pi  unrecorded linkwatch
 check "pi: fully linked module untouched"     row pi  linked webconf
@@ -152,9 +155,29 @@ check "pi: module not on the box is absent"   bash -c "! grep -q xrun '$T/plan-p
 check "x86: RPi-only script module skipped"   row x86 skip usbfix
 check "x86: RPi-only linked module skipped"   row x86 skip audiohub
 check "x86: dual-platform script still runs"  row x86 script splash
-check "x86: unmarked script still held"       row x86 held rorw
+check "x86: unmarked script still held"       row x86 held tailscale
+check "x86: own upgrade script runs"          row x86 upgrade rorw
 rm "$R/etc/pi-tools-modules.txt"; cp_plan pi > "$T/plan-pi"
 check "no receipts file: script modules unrecorded, never run" bash -c "! grep -q '^script' '$T/plan-pi'"
+
+
+# 12. the REAL module set (pi-tools#t-057 slice 3): a box carrying every script module re-applies
+#     each one but tailscale — rorw through its upgrade.sh, never its install.sh
+R2="$T/root2"; mkdir -p "$R2/etc"
+for m in $(grep -l '^script *= *yes' "$here"/*/module.ini | xargs -n1 dirname | xargs -n1 basename); do
+    echo "$m 0 2026-11-13T00:00 x"
+done > "$R2/etc/pi-tools-modules.txt"
+real() { PITOOLS_ROOT="$R2" python3 "$here/setup/converge.py" --plan --platform "$1"; }
+real pi > "$T/plan-real-pi" && real x86 > "$T/plan-real-x86"
+check "real set, pi: only tailscale held" \
+    bash -c "[ \"\$(grep '^held' '$T/plan-real-pi' | awk '{print \$2}')\" = tailscale ]"
+check "real set, pi: rorw re-applied by upgrade.sh" grep -qE '^upgrade +rorw +upgrade\.sh --converging$' "$T/plan-real-pi"
+check "real set, pi: the 7 rerun-safe installers re-run" \
+    bash -c "[ \"\$(grep -c '^script' '$T/plan-real-pi')\" = 7 ]"
+check "real set, x86: the 5 RPi-only script modules skipped" \
+    bash -c "[ \"\$(grep -c '^skip' '$T/plan-real-x86')\" = 5 ]"
+check "real set, x86: audiohub + splash re-run, rorw upgraded" \
+    bash -c "grep -qE '^script +audiohub ' '$T/plan-real-x86' && grep -qE '^script +splash ' '$T/plan-real-x86' && grep -qE '^upgrade +rorw ' '$T/plan-real-x86'"
 
 [ $fail = 0 ] && echo "green" || echo "RED"
 exit $fail

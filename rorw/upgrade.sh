@@ -30,6 +30,9 @@
 # Usage:
 #   upgrade.sh                run on an installed box; brackets the work rw...ro
 #   upgrade.sh --installing   called by install.sh as its tail; NO bracket (see below)
+#   upgrade.sh --converging   called by setup/converge.py (rastaos-update, after a
+#                             checkout move); NO bracket: the updater holds `rw` for
+#                             its whole run (see below)
 #
 # Exit 0 applied, 1 refused or failed.
 
@@ -38,7 +41,7 @@ set -u
 BASEPATH="$(dirname "$(readlink -f "$0")")"
 
 INSTALLING=
-[ "${1:-}" = "--installing" ] && INSTALLING=1
+case "${1:-}" in --installing|--converging) INSTALLING=1 ;; esac
 
 # with_rw comes from the CHECKOUT, never from /usr/local/lib/pitools: that
 # symlink is published at the end of this very script, so on a first install it
@@ -163,6 +166,13 @@ fi
 # the right thing even when the root is already writable: another holder
 # (a with_rw service, an admin shell) is then registered, and `ro` correctly
 # reports "staying RW" instead of remounting under their writes.
+#
+# --converging is the third caller, and it skips the bracket for the install's
+# reason: setup/rastaos-update owns the root's writability for its whole run
+# (its own `rw`, or a root it found already writable — possibly at counter 0),
+# and converges every module after this one. A bracket's exit here could
+# remount the root read-only under them; the updater gives back only the `rw`
+# it took itself.
 if [ -n "$INSTALLING" ]; then
     apply || { echo "RORW upgrade FAILED" >&2; exit 1; }
 else

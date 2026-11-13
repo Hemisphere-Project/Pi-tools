@@ -14,16 +14,26 @@ A script module (install.sh) that left no receipt is invisible to both, so it is
 `unrecorded` — never guessed, never run.
 
 What each one gets:
-  * script module, rerun-safe -> its install.sh runs again: it copies or configures, and no
-                                 symlink carries the new tag there. Only when its module.ini says
-                                 `[install] rerun = yes` — a claim that running it twice leaves
-                                 the box as running it once did.
-  * script module, not marked -> `held`, NOT run. rorw/install.sh is why: its cmdline.txt sed
-                                 and its fstab/.bashrc appends stack on every pass (13/11), and an
-                                 updater that re-runs it on each tag would break the boot line.
-  * standard, fully linked    -> nothing: its bins and units are symlinks into the checkout, so
-                                 the new code is already live; one daemon-reload covers units
-  * standard, partly linked   -> the standard install: the tag declares a file the box lacks
+  * script module, own upgrade  -> its `[install] upgrade` script runs, with `--converging`: the
+                                   module's re-runnable path, for when install.sh is not one.
+                                   rorw is the case — install.sh rewrites fstab from freshly probed
+                                   UUIDs and seds cmdline.txt, so it runs exactly once; its
+                                   upgrade.sh carries everything that is safe to re-apply.
+  * script module, rerun-safe   -> its install.sh runs again: it copies or configures, and no
+                                   symlink carries the new tag there. Only when its module.ini says
+                                   `[install] rerun = yes` — a claim that running it twice leaves
+                                   the box as running it once did.
+  * script module, neither      -> `held`, NOT run (tailscale: its install.sh pipes the vendor's
+                                   installer from the network). Its bins and units, when it links
+                                   them from the checkout, still carry the new code.
+  * standard, fully linked      -> nothing: its bins and units are symlinks into the checkout, so
+                                   the new code is already live; one daemon-reload covers units
+  * standard, partly linked     -> the standard install: the tag declares a file the box lacks
+
+The caller holds the root writable — rastaos-update takes `rw` for the whole run — so a module's
+upgrade script is told `--converging` and must not take its own rw...ro bracket: on a root that
+is writable with the rw counter at 0, that bracket's `ro` would remount it read-only under every
+module after it. Run by hand on a rorw box, `rw` first, `ro` after.
 
 --plan prints one line per module and changes nothing. Exit 0 applied (or nothing to do),
 1 a module failed, 2 usage. PITOOLS_ROOT prefixes every box path it READS (tests, a card in a
@@ -77,13 +87,19 @@ def declared(ini):
     return paths
 
 
+def upgrade_script(ini):
+    """The module's own re-runnable script (`[install] upgrade`), or ''."""
+    return ini.get('install', 'upgrade', fallback='').strip()
+
+
 def on_platform(ini, platform):
     platforms = [p.strip() for p in ini.get('module', 'platforms', fallback='pi,x86').split(',')]
     return platform in platforms
 
 
 def plan(platform, manifest):
-    """[(module, action, why)] — action: script | held | install | linked | skip | unrecorded."""
+    """[(module, action, why)] — action: upgrade | script | held | install | linked | skip |
+    unrecorded."""
     have = recorded(manifest)
     rows = []
     for name, ini in modules().items():
@@ -96,10 +112,12 @@ def plan(platform, manifest):
             continue                                  # not on this box: setup.sh's job
         if not on_platform(ini, platform):
             rows.append((name, 'skip', f'not for {platform}'))
+        elif script and upgrade_script(ini):
+            rows.append((name, 'upgrade', f'{upgrade_script(ini)} --converging'))
         elif script and ini.getboolean('install', 'rerun', fallback=False):
             rows.append((name, 'script', 'install.sh again'))
         elif script:
-            rows.append((name, 'held', 'install.sh not marked rerun-safe — not run'))
+            rows.append((name, 'held', 'install.sh not rerun-safe, no upgrade script — not run'))
         elif len(present) == len(paths) and paths:
             rows.append((name, 'linked', 'symlinks already carry the new code'))
         else:
@@ -138,9 +156,15 @@ def main():
     os.environ['DEBIAN_FRONTEND'] = 'noninteractive'
     from setup import installer, config, detect, utils
     cfg = config.load(detect.find_config(platinfo))
+    mods = modules()
     failed = []
     for name, action, _ in rows:
-        if action in ('script', 'install') and not installer.install_module(name, platinfo, cfg):
+        if action == 'upgrade':
+            module_dir = os.path.join(PITOOLS_DIR, name)
+            cmd = ['bash', os.path.join(module_dir, upgrade_script(mods[name])), '--converging']
+            if utils.run(cmd, cwd=module_dir, check=False).returncode != 0:
+                failed.append(name)
+        elif action in ('script', 'install') and not installer.install_module(name, platinfo, cfg):
             failed.append(name)
     utils.daemon_reload()
     if failed:

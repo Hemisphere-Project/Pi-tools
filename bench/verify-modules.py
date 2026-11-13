@@ -12,6 +12,11 @@ So, per module.ini (parsed with configparser, exactly as the installer does):
   * every path in files.bins / files.services / files.timers / files.udev_rules
     exists in the module directory
   * `script = yes` implies an install.sh
+  * `[install] rerun` is a boolean and `[install] upgrade` names a file in the
+    module directory, both on a `script = yes` module only — setup/converge.py
+    reads them after every tag move (rastaos-update), where a `rerun` it cannot
+    parse would abort the whole convergence and an `upgrade` on a standard
+    module would be ignored without a word
   * `npm = yes` implies a package.json (utils.npm_install runs npm there)
   * platforms names only tokens check_platform knows — anything else is not a
     platform, it is a module that silently skips on every machine
@@ -103,6 +108,18 @@ for entry in sorted(os.listdir(ROOT)):
     if ini.getboolean('install', 'script', fallback=False) \
             and not os.path.isfile(os.path.join(module_dir, 'install.sh')):
         errors.append(f'{entry}/module.ini: script = yes but {entry}/install.sh is missing')
+
+    is_script = ini.getboolean('install', 'script', fallback=False)
+    if ini.has_option('install', 'rerun'):
+        try:
+            ini.getboolean('install', 'rerun')
+        except ValueError:
+            errors.append(f"{entry}/module.ini: rerun = {ini.get('install', 'rerun')!r} is not a boolean")
+    upgrade = ini.get('install', 'upgrade', fallback='').strip()
+    if upgrade and not os.path.isfile(os.path.join(module_dir, upgrade)):
+        errors.append(f'{entry}/module.ini: upgrade names {upgrade}, which does not exist')
+    if not is_script and (upgrade or ini.has_option('install', 'rerun')):
+        errors.append(f'{entry}/module.ini: rerun/upgrade on a module without script = yes')
 
     if ini.getboolean('files', 'npm', fallback=False) \
             and not os.path.isfile(os.path.join(module_dir, 'package.json')):

@@ -514,14 +514,29 @@ After a move the updater runs `setup/converge.py` from the new checkout: the box
 (named in `/etc/pi-tools-modules.txt`, or with a declared bin/unit present), never one it did not
 have, never one its platform cannot run (`platforms = pi` is skipped on an N100). A fully linked
 standard module needs nothing (its symlinks already carry the new code); a partly linked one is
-reinstalled; a script module's `install.sh` runs again ONLY if its module.ini says
-`[install] rerun = yes`, else it is `held`. `python3 setup/converge.py --plan` prints that table
-and changes nothing. A failed module writes `MODULES=failed` in the receipt (exit 6), and the next
-run converges again instead of saying `already at`.
+reinstalled. A script module runs its own `[install] upgrade` script when it declares one (with
+`--converging`: the updater holds `rw`, so the script takes no rw...ro bracket of its own), else
+its `install.sh` again if its module.ini says `[install] rerun = yes`, else it is `held`.
+`python3 setup/converge.py --plan` prints that table and changes nothing. A failed module writes
+`MODULES=failed` in the receipt (exit 6), and the next run converges again instead of saying
+`already at`.
+
+Which script module gets what, and why (each module.ini says it in a comment over the key):
+
+| module | on a tag move | why |
+|---|---|---|
+| rorw | `upgrade.sh --converging` | install.sh runs ONCE: fstab from freshly probed UUIDs, cmdline.txt seds, .bashrc appends. upgrade.sh is its re-runnable tail (fake clock, logout hook, ro-assert, toggles) |
+| linkwatch, usbfix | install.sh again | their scripts are COPIED to /usr/local/sbin — a re-run is the only way the tag reaches them. usbfix remembers `--no-rsyslog` in /etc/default/usbfix |
+| audiohub | install.sh again | rewrites its graph (/etc/asound.conf), keeps /etc/audiohub.conf; restarts the 3 forwarders one at a time — a playing box blips |
+| blackbox, flightbox, hdmi-rehandshake, splash | install.sh again | `ln -sf`, enable, files rewritten whole; splash x86 also re-runs update-grub + update-initramfs |
+| tailscale | held | install.sh pipes the vendor installer from the network: fails offline, and would move tailscale itself to latest. Its wrapper is linked, so the tag still reaches it |
+
+`bench/verify` lints the two keys (`rerun` a boolean, `upgrade` an existing file, both on a
+`script = yes` module only): a `rerun` converge cannot parse would abort the whole convergence.
 
 ### Status
 
-pi-tools#t-057, slices 1-2: checkout, receipt, rollback point, module convergence (47 checks).
-No module is marked `rerun = yes` yet — rorw/install.sh stacks its cmdline.txt edits and its
-fstab/.bashrc lines on every pass — so today every script module reads `held`. Making each
-installer re-runnable, then marking it, is the next slice; then the bench proof on bench-01.
+pi-tools#t-057, slices 1-3: checkout, receipt, rollback point, module convergence, every script
+module marked (56 checks, the last five against the real module set). What a desk cannot prove is
+the bench proof on bench-01 — `rastaos-update` run twice, the second changing nothing, on a real
+read-only root with the real installers.
