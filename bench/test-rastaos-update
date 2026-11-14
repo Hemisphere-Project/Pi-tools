@@ -208,5 +208,46 @@ check "rorw logout hook: three passes leave the 7.4 file as it was" cmp -s "$T/l
 { echo; cat "$T/logout74"; echo; } > "$T/logout"; bash "$T/hook.sh"
 check "  and heal the blank lines the old hook stacked" cmp -s "$T/logout74" "$T/logout"
 
+# 14. a process still running a file the move replaced keeps the root from going back to ro
+#     (bench-01, 14/11: the rollback exited 0, root left rw — audiohub@{jack,hdmi,usb} ran the
+#     replaced audiohub-fwd). A fake /proc: fd and maps entries "<file> (deleted)" under the
+#     checkout, a cgroup per pid. Stubbed `ro` fails while any fake holder remains, as the kernel
+#     does; stubbed `systemctl restart` ends the holders of the unit it restarts.
+S="$T/rorw14"; P14="$T/proc"; mkdir -p "$S"
+printf '#!/bin/sh\n[ -e "%s/rw14-on" ] && echo rw,noatime || echo ro,noatime\n' "$T" > "$S/findmnt"
+printf '#!/bin/sh\ntouch "%s/rw14-on"; echo rw >> "%s/rw14-log"\n' "$T" "$T" > "$S/rw"
+printf '#!/bin/sh\nif grep -rqs "(deleted)" "%s"/*/m; then echo busy >> "%s/rw14-log"; exit 1; fi\nrm -f "%s/rw14-on"; echo ro >> "%s/rw14-log"\n' "$P14" "$T" "$T" "$T" > "$S/ro"
+printf '#!/bin/sh\necho "$*" >> "%s/sysd-log"\n[ "$1" = restart ] && grep -l "/$2\$" "%s"/*/cgroup | while read c; do rm -rf "${c%%/cgroup}"; done\nexit 0\n' "$T" "$P14" > "$S/systemctl"
+chmod +x "$S/"*
+# holder <pid> <cgroup path> <comm> fd|maps <file under the checkout>
+holder() {
+    mkdir -p "$P14/$1/fd"; echo "0::$2" > "$P14/$1/cgroup"; echo "$3" > "$P14/$1/comm"
+    if [ "$4" = fd ]; then ln -s "$5 (deleted)" "$P14/$1/fd/255"; : > "$P14/$1/maps"
+    else printf '7f00-7f10 r-xp 00000000 b3:02 99    %s (deleted)\n' "$5" > "$P14/$1/maps"; fi
+    printf '%s\n' "$5 (deleted)" > "$P14/$1/m"   # what the fake kernel counts
+}
+run14() { : > "$T/rw14-log"; : > "$T/sysd-log"
+    PATH="$S:$PATH" RASTAOS_NO_RORW= RASTAOS_PROC="$P14" PITOOLS_DIR="$T/box" bash "$UPD" "$@" >"$T/out" 2>&1; }
+log14() { tr '\n' ' ' < "$T/$1"; }
+c76=$(o rev-parse 'rastaos-7.6^{commit}'); c77=$(o rev-parse 'rastaos-7.7^{commit}')
+holder 4242 /system.slice/system-audiohub.slice/audiohub@jack.service bash fd "$T/box/f"
+run14 --rollback; rc=$?
+check "replaced file held by a service: rollback exits 0" [ $rc = 0 ]
+check "  and moves HEAD" [ "$(b rev-parse HEAD)" = "$c76" ]
+check "  after a daemon-reload, restarts that unit only" [ "$(log14 sysd-log)" = "daemon-reload restart audiohub@jack.service " ]
+check "  so the root goes back to ro" [ "$(log14 rw14-log)" = "rw ro " ]
+holder 4343 /user.slice/user-0.slice/session-3.scope bash fd "$T/box/f"
+holder 4444 /system.slice/blackbox.service python3 maps "$T/box/f"
+run14 --rollback; rc=$?
+check "held by a login shell too: exit 7" [ $rc = 7 ]
+check "  still moving HEAD and writing the receipt" bash -c "[ \"\$(git -C '$T/box' rev-parse HEAD)\" = $c77 ] && grep -qx PITOOLS_COMMIT=$c77 '$RASTAOS_RELEASE'"
+check "  restarting the service (found through maps), never the session" [ "$(log14 sysd-log)" = "daemon-reload restart blackbox.service " ]
+check "  naming the shell it could not restart" grep -q "pid 4343 (bash) still runs the replaced $T/box/f" "$T/out"
+check "  and saying the root stayed rw" bash -c "grep -q 'root stayed read-write' '$T/out' && [ -e '$T/rw14-on' ]"
+rm -rf "$P14" "$T/rw14-on"   # what the exit-7 line asks of him: end the shell, then `ro`
+run14 --rollback; rc=$?
+check "nothing held: a move restarts nothing, exit 0, ro" \
+    bash -c "[ $rc = 0 ] && [ ! -s '$T/sysd-log' ] && [ \"\$(tr '\n' ' ' < '$T/rw14-log')\" = 'rw ro ' ]"
+
 [ $fail = 0 ] && echo "green" || echo "RED"
 exit $fail
