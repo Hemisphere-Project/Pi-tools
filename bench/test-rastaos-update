@@ -1,0 +1,253 @@
+#!/usr/bin/env bash
+# test-rastaos-update — exercise setup/rastaos-update against throwaway repos, no root, no box.
+#
+#   ./bench/test-rastaos-update        exit 0 = every case green
+#
+# Builds an "origin" with two tags and a "player" checkout of it, then drives the updater through
+# what a box sees: first move (receipt + rollback point), the second run that must change NOTHING,
+# an offline move from a git bundle, a rollback and its swap, and the refusals (local edits, a tag
+# that moved, a missing tag). Paths are redirected with the updater's own overrides; nothing under
+# /etc or /run is touched (case 12 stubs rw/ro/findmnt). What it cannot prove: a real root, the hardware —
+# that is the bench proof on bench-01 (pi-tools#t-057).
+set -uo pipefail
+
+here=$(cd "$(dirname "$0")/.." && pwd)
+UPD="$here/setup/rastaos-update"
+T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+fail=0
+ok()   { printf 'ok    %s\n' "$*"; }
+bad()  { printf 'FAIL  %s\n' "$*"; fail=1; }
+check(){ local what=$1; shift; if "$@"; then ok "$what"; else bad "$what"; fi; }
+
+export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+export GIT_CONFIG_NOSYSTEM=1 HOME="$T/home"; mkdir -p "$HOME"
+export RASTAOS_RELEASE="$T/etc/rastaos-release" RASTAOS_LOCK="$T/lock" \
+       RASTAOS_NO_RORW=1 RASTAOS_ALLOW_NONROOT=1 RASTAOS_NO_CONVERGE=1 TMPDIR="$T"
+mkdir -p "$T/etc"
+
+git init -q "$T/origin"
+o() { git -C "$T/origin" "$@"; }
+mkdir -p "$T/origin/setup"; cp "$UPD" "$T/origin/setup/rastaos-update"
+echo one > "$T/origin/f"; o add -A; o commit -qm one; o tag rastaos-7.4.9
+echo two > "$T/origin/f"; o commit -qam two; o tag -a -m 7.5 rastaos-7.5
+git clone -q "$T/origin" "$T/box" && git -C "$T/box" checkout -q --detach rastaos-7.4.9
+b() { git -C "$T/box" "$@"; }
+run() { PITOOLS_DIR="$T/box" bash "$UPD" "$@"; }
+c75=$(o rev-parse 'rastaos-7.5^{commit}'); c749=$(o rev-parse 'rastaos-7.4.9^{commit}')
+
+# 1. first move: checkout, receipt, rollback point
+run rastaos-7.5 >"$T/out" 2>&1; rc=$?
+check "first run exits 0" [ $rc = 0 ]
+check "HEAD is the tag's commit" [ "$(b rev-parse HEAD)" = "$c75" ]
+check "receipt names tag + commit" grep -qx "RASTAOS_TAG=rastaos-7.5" "$RASTAOS_RELEASE"
+check "receipt commit is full sha" grep -qx "PITOOLS_COMMIT=$c75" "$RASTAOS_RELEASE"
+check "rollback point is the old HEAD" [ "$(b rev-parse refs/rastaos/rollback)" = "$c749" ]
+
+# 2. second run changes nothing — receipt bytes, mtime, refs, HEAD
+sum() { { sha1sum "$RASTAOS_RELEASE"; stat -c %Y "$RASTAOS_RELEASE"; b for-each-ref; b rev-parse HEAD; ls -la "$T/etc"; } | sha1sum; }
+before=$(sum); sleep 1
+run rastaos-7.5 >"$T/out" 2>&1; rc=$?
+check "second run exits 0" [ $rc = 0 ]
+check "second run says already at" grep -q 'already at rastaos-7.5' "$T/out"
+check "second run changed nothing" [ "$before" = "$(sum)" ]
+
+# 3. receipt lost, HEAD right: receipt only, rollback point untouched
+rm -f "$RASTAOS_RELEASE"; run rastaos-7.5 >"$T/out" 2>&1
+check "missing receipt is rewritten" grep -qx "PITOOLS_COMMIT=$c75" "$RASTAOS_RELEASE"
+check "receipt-only run keeps the rollback point" [ "$(b rev-parse refs/rastaos/rollback)" = "$c749" ]
+
+# 4. rollback, then rollback again (swap)
+run --rollback >"$T/out" 2>&1; rc=$?
+check "rollback exits 0" [ $rc = 0 ]
+check "rollback returns HEAD" [ "$(b rev-parse HEAD)" = "$c749" ]
+check "rollback point now holds 7.5" [ "$(b rev-parse refs/rastaos/rollback)" = "$c75" ]
+run --rollback >"$T/out" 2>&1
+check "second rollback swaps back" [ "$(b rev-parse HEAD)" = "$c75" ]
+check "receipt after swap says 7.5" grep -qx "RASTAOS_TAG=rastaos-7.5" "$RASTAOS_RELEASE"
+
+# 5. offline: a hotfix tag from a bundle, origin unreachable
+echo three > "$T/origin/f"; o commit -qam three; o tag rastaos-7.5.1
+o bundle create -q "$T/hotfix.bundle" rastaos-7.5..rastaos-7.5.1 refs/tags/rastaos-7.5.1 2>/dev/null \
+  || o bundle create "$T/hotfix.bundle" rastaos-7.5..rastaos-7.5.1 refs/tags/rastaos-7.5.1 >/dev/null 2>&1
+mv "$T/origin" "$T/origin.gone"
+run --bundle "$T/hotfix.bundle" rastaos-7.5.1 >"$T/out" 2>&1; rc=$?
+check "bundle run exits 0 offline" [ $rc = 0 ]
+check "bundle moves HEAD" [ "$(b rev-parse HEAD)" = "$(git -C "$T/origin.gone" rev-parse 'rastaos-7.5.1^{commit}')" ]
+check "bundle receipt names its source" grep -qx "SOURCE=bundle:hotfix.bundle" "$RASTAOS_RELEASE"
+run --bundle "$T/hotfix.bundle" rastaos-7.5.1 >"$T/out" 2>&1
+check "bundle second run is a no-op" grep -q 'already at rastaos-7.5.1' "$T/out"
+run --bundle "$T/hotfix.bundle" rastaos-9 >"$T/out" 2>&1; rc=$?
+check "bundle without the tag: exit 4" [ $rc = 4 ]
+run rastaos-9 >"$T/out" 2>&1; rc=$?
+check "origin down, unknown tag: exit 4" [ $rc = 4 ]
+mv "$T/origin.gone" "$T/origin"
+
+# 6. refusals change nothing
+before=$(sum)
+echo patch >> "$T/box/f"; run rastaos-7.5 >"$T/out" 2>&1; rc=$?
+check "local edits refused: exit 3" [ $rc = 3 ]
+b checkout -q -- f
+check "refusal changed nothing" [ "$before" = "$(sum)" ]
+o tag -d rastaos-7.5.1 >/dev/null; echo moved > "$T/origin/f"; o commit -qam moved; o tag rastaos-7.5.1
+run rastaos-7.5.1 >"$T/out" 2>&1; rc=$?
+check "a moved tag is refused: exit 3" [ $rc = 3 ]
+check "moved-tag refusal changed nothing" [ "$before" = "$(sum)" ]
+run 'bad..tag' >"$T/out" 2>&1; rc=$?
+check "invalid tag name: exit 1" [ $rc = 1 ]
+
+# 7. dry run writes nothing
+run -n rastaos-7.5 >"$T/out" 2>&1; rc=$?
+check "dry run exits 0" [ $rc = 0 ]
+check "dry run changed nothing" [ "$before" = "$(sum)" ]
+
+# 8. status reads it back
+run --status >"$T/out" 2>&1
+check "status prints the receipt" grep -q '^RASTAOS_TAG=rastaos-7.5.1' "$T/out"
+
+# 9. the copy on TMPDIR is cleaned up
+check "no leftover self-copies" [ -z "$(ls "$T" | grep '^rastaos-update\.')" ]
+
+# 10. module convergence: a failing converge.py on the tag -> exit 6, MODULES=failed, and the next
+#     run converges again instead of saying "already at"
+o checkout -q --detach rastaos-7.5.1 2>/dev/null; o checkout -q -B main 2>/dev/null
+printf 'import sys; sys.exit(int(open("%s").read()))\n' "$T/conv-rc" > "$T/origin/setup/converge.py"
+echo 1 > "$T/conv-rc"
+o add setup/converge.py; o commit -q -m conv -- setup/converge.py; o tag rastaos-7.6
+unset RASTAOS_NO_CONVERGE
+run rastaos-7.6 >"$T/out" 2>&1; rc=$?
+check "failed convergence: exit 6" [ $rc = 6 ]
+check "failed convergence is in the receipt" grep -qx "MODULES=failed" "$RASTAOS_RELEASE"
+echo 0 > "$T/conv-rc"
+run rastaos-7.6 >"$T/out" 2>&1; rc=$?
+check "after a failure the next run converges again" grep -q 're-applying' "$T/out"
+check "  and records MODULES=ok" grep -qx "MODULES=ok" "$RASTAOS_RELEASE"
+check "  keeping PREVIOUS" grep -qx "PREVIOUS=rastaos-7.5.1" "$RASTAOS_RELEASE"
+run rastaos-7.6 >"$T/out" 2>&1
+check "then a run is a no-op again" grep -q 'already at rastaos-7.6' "$T/out"
+
+# 11. converge.py --plan on a fake checkout + box: what is re-applied, per platform
+P="$T/pt"; R="$T/root"; mkdir -p "$P/setup" "$R/usr/local/bin" "$R/etc/systemd/system" "$R/etc"
+cp "$here/setup/converge.py" "$P/setup/"
+mod() { mkdir -p "$P/$1"; printf '%s\n' "[module]" "name = $1" "platforms = $2" "$3" > "$P/$1/module.ini"; }
+mod rorw     pi,x86 $'[install]\nscript = yes\nrerun = yes\nupgrade = upgrade.sh'
+mod tailscale pi,x86 $'[install]\nscript = yes\nrerun = no'
+mod usbfix   pi     $'[install]\nscript = yes\nrerun = yes'
+mod linkwatch pi    $'[install]\nscript = yes\nrerun = yes'
+mod splash   pi,x86 $'[install]\nscript = yes\nrerun = yes'
+mod webconf  pi,x86 $'[files]\nbins = webconf\nservices = webconf.service'
+mod synczinc pi,x86 $'[files]\nbins = synczinc newbin'
+mod xrun     pi,x86 $'[files]\nbins = xrun'
+mod audiohub pi     $'[files]\nbins = audiohub'
+touch "$R/usr/local/bin/webconf" "$R/etc/systemd/system/webconf.service" "$R/usr/local/bin/synczinc" "$R/usr/local/bin/audiohub"
+printf 'rorw abc 2026-11-13T00:00 x\nusbfix def 2026-11-13T00:00 x\nsplash 0 2026-11-13T00:00 x\ntailscale 0 2026-11-13T00:00 x\n' > "$R/etc/pi-tools-modules.txt"
+cp_plan() { PITOOLS_ROOT="$R" python3 "$P/setup/converge.py" --plan --platform "$1"; }
+cp_plan pi > "$T/plan-pi"; cp_plan x86 > "$T/plan-x86"
+row() { grep -qE "^$2 +$3( |$)" "$T/plan-$1"; }
+check "pi: recorded rerun-safe script re-runs" row pi script splash
+check "pi: script marked rerun = no held"     row pi  held tailscale
+check "pi: own upgrade script wins over rerun" row pi  upgrade rorw
+check "  and is told --converging (no rw bracket)" grep -qE '^upgrade +rorw +upgrade\.sh --converging$' "$T/plan-pi"
+check "pi: recorded RPi-only script re-runs"  row pi  script usbfix
+check "pi: unrecorded script is reported"     row pi  unrecorded linkwatch
+check "pi: fully linked module untouched"     row pi  linked webconf
+check "pi: partly linked module reinstalls"   row pi  install synczinc
+check "pi: module not on the box is absent"   bash -c "! grep -q xrun '$T/plan-pi'"
+check "x86: RPi-only script module skipped"   row x86 skip usbfix
+check "x86: RPi-only linked module skipped"   row x86 skip audiohub
+check "x86: dual-platform script still runs"  row x86 script splash
+check "x86: unmarked script still held"       row x86 held tailscale
+check "x86: own upgrade script runs"          row x86 upgrade rorw
+rm "$R/etc/pi-tools-modules.txt"; cp_plan pi > "$T/plan-pi"
+check "no receipts file: script modules unrecorded, never run" bash -c "! grep -q '^script' '$T/plan-pi'"
+
+
+# 12. the REAL module set (pi-tools#t-057 slice 3): a box carrying every script module re-applies
+#     each one but tailscale — rorw through its upgrade.sh, never its install.sh
+R2="$T/root2"; mkdir -p "$R2/etc"
+for m in $(grep -l '^script *= *yes' "$here"/*/module.ini | xargs -n1 dirname | xargs -n1 basename); do
+    echo "$m 0 2026-11-13T00:00 x"
+done > "$R2/etc/pi-tools-modules.txt"
+real() { PITOOLS_ROOT="$R2" python3 "$here/setup/converge.py" --plan --platform "$1"; }
+real pi > "$T/plan-real-pi" && real x86 > "$T/plan-real-x86"
+check "real set, pi: only tailscale held" \
+    bash -c "[ \"\$(grep '^held' '$T/plan-real-pi' | awk '{print \$2}')\" = tailscale ]"
+check "real set, pi: rorw re-applied by upgrade.sh" grep -qE '^upgrade +rorw +upgrade\.sh --converging$' "$T/plan-real-pi"
+check "real set, pi: the 7 rerun-safe installers re-run" \
+    bash -c "[ \"\$(grep -c '^script' '$T/plan-real-pi')\" = 7 ]"
+check "real set, x86: the 5 RPi-only script modules skipped" \
+    bash -c "[ \"\$(grep -c '^skip' '$T/plan-real-x86')\" = 5 ]"
+check "real set, x86: audiohub + splash re-run, rorw upgraded" \
+    bash -c "grep -qE '^script +audiohub ' '$T/plan-real-x86' && grep -qE '^script +splash ' '$T/plan-real-x86' && grep -qE '^upgrade +rorw ' '$T/plan-real-x86'"
+
+# 12. a read-only root: the fetch needs `rw` too (bench-01, 14/11: run 1 died on .git/FETCH_HEAD,
+#     "Read-only file system", before it moved anything). rw/ro/findmnt stubbed: .git is writable
+#     only between `rw` and `ro`, as the box's root is.
+mkdir -p "$T/rorw"
+printf '#!/bin/sh\n[ -e "%s/rw-on" ] && echo rw,noatime || echo ro,noatime\n' "$T" > "$T/rorw/findmnt"
+printf '#!/bin/sh\nchmod -R u+w "%s/box/.git"; touch "%s/rw-on"; echo rw >> "%s/rw-log"\n' "$T" "$T" "$T" > "$T/rorw/rw"
+printf '#!/bin/sh\nchmod -R a-w "%s/box/.git"; rm -f "%s/rw-on"; echo ro >> "%s/rw-log"\n' "$T" "$T" "$T" > "$T/rorw/ro"
+chmod +x "$T/rorw/"*
+echo seven > "$T/origin/f"; o commit -qam seven; o tag rastaos-7.7
+o bundle create "$T/ro.bundle" refs/tags/rastaos-7.7 >/dev/null 2>&1
+export RASTAOS_NO_CONVERGE=1; chmod -R a-w "$T/box/.git"
+PATH="$T/rorw:$PATH" RASTAOS_NO_RORW= PITOOLS_DIR="$T/box" bash "$UPD" --bundle "$T/ro.bundle" rastaos-7.7 >"$T/out" 2>&1; rc=$?
+check "read-only root: bundle run exits 0" [ $rc = 0 ]
+check "  and moves HEAD" [ "$(b rev-parse HEAD)" = "$(o rev-parse 'rastaos-7.7^{commit}')" ]
+check "  inside one rw ... ro bracket" [ "$(tr '\n' ' ' < "$T/rw-log")" = "rw ro " ]
+check "  leaving .git read-only again" [ ! -w "$T/box/.git" ]
+chmod -R u+w "$T/box/.git"
+
+# 13. rorw's upgrade.sh logout hook is byte-stable on re-run (bench-01, 14/11: the --force run
+#     grew /etc/bash.bash_logout by one blank line per pass, 6 -> 7 -> 8). Replays the hook block
+#     of upgrade.sh on a copy of the 7.4 file, then on the 8-line file the old hook left.
+sed -n '/drop any previously-installed rw\/ro logout bracket/,/>> \/etc\/bash.bash_logout/p' \
+    "$here/rorw/upgrade.sh" | sed "s|/etc/bash.bash_logout|$T/logout|g" > "$T/hook.sh"
+printf '# >>> pitools rorw >>>\nif [ "$(id -u)" -eq 0 ]; then\nhistory -a\nfake-clock save\nfi\n# <<< pitools rorw <<<\n' > "$T/logout74"
+cp "$T/logout74" "$T/logout"; bash "$T/hook.sh"; bash "$T/hook.sh"; bash "$T/hook.sh"
+check "rorw logout hook: three passes leave the 7.4 file as it was" cmp -s "$T/logout74" "$T/logout"
+{ echo; cat "$T/logout74"; echo; } > "$T/logout"; bash "$T/hook.sh"
+check "  and heal the blank lines the old hook stacked" cmp -s "$T/logout74" "$T/logout"
+
+# 14. a process still running a file the move replaced keeps the root from going back to ro
+#     (bench-01, 14/11: the rollback exited 0, root left rw — audiohub@{jack,hdmi,usb} ran the
+#     replaced audiohub-fwd). A fake /proc: fd and maps entries "<file> (deleted)" under the
+#     checkout, a cgroup per pid. Stubbed `ro` fails while any fake holder remains, as the kernel
+#     does; stubbed `systemctl restart` ends the holders of the unit it restarts.
+S="$T/rorw14"; P14="$T/proc"; mkdir -p "$S"
+printf '#!/bin/sh\n[ -e "%s/rw14-on" ] && echo rw,noatime || echo ro,noatime\n' "$T" > "$S/findmnt"
+printf '#!/bin/sh\ntouch "%s/rw14-on"; echo rw >> "%s/rw14-log"\n' "$T" "$T" > "$S/rw"
+printf '#!/bin/sh\nif grep -rqs "(deleted)" "%s"/*/m; then echo busy >> "%s/rw14-log"; exit 1; fi\nrm -f "%s/rw14-on"; echo ro >> "%s/rw14-log"\n' "$P14" "$T" "$T" "$T" > "$S/ro"
+printf '#!/bin/sh\necho "$*" >> "%s/sysd-log"\n[ "$1" = restart ] && grep -l "/$2\$" "%s"/*/cgroup | while read c; do rm -rf "${c%%/cgroup}"; done\nexit 0\n' "$T" "$P14" > "$S/systemctl"
+chmod +x "$S/"*
+# holder <pid> <cgroup path> <comm> fd|maps <file under the checkout>
+holder() {
+    mkdir -p "$P14/$1/fd"; echo "0::$2" > "$P14/$1/cgroup"; echo "$3" > "$P14/$1/comm"
+    if [ "$4" = fd ]; then ln -s "$5 (deleted)" "$P14/$1/fd/255"; : > "$P14/$1/maps"
+    else printf '7f00-7f10 r-xp 00000000 b3:02 99    %s (deleted)\n' "$5" > "$P14/$1/maps"; fi
+    printf '%s\n' "$5 (deleted)" > "$P14/$1/m"   # what the fake kernel counts
+}
+run14() { : > "$T/rw14-log"; : > "$T/sysd-log"
+    PATH="$S:$PATH" RASTAOS_NO_RORW= RASTAOS_PROC="$P14" PITOOLS_DIR="$T/box" bash "$UPD" "$@" >"$T/out" 2>&1; }
+log14() { tr '\n' ' ' < "$T/$1"; }
+c76=$(o rev-parse 'rastaos-7.6^{commit}'); c77=$(o rev-parse 'rastaos-7.7^{commit}')
+holder 4242 /system.slice/system-audiohub.slice/audiohub@jack.service bash fd "$T/box/f"
+run14 --rollback; rc=$?
+check "replaced file held by a service: rollback exits 0" [ $rc = 0 ]
+check "  and moves HEAD" [ "$(b rev-parse HEAD)" = "$c76" ]
+check "  after a daemon-reload, restarts that unit only" [ "$(log14 sysd-log)" = "daemon-reload restart audiohub@jack.service " ]
+check "  so the root goes back to ro" [ "$(log14 rw14-log)" = "rw ro " ]
+holder 4343 /user.slice/user-0.slice/session-3.scope bash fd "$T/box/f"
+holder 4444 /system.slice/blackbox.service python3 maps "$T/box/f"
+run14 --rollback; rc=$?
+check "held by a login shell too: exit 7" [ $rc = 7 ]
+check "  still moving HEAD and writing the receipt" bash -c "[ \"\$(git -C '$T/box' rev-parse HEAD)\" = $c77 ] && grep -qx PITOOLS_COMMIT=$c77 '$RASTAOS_RELEASE'"
+check "  restarting the service (found through maps), never the session" [ "$(log14 sysd-log)" = "daemon-reload restart blackbox.service " ]
+check "  naming the shell it could not restart" grep -q "pid 4343 (bash) still runs the replaced $T/box/f" "$T/out"
+check "  and saying the root stayed rw" bash -c "grep -q 'root stayed read-write' '$T/out' && [ -e '$T/rw14-on' ]"
+rm -rf "$P14" "$T/rw14-on"   # what the exit-7 line asks of him: end the shell, then `ro`
+run14 --rollback; rc=$?
+check "nothing held: a move restarts nothing, exit 0, ro" \
+    bash -c "[ $rc = 0 ] && [ ! -s '$T/sysd-log' ] && [ \"\$(tr '\n' ' ' < '$T/rw14-log')\" = 'rw ro ' ]"
+
+[ $fail = 0 ] && echo "green" || echo "RED"
+exit $fail

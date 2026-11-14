@@ -5,7 +5,8 @@ Requires=fake-clock.service
 
 [Service]
 Type=oneshot
-# only while diagnostics are armed: a saved clock helps date a post-mortem, and is a card write
-ExecCondition=/usr/local/bin/diag armed --peek
-ExecStart=/usr/local/bin/fake-clock save
+# only while diagnostics are armed: a saved clock helps date a post-mortem, and is a card write.
+# The gate is inside ExecStart, never `ExecCondition=`: RastaOS 7.3 runs systemd 241, which ignores
+# that key (systemd 243) and saved every hour ungated (pi-tools#t-053). No `diag` = disarmed.
+ExecStart=/bin/sh -c '/usr/local/bin/diag armed --peek 2>/dev/null || exit 0; exec /usr/local/bin/fake-clock save'
 StandardOutput=null

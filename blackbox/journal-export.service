@@ -1,11 +1,11 @@
 [Unit]
-Description=journal-export: append the journal since the last run to /data (sequential, one fsync)
+Description=journal-export: the trail since the last run, to flightbox or /data (sequential, capped)
 ConditionPathIsDirectory=/data
 
 [Service]
 Type=oneshot
-# Nothing reaches the card unless diagnostics are armed (`diag arm`, Thomas 2026-09-27); each armed
-# run counts one hour down.
-ExecCondition=/usr/local/bin/diag armed
+# Nothing reaches the card unless diagnostics are armed (`diag arm`, Thomas 2026-09-27/29), and each
+# armed run counts one hour down. The gate is INSIDE journal-export, never `ExecCondition=`: RastaOS
+# 7.3 runs systemd 241, which ignores that key (systemd 243) and ran this ungated (pi-tools#t-053).
 ExecStart=/usr/local/bin/journal-export
 Nice=10

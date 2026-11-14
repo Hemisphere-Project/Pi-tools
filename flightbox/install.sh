@@ -17,6 +17,7 @@ ln -sf "$HERE/flightbox-scan.service" /etc/systemd/system/flightbox-scan.service
 ln -sf "$HERE/flightbox-lazytime.service" /etc/systemd/system/flightbox-lazytime.service
 systemctl daemon-reload 2>/dev/null || true
 systemctl enable flightbox-scan.service flightbox-lazytime.service 2>/dev/null || true
+bash "$HERE/../setup/module-manifest" record flightbox "$HERE" || true   # what this pass laid down (#t-047)
 echo "flightbox installed: /usr/local/bin/flightbox, flightbox-scan + flightbox-lazytime enabled (next boot)"
 if [ "${1:-}" = --now ]; then
   systemctl start flightbox-lazytime.service || true
