@@ -19,6 +19,10 @@
 #            carried six commits no origin holds. Offline it moves the checkout and writes the receipt
 #            only (MODULES=none): `rastaos-update --force <tag>` on the booted card re-applies them.
 #            A failed converge stops the bake: nothing else is baked onto a card off the tag.
+#   hplayer2 /opt/HPlayer2 → the same tag (from its origin, or --hp-bundle FILE), detached; the commit it
+#            left is kept as refs/rastaos/rollback. 7.4 runs anna@c3e84d6, which has no `auto` profile.
+#            Refuses local edits, and a tag whose uv.lock/pyproject.toml differ from the checkout's:
+#            the shipped .venv would then be stale (anna74.sh's rule). Live, hplayer2@* is stopped first.
 #   stamps   /etc/rastaos-patches.txt: the 7.4 bake stacked one anna74 line per run (5 on bench-01);
 #            keep its LAST one and every older line, then ONE rastaos75 line (replaced, never stacked).
 #   version  /boot/VERSION = 7.5. On 7.4 it still read "7.0 -- bootstraped from …", so nothing on a
@@ -48,8 +52,8 @@
 # Exit 0 done (or nothing to do), 1 a step failed, 2 usage / not a RastaOS root.
 set -uo pipefail
 
-ROOT=/ BOOT="" DATA="" ONLY="" LIVE=0 TAG="" BUNDLE="" NOWDE=2.0.5 MIRE="" CHECKOUT=/opt/Pi-tools
-STEPS="converge stamps version units rtc dns wifi nowde media starter"
+ROOT=/ BOOT="" DATA="" ONLY="" LIVE=0 TAG="" BUNDLE="" HPBUNDLE="" NOWDE=2.0.5 MIRE="" CHECKOUT=/opt/Pi-tools
+STEPS="converge hplayer2 stamps version units rtc dns wifi nowde media starter"
 HOST=player-000 PLAYER=hplayer2@auto HPLAYER=/opt/HPlayer2
 HERE=${BAKE_HOME:-$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)}
 ARGS=("$@")
@@ -71,6 +75,7 @@ while [ $# -gt 0 ]; do
     --tag) TAG=${2:?--tag TAG}; shift 2 ;;
     --bundle) BUNDLE=$(readlink -f "${2:?--bundle FILE}"); shift 2 ;;
     --nowde) NOWDE=${2:?--nowde VERSION}; shift 2 ;;
+    --hp-bundle) HPBUNDLE=$(readlink -f "${2:?--hp-bundle FILE}"); shift 2 ;;
     --data) DATA=${2:?--data DIR}; shift 2 ;;
     --mire) MIRE=$(readlink -f "${2:?--mire FILE}"); shift 2 ;;
     --list) for s in $STEPS; do echo "$s"; done; exit 0 ;;
@@ -92,6 +97,7 @@ if [ -n "$ONLY" ]; then
 fi
 runs() { [ -z "$ONLY" ] || case ",$ONLY," in *",$1,"*) ;; *) return 1 ;; esac; }
 runs converge && [ -z "$TAG" ] && die "converge needs --tag <release> (or --only without converge)" 2
+runs hplayer2 && [ -z "$TAG" ] && die "hplayer2 needs --tag <release> (or --only without it)" 2
 UPDATER=$HERE/../setup/rastaos-update
 runs converge && [ ! -f "$UPDATER" ] && die "$UPDATER absent: run the bake from a tree at the release" 2
 
@@ -131,6 +137,26 @@ step_converge() {
   [ "$rc" = 0 ] || { say "converge: rastaos-update exit $rc"; return 1; }
   printf '%s' "$out" | grep -q 'nothing to do$' && return 0
   did "converge: $CHECKOUT at $TAG$([ "$LIVE" = 0 ] && echo " (offline: modules re-apply on the booted card, rastaos-update --force $TAG)")"
+}
+
+step_hplayer2() {
+  local co head want; co=$(r "$HPLAYER")
+  hg() { git -C "$co" "$@"; }
+  hg rev-parse --git-dir >/dev/null 2>&1 || { say "hplayer2: no git checkout at $co"; return 1; }
+  head=$(hg rev-parse HEAD) || return 1
+  hg diff --quiet HEAD -- || { say "hplayer2: local edits in $co — commit or stash them; nothing moved"; return 1; }
+  if ! hg rev-parse -q --verify "refs/tags/$TAG^{commit}" >/dev/null; then
+    hg fetch -q "${HPBUNDLE:-origin}" "refs/tags/$TAG:refs/tags/$TAG" \
+      || { say "hplayer2: could not fetch $TAG from ${HPBUNDLE:-origin}"; return 1; }
+  fi
+  want=$(hg rev-parse "refs/tags/$TAG^{commit}") || return 1
+  [ "$head" = "$want" ] && return 0
+  hg diff --quiet "$head" "$want" -- uv.lock pyproject.toml \
+    || { say "hplayer2: $TAG changes uv.lock/pyproject.toml — the card's .venv would be stale; nothing moved"; return 1; }
+  [ "$LIVE" = 1 ] && systemctl stop 'hplayer2@*' 2>/dev/null
+  hg update-ref refs/rastaos/rollback "$head" || return 1
+  hg -c advice.detachedHead=false checkout -q --detach "$want" || { say "hplayer2: checkout of $TAG failed — still on ${head:0:7}"; return 1; }
+  did "hplayer2: $HPLAYER ${head:0:7} → $TAG (${want:0:7}); rollback point ${head:0:7}"
 }
 
 step_stamps() {

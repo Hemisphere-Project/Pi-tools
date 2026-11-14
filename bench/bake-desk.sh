@@ -47,7 +47,6 @@ echo 'the mire' > "$T/mire.mp4"
 printf '#\n#  Pi-tools starter configuration\n#\nhostrename@bench-01\n## [hplayer2] multimedia player [profile]\n# hplayer2@looper\nhplayer2@26-anna\nsetnet\n' > "$B/starter.txt"
 echo '[player]' > "$B/hplayer2.conf"
 echo bench-01 > "$R/etc/hostname"; printf '127.0.0.1\tlocalhost\n127.0.1.1\tbench-01\n' > "$R/etc/hosts"
-mkdir -p "$R/opt/HPlayer2/core/engine"; echo 'def load(): pass' > "$R/opt/HPlayer2/core/engine/bootconf.py"   # 7.4's anna@c3e84d6: no auto
 # the release: a fixture origin with the 7.4 commit and a tagged one after it; the card's checkout on the first
 export GIT_AUTHOR_NAME=desk GIT_AUTHOR_EMAIL=desk@localhost GIT_COMMITTER_NAME=desk GIT_COMMITTER_EMAIL=desk@localhost
 TAG=rastaos-7.5-desk UP=$T/origin
@@ -55,6 +54,15 @@ git init -q "$UP" && echo 7.4 > "$UP/f" && git -C "$UP" add f && git -C "$UP" co
 c74=$(git -C "$UP" rev-parse HEAD)
 echo 7.5 > "$UP/f" && git -C "$UP" commit -qam 7.5 && git -C "$UP" tag "$TAG" && c75=$(git -C "$UP" rev-parse HEAD)
 git clone -q "$UP" "$R/opt/Pi-tools" && git -C "$R/opt/Pi-tools" checkout -q --detach "$c74"
+# HPlayer2: 7.4's anna commit (no `auto`), the release tag (bootconf.pick_profile, same uv.lock), and a
+# later tag that changes uv.lock (the shipped .venv would be stale)
+UPH=$T/hplayer2-origin; mkdir -p "$UPH/core/engine"; git init -q "$UPH"
+echo 'def load(): pass' > "$UPH/core/engine/bootconf.py"; echo lock1 > "$UPH/uv.lock"
+git -C "$UPH" add -A && git -C "$UPH" commit -qm anna && h74=$(git -C "$UPH" rev-parse HEAD)
+printf 'def pick_profile(arg):\n    pass\n' > "$UPH/core/engine/bootconf.py"
+git -C "$UPH" commit -qam auto && git -C "$UPH" tag "$TAG" && h75=$(git -C "$UPH" rev-parse HEAD)
+echo lock2 > "$UPH/uv.lock"; git -C "$UPH" commit -qam deps && git -C "$UPH" tag rastaos-deps-desk
+git clone -q "$UPH" "$R/opt/HPlayer2" && git -C "$R/opt/HPlayer2" checkout -q --detach "$h74"
 export RASTAOS_ALLOW_NONROOT=1 RASTAOS_LOCK=$T/update.lock    # rastaos-update's own test overrides
 
 chk "converge without --tag refuses (exit 2)" sh -c "'$BAKE' --root '$R' --boot '$B' >/dev/null 2>&1; [ \$? = 2 ]"
@@ -67,7 +75,8 @@ chk "media offline without p3 fails (exit 1)" sh -c "'$BAKE' --only media --mire
 cp "$B/starter.txt" "$T/starter.before"
 chk "starter on an HPlayer2 without auto fails (exit 1)" sh -c "'$BAKE' --only starter --root '$R' --boot '$B' >/dev/null 2>&1; [ \$? = 1 ]"
 chk "  …and leaves starter.txt" cmp -s "$B/starter.txt" "$T/starter.before"
-printf 'def pick_profile(arg):\n    pass\n' > "$R/opt/HPlayer2/core/engine/bootconf.py"   # the release: hplayer2#t-101
+chk "hplayer2 to a tag that changes uv.lock fails (exit 1)" sh -c "'$BAKE' --only hplayer2 --tag rastaos-deps-desk --root '$R' --boot '$B' >/dev/null 2>&1; [ \$? = 1 ]"
+chk "  …and leaves HPlayer2 where it was" [ "$(git -C "$R/opt/HPlayer2" rev-parse HEAD)" = "$h74" ]
 
 echo "run 1"; "$BAKE" --tag "$TAG" --root "$R" --boot "$B" --data "$D" --mire "$T/mire.mp4" > "$T/run1.log" 2>&1; rc1=$?; sed 's/^/    /' "$T/run1.log"
 chk "run 1 exits 0" [ "$rc1" = 0 ]
@@ -99,6 +108,8 @@ chk "hotspot gone from /boot/wifi" [ ! -e "$B/wifi/wint-hotspot.nmconnection" ]
 chk "hotspot gone from the store" [ ! -e "$R/etc/NetworkManager/system-connections/wint-hotspot.nmconnection" ]
 chk "eth0-dhcp kept" [ -f "$B/wifi/eth0-dhcp.nmconnection" -a -f "$R/etc/NetworkManager/system-connections/eth0-dhcp.nmconnection" ]
 chk "_anna74-removed gone" [ ! -e "$R/etc/NetworkManager/system-connections/_anna74-removed" ]
+chk "HPlayer2 on the tag" [ "$(git -C "$R/opt/HPlayer2" rev-parse HEAD)" = "$h75" ]
+chk "HPlayer2 rollback point = the anna commit" [ "$(git -C "$R/opt/HPlayer2" rev-parse refs/rastaos/rollback)" = "$h74" ]
 chk "media = the mire alone" [ "$(ls -A "$D/media")" = 0_mire.mp4 ]
 chk "the mire is --mire's file" cmp -s "$T/mire.mp4" "$D/media/0_mire.mp4"
 chk "saved player settings gone" [ ! -e "$D/hplayer2-26-anna.cfg" ]
