@@ -11,6 +11,8 @@ here.
 | `verify` + `verify-modules.py` | the commit-time floor: every script parses, every file a `module.ini` names exists |
 | `fleet-run` + `fleet-lib.sh` | walk a roster of player **hotspots**, run one command on each, skip the dead ones |
 | `probe-level` | which patches does this player actually carry? one `y`/`n` per patch and a `missing:` line |
+| `precheck` | one screen per player, read-only: card health and **write load**, journal, HPlayer2 defects and sync state, watchdog actions per day, unexplained warnings |
+| `eth-sync` | move one player's sync group from the wlan0 dongle to **eth0** (master `AP`, slaves `STA`), no reflash |
 | `fleet-patch-hostapd.sh` | one-off: convert existing players from the NM/wpa_supplicant AP to hostapd, no reflash |
 | `sd-converge` | bench SD carousel: converge player **cards** to this machine's checkouts, no network |
 | `burn-batch` | clone one golden image onto N cards at once, and prove every card byte-for-byte |
@@ -339,6 +341,76 @@ unrunnable `P99` left `unread`. **No detect line in
 repo**: the example rows are grounded on units this repo ships, not on a probed
 card. The first run against a card is the one that proves the ledger, and the
 tool is built so that run costs one command.
+
+---
+
+## `precheck` — is what this player logs coherent?
+
+```sh
+./bench/precheck -t root@10.0.0.1           # one player
+./bench/precheck --here --days 1            # on the player itself
+./bench/fleet-run --local -- ./bench/precheck -t %t     # the whole fleet
+```
+
+Read-only, one ssh session, six to ten lines per player: the card (name, date,
+serial, `/data` filesystem state, mmc errors, and the **MB written to `/data`
+this boot, per day**), where the journal lives and how big it is, HPlayer2's
+level, restarts and the known defects counted over the window (`--days`,
+default 3), the sync group right now (slave: multicast membership, last drift
+window, link; master: stations, leases, linked peers), watchdog actions and
+beacon-loss bursts per day, and the top warning kinds that no known pattern
+explains.
+
+It is the field kit's `precheck.sh` (Biennale 2026, run on every player before
+the 21/09 pack). What it measures is unchanged; what tied it to one show is
+gone: the HPlayer2 unit is found (`--unit` overrides), the boot partition is
+`/boot` or `/boot/firmware` as `setnet` resolves it, and `/data`'s partition is
+found from its mountpoint instead of assumed to be `mmcblk0p3`.
+
+What it cannot say is **who** writes: the write load is a total for the boot.
+Naming the process takes per-process counters read over a day (pi-tools#t-037).
+On an x86 box the card line reads blank.
+
+## `eth-sync` — the sync group over eth0 instead of the dongle
+
+```sh
+./bench/eth-sync -n -r AP                                  # show the program, touch nothing
+./bench/eth-sync -r AP  -e player-000 -t root@10.0.0.1     # the master
+./bench/fleet-run -r slaves.roster --local -- ./bench/eth-sync -r STA -e %h -t %t
+```
+
+Same layout as the network-tools sync templates: master `eth0-sync-AP` (static
+`10.1.0.1`, dnsmasq serves the /24), slaves `eth0-sync-STA` (DHCP). On the box
+it archives the wifi sync marker and the golden's `eth0-dhcp` to
+`wifi/_disabled/`, drops the `eth0-sync-<ROLE>` marker in, removes
+NetworkManager's copies of the two archived profiles (`setnet` is additive and
+would keep them), runs `setnet`, and reports eth0's address and carrier.
+
+* **The template**: the card's own `wifi/_disabled/` copy first, else
+  `/opt/Pi-tools/network-tools/profiles/_disabled/` — an installer-made card has
+  no `_disabled/` on its boot partition (`network-tools/README.md`). Neither →
+  abort, nothing touched.
+* **`-e NAME`** refuses unless the box's hostname is `NAME`. Every player answers
+  on `10.0.0.1` and this tool writes; under `fleet-run`, pass `-e %h`.
+* **Reach the player over its hotspot, not over eth0** — the run re-addresses
+  eth0 and a session riding it dies before the report.
+* **HPlayer2 is not restarted**: it reads its role at start. Restart it (or
+  reboot) once every player of the group is switched.
+* **Back to wifi** is the same move mirrored, by hand: archive
+  `eth0-sync-<ROLE>`, restore `wlan0-sync-<ROLE>` and `eth0-dhcp`, `setnet`.
+
+It is the field kit's `on-player-eth-sync.sh` (Biennale 2026), with the same
+steps; the template fallback and `-e` are new.
+
+### Status (both)
+
+The two on-box programs ran on the Biennale fleet as field scripts. The folded
+versions are exercised **without a player only**: argument refusals, `--dry-run`,
+`precheck --here` on a Debian VM (every line prints, blank where there is no
+card), a dead ssh target landing on exit 2, and `eth-sync`'s program run in a
+sandbox tree with stubbed system tools — golden card, installer card (template
+from `/opt/Pi-tools`), no template (abort, untouched), wrong host (refused,
+untouched). **Their first run against a real player is the proof still owed.**
 
 ---
 

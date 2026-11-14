@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+# precheck — one screen per player: is what this box has been logging coherent?
+#
+# Run from the laptop against a player (or on the player itself with --here).
+# Read-only: it changes nothing on the box, it only reads the card, the journal
+# and the live sync state, in one ssh session, and prints six to ten lines.
+#
+#   1. CARD   — the card's name/date/serial, the /data filesystem state and error
+#               count, mmc errors in dmesg, and the WRITE LOAD on /data this boot
+#               (MB, and MB/day): the number that tells a card-killing writer
+#               from a quiet player
+#   2. JOURNAL — where the journal lives now, how big, the persistence/export units
+#   3. HPLAYER2 — level, process age, restarts, and over the window: tracebacks,
+#               thread-start failures, multicast joins/failures, zyre rebuilds,
+#               "no address" lines; then the sync group RIGHT NOW (slave:
+#               membership + last drift window + link; master: stations, leases,
+#               clock, linked peers; solo: what is playing)
+#   4. WATCHDOGS — linkwatch reload/deauth, usbfix, apfix actions per day; on a
+#               slave, beacon-loss bursts per day
+#   5. EXTRAS — the warning lines of the window that no known pattern explains,
+#               top kinds, numbers and MACs folded so repeats count together
+#
+#   Usage: precheck [options]
+#
+#     -t, --target SSH    ssh target                 (default root@10.0.0.1)
+#         --here          run on THIS machine — you are already on the player
+#         --days N        journal window for sections 3–5          (default 3)
+#         --unit UNIT     the HPlayer2 unit, e.g. hplayer2@myshow
+#                         (default: the hplayer2@* unit the box has)
+#         --ssh-timeout SEC  connect budget                       (default 10)
+#     -n, --dry-run       print the target and the program; reach nothing
+#     -h, --help
+#
+#   SSH identity: FLEET_SSH_KEY pins one key, as for fleet-run (fleet-lib.sh).
+#
+#   Exit: the box's own exit, 0 when it ran · 2 could not run (bad argument, no
+#         ssh, transport died — rc 255 from ssh).
+#
+#   Examples:
+#     precheck -t root@10.0.0.1
+#     precheck --here --days 1
+#     ./bench/fleet-run --local -- ./bench/precheck -t %t     # the whole fleet
+#
+# Field origin: `precheck.sh`, the read run on every Biennale 2026 player before
+# the 21/09 pack (Runbooks biennale-deploy/scripts/). Folded here unchanged in
+# what it measures; what changed is only what tied it to one show — the HPlayer2
+# unit name (found, not hard-coded), the boot partition (/boot or /boot/firmware,
+# as setnet resolves it), the /data partition (found from its mountpoint, not
+# assumed to be mmcblk0p3) and the window (--days).
+#
+# WHAT IT CANNOT TELL YOU: who the writer is. Section 1 says how much /data took
+# this boot; naming the process behind it needs per-process counters read over a
+# day (pi-tools#t-037). It is a Pi tool: on an x86 box the card line reads blank.
+set -uo pipefail
+
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=fleet-lib.sh
+. "$SELF_DIR/fleet-lib.sh"          # FLEET_SSH_OPTS, FLEET_TARGET_DEFAULT — no side effects
+
+usage() { sed -n '2,53p' "$0" | sed 's/^# \?//'; }
+
+TARGET="$FLEET_TARGET_DEFAULT"; HERE=0; DAYS=3; UNIT=""; SSHB=10; DRY=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -t|--target)   TARGET="${2:?--target needs an ssh target}"; shift ;;
+    --here)        HERE=1 ;;
+    --days)        DAYS="${2:?--days needs a number}"; shift ;;
+    --unit)        UNIT="${2:?--unit needs a unit name}"; shift ;;
+    --ssh-timeout) SSHB="${2:?--ssh-timeout needs seconds}"; shift ;;
+    -n|--dry-run)  DRY=1 ;;
+    -h|--help)     usage; exit 0 ;;
+    *)             echo "precheck: unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+  shift
+done
+
+die() { printf 'precheck: %s\n' "$*" >&2; exit 2; }
+case "$DAYS$SSHB" in *[!0-9]*|'') die "--days and --ssh-timeout must be integers" ;; esac
+[ "$DAYS" -ge 1 ] || die "--days must be at least 1"
+case "$UNIT" in *[!A-Za-z0-9@._-]*) die "--unit: not a unit name: $UNIT" ;; esac
+
+sq() { printf "'%s'" "${1//\'/\'\\\'\'}"; }   # single-quote for the remote shell
+
+# ── the program that runs ON the box ────────────────────────────────
+build_program() {
+  printf 'DAYS=%s\nUNIT=%s\n' "$DAYS" "$(sq "$UNIT")"
+  cat <<'PROG'
+set -u
+# a read-only root has no writable /tmp for here-strings; /data does
+[ -d /data ] && [ -w /data ] && { mkdir -p /data/tmp 2>/dev/null && export TMPDIR=/data/tmp; }
+G="git -c safe.directory=*"
+B=/boot; [ -d /boot/firmware ] && B=/boot/firmware
+ROLE=solo; IF=""; for i in eth0 wlan0; do [ -f $B/wifi/$i-sync-AP.nmconnection ] && { ROLE=master; IF=$i; }; [ -f $B/wifi/$i-sync-STA.nmconnection ] && { ROLE=slave; IF=$i; }; done
+[ -n "$UNIT" ] || UNIT=$(systemctl list-units --all --plain --no-legend 'hplayer2@*.service' 2>/dev/null | awk '{print $1}' | head -1)
+UNIT=${UNIT%.service}
+HP=$($G -C /opt/HPlayer2 rev-parse --short HEAD 2>/dev/null)
+PID=$([ -n "$UNIT" ] && systemctl show "$UNIT" -p MainPID --value 2>/dev/null); AGE=$(ps -o etimes= -p "${PID:-0}" 2>/dev/null | tr -d ' ')
+echo "== $(hostname) | $(head -1 $B/VERSION 2>/dev/null | cut -c1-22) | role $ROLE($IF) | up $(uptime -p | cut -c4-) | clock $(date '+%F %T') | unit ${UNIT:-none}"
+# 1. card — /data's partition and the card it sits on
+DP=$(findmnt -rn -o SOURCE /data 2>/dev/null); DP=${DP#/dev/}; DP=${DP:-mmcblk0p3}
+DK=$(lsblk -no pkname "/dev/$DP" 2>/dev/null | head -1); DK=${DK:-mmcblk0}
+W=$(awk -v p="$DP" '$3==p{printf "%.0f", $10*512/1048576}' /proc/diskstats); W=${W:-0}; H=$(( $(cut -d. -f1 /proc/uptime) / 3600 ))
+echo "   card: $(cat /sys/block/$DK/device/name 2>/dev/null) $(cat /sys/block/$DK/device/date 2>/dev/null) sn=$(cat /sys/block/$DK/device/serial 2>/dev/null) | $DP: $(dumpe2fs -h /dev/$DP 2>/dev/null | grep -E '^Filesystem state|^FS Error count' | cut -d: -f2 | tr -s ' ' | tr '\n' ',') mmc-err=$(dmesg 2>/dev/null | grep -ciE 'mmc0: (error|timeout)|mmcblk0: error|I/O error') | $DP writes this boot: ${W} MB in ${H} h ($( [ "$H" -gt 0 ] && echo $((W*24/H)) || echo '?') MB/day) | drift csv: $(ls -la /data/var/wallclock-drift.csv 2>/dev/null | awk '{printf "%.0f MB", $5/1048576}')"
+# 2. journal
+echo "   journal: $(journalctl --disk-usage 2>/dev/null | grep -oE '[0-9.]+[MG]') on $(findmnt -rn -o SOURCE /var/log/journal 2>/dev/null || echo tmpfs/run) | storage=$(grep -h '^Storage' /etc/systemd/journald.conf.d/*.conf 2>/dev/null | tail -1 | cut -d= -f2) persist-unit=$(systemctl is-active journal-persist 2>/dev/null) export-timer=$(systemctl is-active journal-export.timer 2>/dev/null) | blackbox.log $(wc -l 2>/dev/null < /data/var/log/blackbox.log) lines"
+# 3. HPlayer2
+JT=$([ -n "$UNIT" ] && journalctl -u "$UNIT" --since "-${DAYS}d" -o cat --no-pager 2>/dev/null)
+TB=$(printf '%s\n' "$JT" | grep -c Traceback); NT=$(printf '%s\n' "$JT" | grep -c "can't start new thread"); MJ=$(printf '%s\n' "$JT" | grep -c 'multicast group joined'); MF=$(printf '%s\n' "$JT" | grep -c 'multicast join failed'); RB=$(printf '%s\n' "$JT" | grep -c 'rebuilding zyre'); NA=$(printf '%s\n' "$JT" | grep -c 'no address on')
+echo "   hplayer2 $HP pid-age $((${AGE:-0}/3600))h NRestarts=$([ -n "$UNIT" ] && systemctl show "$UNIT" -p NRestarts --value 2>/dev/null) | $DAYS days: tracebacks=$TB (thread-start=$NT) multicast joined=$MJ failed=$MF zyre-rebuilds=$RB no-address=$NA"
+if [ "$ROLE" = slave ]; then
+  echo "   sync now: membership=$(ip maddr show dev $IF 2>/dev/null | grep -cE '239\.192\.0\.3[78]') | $(journalctl -u "$UNIT" --since -3min -o cat --no-pager 2>/dev/null | grep -oE 'drift 60s: p50=[0-9.]+ms.*locked=[0-9]+%' | tail -1 || echo 'no drift window in 3 min') | link: $(iw dev $IF link 2>/dev/null | grep -oE 'signal: -[0-9]+' ) | reloads this boot: $(journalctl -t linkwatch -b -o cat --no-pager 2>/dev/null | grep -c '^reloading')"
+elif [ "$ROLE" = master ]; then
+  echo "   sync now: stations=$(iw dev $IF station dump 2>/dev/null | grep -c Station) leases=$(grep -c '10\.1\.0\.' /var/lib/dnsmasq/dnsmasq.leases 2>/dev/null) | clock: $(printf '%s\n' "$JT" | grep -oE 'master clock: emitting.*' | tail -1 | cut -c1-40) | peers linked (last 10 min): $(journalctl -u "$UNIT" --since -10min -o cat --no-pager 2>/dev/null | grep -oE "peer.link \{.name.: .[^']+', .data.: 3" | grep -oE "'[^']+'" | sort -u | tr '\n' ' ')"
+else
+  echo "   solo: $(journalctl -u "$UNIT" --since -3min -o cat --no-pager 2>/dev/null | grep -oE 'playing /data/[^ ]+' | tail -1 | cut -c1-50)"
+fi
+# 4. watchdogs / beacon loss per day
+echo "   watchdogs per day: $(journalctl -t linkwatch -t usbfix -t apfix --since "-${DAYS}d" -o short-iso --no-pager 2>/dev/null | grep -vE '^-- |Starting|Started|Finished|Succeeded|Consumed|observing' | awk '{d=substr($1,6,5); k="?"; if ($0 ~ /reloading/) k="reload"; else if ($0 ~ /deauth/) k="deauth"; else if ($0 ~ /usbfix/) k="usbfix"; else if ($0 ~ /apfix/) k="apfix"; c[d" "k]++} END {for (x in c) printf "%s=%d ", x, c[x]}' | tr ' ' '\n' | sort | tr '\n' ' ')"
+[ "$ROLE" = slave ] && echo "   beacon-loss bursts per day: $(journalctl -u wpa_supplicant --since "-${DAYS}d" -o short-iso --no-pager 2>/dev/null | grep BEACON-LOSS | awk '{d=substr($1,6,5); t=substr($1,12,8); split(t,a,":"); s=a[1]*3600+a[2]*60+a[3]; if (d!=pd || s-ps>120) b[d]++; pd=d; ps=s} END {for (d in b) printf "%s=%d ", d, b[d]}' | tr ' ' '\n' | sort | tr '\n' ' ')"
+# 5. extras: warning lines no known pattern explains
+echo "   EXTRAS (unexplained error kinds, $DAYS days):"
+journalctl --since "-${DAYS}d" -p warning -o cat --no-pager 2>/dev/null \
+  | grep -vE "sampler not full|can't start new thread|Traceback|File \"|RuntimeError|_start_joinable|Exception ignored|self\.|linker|delim|multicast|BEACON-LOSS|drop_unicast|symlink|Read-only file system|amixer|Usage:|Available|-h,--help|-c,--card|-D,--device|-d,--debug|-n,--nocheck|-v,--version|-q,--quiet|-i,--inactive|-a,--abstract|-s,--stdin|-R,--raw|-M,--mapped|scontrols|scontents|sset|sget|controls|contents|cset|cget|ENETUNREACH|errorCallback|webconf|NOWDE|retry [0-9]+/inf|hdmi-rehandshake|apfix|linkwatch|usbfix|RADIUS|IEEE 802.11|AP-STA|DHCP|dnsmasq|Failed to open /proc|zbeacon|peer.link|WALLCLOCK|correction|Started|Stopped|Starting|Stopping|Succeeded|Failed with result|Main process exited|Scheduled restart|Consumed" \
+  | sed -E 's/[0-9a-f]{2}(:[0-9a-f]{2}){5}/MAC/g; s/[0-9]+(\.[0-9]+)?/N/g' | cut -c1-100 | sort | uniq -c | sort -rn | head -8 | sed 's/^/      /'
+exit 0
+PROG
+}
+
+if [ "$DRY" = 1 ]; then
+  # the header goes to stderr, so `precheck -n > prog.sh` is the program, runnable as is
+  echo "== precheck (dry run) — would run on: $([ "$HERE" = 1 ] && echo 'HERE (this machine)' || echo "$TARGET")" >&2
+  build_program
+  exit 0
+fi
+
+if [ "$HERE" = 1 ]; then
+  build_program | bash -s
+  exit $?
+fi
+
+command -v ssh >/dev/null 2>&1 || die "no ssh on this machine (--here reads locally)"
+# ConnectTimeout goes FIRST: for a repeated -o, ssh keeps the first value given
+build_program | ssh -o ConnectTimeout="$SSHB" "${FLEET_SSH_OPTS[@]}" "$TARGET" 'bash -s'
+rc=$?
+[ "$rc" -eq 255 ] && die "ssh to $TARGET failed (rc 255) — nothing was read"
+exit "$rc"
