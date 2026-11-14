@@ -39,7 +39,7 @@
 #
 # The checkout is replaced under a running script, so the script first re-executes from a copy
 # on /run (knowledge: never edit a running shell script in place). On a read-only root it takes
-# `rw` for the run and gives it back with `ro` (both reference-counted, rorw).
+# `rw` for the run, the fetch included, and gives it back with `ro` (both reference-counted, rorw).
 #
 # Exit: 0 converged or already there · 1 usage · 2 not root / no checkout · 3 refused · 4 fetch
 # failed · 5 a git step failed mid-way (the receipt is not written, the rollback point names
@@ -123,6 +123,20 @@ fi
 
 head=$(g rev-parse HEAD)
 
+# On a read-only root, `rw` for the rest of the run, `ro` on exit (rorw counts them). Taken
+# before the fetch too: a fetch writes the checkout's .git (FETCH_HEAD, objects, the tag ref), so
+# on a 7.4 card at `ro` it failed "Read-only file system" before anything moved (bench-01, 14/11).
+took_rw=0
+take_rw() {
+    [ $took_rw = 1 ] && return 0
+    if [ -z "${RASTAOS_NO_RORW:-}" ] && command -v rw >/dev/null 2>&1 && command -v ro >/dev/null 2>&1 \
+       && findmnt -no OPTIONS / 2>/dev/null | tr ',' '\n' | grep -qx ro; then
+        rw >/dev/null || die 2 "could not remount the root read-write"
+        took_rw=1
+        trap 'rm -f "$RASTAOS_UPDATE_COPY"; [ $took_rw = 1 ] && ro >/dev/null' EXIT
+    fi
+}
+
 # ── resolve the target ──────────────────────────────────────────────
 
 if [ "$mode" = rollback ]; then
@@ -142,6 +156,7 @@ else
     else
         from=$REMOTE source=$REMOTE
     fi
+    take_rw
     # No `+`: a tag already here on another commit is refused by git itself (tags do not move).
     # Not `-q`: the refusal is told apart from an unreachable source by git's own `[rejected]` line.
     if out=$(g fetch --no-tags "$from" "refs/tags/$tag:refs/tags/$tag" 2>&1); then
@@ -181,13 +196,7 @@ fi
 
 # ── apply ───────────────────────────────────────────────────────────
 
-took_rw=0
-if [ -z "${RASTAOS_NO_RORW:-}" ] && command -v rw >/dev/null 2>&1 && command -v ro >/dev/null 2>&1 \
-   && findmnt -no OPTIONS / 2>/dev/null | tr ',' '\n' | grep -qx ro; then
-    rw >/dev/null || die 2 "could not remount the root read-write"
-    took_rw=1
-    trap 'rm -f "$RASTAOS_UPDATE_COPY"; [ $took_rw = 1 ] && ro >/dev/null' EXIT
-fi
+take_rw
 
 write_receipt() {   # write_receipt <tag> <commit> <source> <previous> <modules>
     local tmp

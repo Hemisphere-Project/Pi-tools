@@ -7,7 +7,7 @@
 # what a box sees: first move (receipt + rollback point), the second run that must change NOTHING,
 # an offline move from a git bundle, a rollback and its swap, and the refusals (local edits, a tag
 # that moved, a missing tag). Paths are redirected with the updater's own overrides; nothing under
-# /etc or /run is touched. What it cannot prove: rw/ro on a real read-only root, and the hardware —
+# /etc or /run is touched (case 12 stubs rw/ro/findmnt). What it cannot prove: a real root, the hardware —
 # that is the bench proof on bench-01 (pi-tools#t-057).
 set -uo pipefail
 
@@ -178,6 +178,24 @@ check "real set, x86: the 5 RPi-only script modules skipped" \
     bash -c "[ \"\$(grep -c '^skip' '$T/plan-real-x86')\" = 5 ]"
 check "real set, x86: audiohub + splash re-run, rorw upgraded" \
     bash -c "grep -qE '^script +audiohub ' '$T/plan-real-x86' && grep -qE '^script +splash ' '$T/plan-real-x86' && grep -qE '^upgrade +rorw ' '$T/plan-real-x86'"
+
+# 12. a read-only root: the fetch needs `rw` too (bench-01, 14/11: run 1 died on .git/FETCH_HEAD,
+#     "Read-only file system", before it moved anything). rw/ro/findmnt stubbed: .git is writable
+#     only between `rw` and `ro`, as the box's root is.
+mkdir -p "$T/rorw"
+printf '#!/bin/sh\n[ -e "%s/rw-on" ] && echo rw,noatime || echo ro,noatime\n' "$T" > "$T/rorw/findmnt"
+printf '#!/bin/sh\nchmod -R u+w "%s/box/.git"; touch "%s/rw-on"; echo rw >> "%s/rw-log"\n' "$T" "$T" "$T" > "$T/rorw/rw"
+printf '#!/bin/sh\nchmod -R a-w "%s/box/.git"; rm -f "%s/rw-on"; echo ro >> "%s/rw-log"\n' "$T" "$T" "$T" > "$T/rorw/ro"
+chmod +x "$T/rorw/"*
+echo seven > "$T/origin/f"; o commit -qam seven; o tag rastaos-7.7
+o bundle create "$T/ro.bundle" refs/tags/rastaos-7.7 >/dev/null 2>&1
+export RASTAOS_NO_CONVERGE=1; chmod -R a-w "$T/box/.git"
+PATH="$T/rorw:$PATH" RASTAOS_NO_RORW= PITOOLS_DIR="$T/box" bash "$UPD" --bundle "$T/ro.bundle" rastaos-7.7 >"$T/out" 2>&1; rc=$?
+check "read-only root: bundle run exits 0" [ $rc = 0 ]
+check "  and moves HEAD" [ "$(b rev-parse HEAD)" = "$(o rev-parse 'rastaos-7.7^{commit}')" ]
+check "  inside one rw ... ro bracket" [ "$(tr '\n' ' ' < "$T/rw-log")" = "rw ro " ]
+check "  leaving .git read-only again" [ ! -w "$T/box/.git" ]
+chmod -R u+w "$T/box/.git"
 
 [ $fail = 0 ] && echo "green" || echo "RED"
 exit $fail
