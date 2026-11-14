@@ -8,11 +8,12 @@
 #   image/rastaos-bake --list                     # the steps, in order
 #   sudo image/rastaos-bake --only dns,wifi       # a subset (comma-separated; no --tag without converge)
 #   --bundle FILE  the tag from a git bundle (no network)   --nowde VER  the one Nowde firmware kept
+#   --data DIR     the card's data partition (default /data; offline <root>/data)   --mire FILE  0_mire.mp4
 #
 # Idempotent: a second run changes nothing and says so. Each step names the defect it removes.
 # Run it from a Pi-tools tree at the release (a /tmp clone or bundle on the card), not from the
 # card's own /opt/Pi-tools: 7.4's checkout has no image/ and no setup/rastaos-update.
-# Steps so far (pi-tools#t-058; later slices add media/starter strip / identity / p4):
+# Steps so far (pi-tools#t-058; later slices add identity / p4):
 #   converge /opt/Pi-tools → the release tag, via THIS tree's setup/rastaos-update (receipt
 #            /etc/rastaos-release + rollback point; live: the box's modules re-applied). 7.4's checkout
 #            carried six commits no origin holds. Offline it moves the checkout and writes the receipt
@@ -33,12 +34,23 @@
 #            store loses the _anna74-removed dir (NM "keyfile: error loading connection" every boot).
 #   nowde    /opt/nowde-tools keeps ONE firmware: 7.4 held 2.0.3 (patch-golden 15/09) and 2.0.5
 #            (patch-golden-29). Default 2.0.5 = Nowde main's NOWDE_VERSION + bin/ and the garden nodes.
+#   media    /data/media back to the generic set: ONLY 0_mire.mp4. 7.4's bake put the Anna show set there
+#            (+0.6 GB) and deleted the mire, which lives in no repo: --mire FILE puts it back (a 7.3 card's
+#            /data/media/0_mire.mp4). The saved player settings /data/hplayer2*.cfg go too: a saved cfg
+#            wins over the /boot/hplayer2.conf seeds. Empties the BENCH card's media — never a show player's.
+#            No mire on the card and no --mire: the step fails before removing anything.
+#   starter  /boot/starter.txt generic: hostrename@player-000 (the burn scripts' sed rewrites that line per
+#            card) and hplayer2@auto (no /boot/hplayer2.conf = HPlayer2's default profile on /data/media);
+#            7.4 shipped hplayer2@26-anna. /boot/hplayer2.conf goes (a role file: the /boot role sets bring
+#            it), /etc/hostname + /etc/hosts say player-000. Refuses when the card's /opt/HPlayer2 has no
+#            `auto` (it predates hplayer2#t-101): a starter naming a profile the player lacks plays nothing.
 #
 # Exit 0 done (or nothing to do), 1 a step failed, 2 usage / not a RastaOS root.
 set -uo pipefail
 
-ROOT=/ BOOT="" ONLY="" LIVE=0 TAG="" BUNDLE="" NOWDE=2.0.5 CHECKOUT=/opt/Pi-tools
-STEPS="converge stamps version units rtc dns wifi nowde"
+ROOT=/ BOOT="" DATA="" ONLY="" LIVE=0 TAG="" BUNDLE="" NOWDE=2.0.5 MIRE="" CHECKOUT=/opt/Pi-tools
+STEPS="converge stamps version units rtc dns wifi nowde media starter"
+HOST=player-000 PLAYER=hplayer2@auto HPLAYER=/opt/HPlayer2
 HERE=${BAKE_HOME:-$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)}
 ARGS=("$@")
 STAMP=rastaos75
@@ -49,7 +61,7 @@ die()  { echo "[bake] FATAL: $*" >&2; exit "${2:-1}"; }
 CHANGED=0
 did()  { CHANGED=$((CHANGED + 1)); say "  $*"; }
 
-usage() { sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -59,6 +71,8 @@ while [ $# -gt 0 ]; do
     --tag) TAG=${2:?--tag TAG}; shift 2 ;;
     --bundle) BUNDLE=$(readlink -f "${2:?--bundle FILE}"); shift 2 ;;
     --nowde) NOWDE=${2:?--nowde VERSION}; shift 2 ;;
+    --data) DATA=${2:?--data DIR}; shift 2 ;;
+    --mire) MIRE=$(readlink -f "${2:?--mire FILE}"); shift 2 ;;
     --list) for s in $STEPS; do echo "$s"; done; exit 0 ;;
     -h|--help) usage ;;
     *) echo "unknown argument: $1" >&2; usage ;;
@@ -67,6 +81,7 @@ done
 ROOT=${ROOT%/}; [ -z "$ROOT" ] && ROOT=/
 [ "$ROOT" = / ] && LIVE=1
 [ -n "$BOOT" ] || { [ "$ROOT" = / ] && BOOT=/boot || BOOT=$ROOT/boot; }
+[ -n "$DATA" ] || { [ "$ROOT" = / ] && DATA=/data || DATA=$ROOT/data; }
 r() { [ "$ROOT" = / ] && echo "$1" || echo "$ROOT$1"; }    # path inside the target root
 
 [ -d "$(r /etc)" ] || die "$ROOT has no /etc: not a root filesystem" 2
@@ -211,6 +226,61 @@ step_nowde() {
     case "${f##*/}" in "nowde-$NOWDE-"*) continue ;; esac
     rm -f "$f"; did "nowde: ${f##*/} removed (one firmware: $NOWDE)"
   done
+  return 0
+}
+
+step_media() {
+  local m=$DATA/media mire=0_mire.mp4 x gone=() size
+  [ -d "$m" ] || { say "media: no $m$([ "$LIVE" = 0 ] && echo " — pass --data <the card's p3, mounted>")"; return 1; }
+  if [ -n "$MIRE" ]; then
+    [ -f "$MIRE" ] && [ -s "$MIRE" ] || { say "media: --mire $MIRE is not a non-empty file — nothing removed"; return 1; }
+  elif [ ! -s "$m/$mire" ]; then
+    say "media: no $mire on the card and no --mire FILE (a 7.3 card's $mire) — nothing removed"; return 1
+  fi
+  while IFS= read -r -d '' x; do gone+=("${x##*/}"); done \
+    < <(find "$m" -mindepth 1 -maxdepth 1 ! -name "$mire" -print0 | sort -z)
+  if [ ${#gone[@]} -gt 0 ]; then
+    size=$(cd "$m" && du -shc -- "${gone[@]}" 2>/dev/null | tail -1 | cut -f1)
+    (cd "$m" && rm -rf -- "${gone[@]}") || { say "media: could not empty $m"; return 1; }
+    did "media: ${#gone[@]} show file(s) removed from $m ($size): $(printf '%s ' "${gone[@]}" | cut -c1-160)"
+  fi
+  if [ -n "$MIRE" ] && ! cmp -s "$MIRE" "$m/$mire"; then
+    install -m 644 "$MIRE" "$m/$mire" || { say "media: could not copy $MIRE"; return 1; }
+    did "media: $mire from $MIRE"
+  fi
+  for x in "$DATA"/hplayer2*.cfg; do
+    [ -f "$x" ] || continue
+    rm -f "$x"; did "media: saved player settings ${x##*/} removed (/boot seeds apply only without one)"
+  done
+  return 0
+}
+
+step_starter() {
+  local f=$BOOT/starter.txt hp tmp x was; hp=$(r "$HPLAYER")
+  [ -f "$f" ] || { say "starter: no $f"; return 1; }
+  if ! grep -qs 'def pick_profile' "$hp/core/engine/bootconf.py"; then
+    say "starter: $HPLAYER ($(git -C "$hp" rev-parse --short HEAD 2>/dev/null || echo 'no checkout')) has no 'auto' profile (hplayer2#t-101) — move it to the release first; starter.txt left as is"
+    return 1
+  fi
+  tmp=$(mktemp)
+  # the FIRST active hostrename@ / hplayer2@ line becomes the generic one, later active ones go; comments stay
+  awk -v host="hostrename@$HOST" -v player="$PLAYER" '
+    /^[[:space:]]*hostrename@/ { if (!h++) print host; next }
+    /^[[:space:]]*hplayer2@/   { if (!p++) print player; next }
+    { print }
+    END { if (!h) print host; if (!p) print player }' "$f" > "$tmp"
+  if ! cmp -s "$f" "$tmp"; then
+    was=$(grep -E '^[[:space:]]*(hostrename|hplayer2)@' "$f" | tr '\n' ' ')
+    cat "$tmp" > "$f"; did "starter: '${was% }' → 'hostrename@$HOST $PLAYER'"
+  fi
+  rm -f "$tmp"
+  [ -e "$BOOT/hplayer2.conf" ] && { rm -f "$BOOT/hplayer2.conf"; did "starter: /boot/hplayer2.conf removed (a role file; the base image has none)"; }
+  x=$(r /etc/hostname)
+  [ "$(cat "$x" 2>/dev/null)" = "$HOST" ] || { echo "$HOST" > "$x"; did "starter: /etc/hostname = $HOST"; }
+  x=$(r /etc/hosts)
+  if [ -f "$x" ] && grep -q '^127\.0\.1\.1' "$x" && ! grep -qxP "127\.0\.1\.1\t$HOST" "$x"; then
+    sed -i -E "s/^127\.0\.1\.1.*/127.0.1.1\t$HOST/" "$x"; did "starter: /etc/hosts 127.0.1.1 = $HOST"
+  fi
   return 0
 }
 
