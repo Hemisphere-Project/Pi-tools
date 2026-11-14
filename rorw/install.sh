@@ -239,3 +239,6 @@ fi
 # header argues it in full.
 #
 bash "$BASEPATH/upgrade.sh" --installing || exit 1
+
+# What this pass laid down (#t-047). --installing above left the root writable.
+bash "$BASEPATH/../setup/module-manifest" record rorw "$BASEPATH" || true

@@ -168,6 +168,11 @@ def install_module(name, platinfo, cfg):
         entry = f"## [{name}] {comment}\n# {service}\n"
         utils.append_starter(entry)
 
+    # 12. Module manifest (#t-047): what this pass laid down, read by bench/module-level.
+    #     Script modules record from their own install.sh — field deployers run that directly.
+    utils.run(['bash', os.path.join(SETUP_DIR, 'module-manifest'), 'record', name, module_dir],
+              check=False)
+
     utils.daemon_reload()
     ui.success(f"{name} installed")
     return True
