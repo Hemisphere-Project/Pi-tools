@@ -3,13 +3,21 @@
 # that is then captured (dd) and burned fresh. Every change made to the bench card lives here, so the
 # image can be rebuilt instead of only copied (rastaos 13/11: "a recipe can be re-run, a capture cannot").
 #
-#   sudo image/rastaos-bake                      # on the card itself (root = /), as root
-#   sudo image/rastaos-bake --root /mnt/p2 --boot /mnt/p1   # offline, on a mounted card or .img
-#   image/rastaos-bake --list                    # the steps, in order
-#   sudo image/rastaos-bake --only dns,wifi      # a subset (comma-separated step names)
+#   sudo image/rastaos-bake --tag rastaos-7.5     # on the card itself (root = /), as root
+#   sudo image/rastaos-bake --tag T --root /mnt/p2 --boot /mnt/p1   # offline, a mounted card or .img
+#   image/rastaos-bake --list                     # the steps, in order
+#   sudo image/rastaos-bake --only dns,wifi       # a subset (comma-separated; no --tag without converge)
+#   --bundle FILE  the tag from a git bundle (no network)   --nowde VER  the one Nowde firmware kept
 #
 # Idempotent: a second run changes nothing and says so. Each step names the defect it removes.
-# Steps so far (pi-tools#t-058; later slices add converge / strip / identity / p4):
+# Run it from a Pi-tools tree at the release (a /tmp clone or bundle on the card), not from the
+# card's own /opt/Pi-tools: 7.4's checkout has no image/ and no setup/rastaos-update.
+# Steps so far (pi-tools#t-058; later slices add media/starter strip / identity / p4):
+#   converge /opt/Pi-tools → the release tag, via THIS tree's setup/rastaos-update (receipt
+#            /etc/rastaos-release + rollback point; live: the box's modules re-applied). 7.4's checkout
+#            carried six commits no origin holds. Offline it moves the checkout and writes the receipt
+#            only (MODULES=none): `rastaos-update --force <tag>` on the booted card re-applies them.
+#            A failed converge stops the bake: nothing else is baked onto a card off the tag.
 #   stamps   /etc/rastaos-patches.txt: the 7.4 bake stacked one anna74 line per run (5 on bench-01);
 #            keep its LAST one and every older line, then ONE rastaos75 line (replaced, never stacked).
 #   version  /boot/VERSION = 7.5. On 7.4 it still read "7.0 -- bootstraped from …", so nothing on a
@@ -23,13 +31,16 @@
 #   wifi     /boot/wifi and the NM store lose wint-hotspot.nmconnection (it carries the fleet hotspot
 #            PSK: hotspot off is only an installer default, a converged 7.4 card still held it) and the
 #            store loses the _anna74-removed dir (NM "keyfile: error loading connection" every boot).
+#   nowde    /opt/nowde-tools keeps ONE firmware: 7.4 held 2.0.3 (patch-golden 15/09) and 2.0.5
+#            (patch-golden-29). Default 2.0.5 = Nowde main's NOWDE_VERSION + bin/ and the garden nodes.
 #
 # Exit 0 done (or nothing to do), 1 a step failed, 2 usage / not a RastaOS root.
 set -uo pipefail
 
-ROOT=/ BOOT="" ONLY="" LIVE=0
-STEPS="stamps version units rtc dns wifi"
-HERE=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
+ROOT=/ BOOT="" ONLY="" LIVE=0 TAG="" BUNDLE="" NOWDE=2.0.5 CHECKOUT=/opt/Pi-tools
+STEPS="converge stamps version units rtc dns wifi nowde"
+HERE=${BAKE_HOME:-$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)}
+ARGS=("$@")
 STAMP=rastaos75
 MASK_UNITS="fake-hwclock.service rpi-eeprom-update.service nfs-client.target rsync.service"
 
@@ -38,13 +49,16 @@ die()  { echo "[bake] FATAL: $*" >&2; exit "${2:-1}"; }
 CHANGED=0
 did()  { CHANGED=$((CHANGED + 1)); say "  $*"; }
 
-usage() { sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --root) ROOT=${2:?--root DIR}; shift 2 ;;
     --boot) BOOT=${2:?--boot DIR}; shift 2 ;;
     --only) ONLY=${2:?--only step,step}; shift 2 ;;
+    --tag) TAG=${2:?--tag TAG}; shift 2 ;;
+    --bundle) BUNDLE=$(readlink -f "${2:?--bundle FILE}"); shift 2 ;;
+    --nowde) NOWDE=${2:?--nowde VERSION}; shift 2 ;;
     --list) for s in $STEPS; do echo "$s"; done; exit 0 ;;
     -h|--help) usage ;;
     *) echo "unknown argument: $1" >&2; usage ;;
@@ -61,6 +75,17 @@ r() { [ "$ROOT" = / ] && echo "$1" || echo "$ROOT$1"; }    # path inside the tar
 if [ -n "$ONLY" ]; then
   for s in ${ONLY//,/ }; do case " $STEPS " in *" $s "*) ;; *) die "unknown step: $s (see --list)" 2 ;; esac; done
 fi
+runs() { [ -z "$ONLY" ] || case ",$ONLY," in *",$1,"*) ;; *) return 1 ;; esac; }
+runs converge && [ -z "$TAG" ] && die "converge needs --tag <release> (or --only without converge)" 2
+UPDATER=$HERE/../setup/rastaos-update
+runs converge && [ ! -f "$UPDATER" ] && die "$UPDATER absent: run the bake from a tree at the release" 2
+
+# --- live: the converge moves a checkout that may hold this very script — run from a copy.
+if [ "$LIVE" = 1 ] && [ -z "${BAKE_COPY:-}" ]; then
+  d=${TMPDIR:-/run}; [ -d "$d" ] && [ -w "$d" ] || d=/tmp
+  c=$(mktemp "$d/rastaos-bake.XXXXXX") && cat "$0" > "$c" || die "could not copy itself to $d" 2
+  BAKE_COPY=$c BAKE_HOME=$HERE exec bash "$c" "${ARGS[@]}"
+fi
 
 REV=$(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo unknown)
 
@@ -70,10 +95,29 @@ if [ "$LIVE" = 1 ] && findmnt -rno OPTIONS / | tr , '\n' | grep -qx ro; then
   command -v rw >/dev/null || die "root is read-only and rorw's rw is absent"
   rw >/dev/null || die "rw failed"; RW_OPENED=1
 fi
-cleanup() { [ "$RW_OPENED" = 1 ] && { sync; ro >/dev/null 2>&1 || say "WARN: ro failed — root left writable"; }; }
+cleanup() {
+  [ -n "${BAKE_COPY:-}" ] && rm -f "$BAKE_COPY"
+  [ "$RW_OPENED" = 1 ] && { sync; ro >/dev/null 2>&1 || say "WARN: ro failed — root left writable"; }
+}
 trap cleanup EXIT
 
 # ---------------------------------------------------------------- steps
+step_converge() {
+  local co out rc; co=$(r "$CHECKOUT")
+  git -C "$co" rev-parse --git-dir >/dev/null 2>&1 || { say "converge: no git checkout at $co"; return 1; }
+  local env=(PITOOLS_DIR="$co") noproc=""
+  if [ "$LIVE" = 0 ]; then   # a mounted root: move the checkout, write ITS receipt, touch no host process
+    noproc=$(mktemp -d)
+    env+=(RASTAOS_RELEASE="$(r /etc/rastaos-release)" RASTAOS_NO_RORW=1 RASTAOS_NO_CONVERGE=1 RASTAOS_PROC="$noproc")
+  fi
+  out=$(env "${env[@]}" bash "$UPDATER" ${BUNDLE:+--bundle "$BUNDLE"} "$TAG" 2>&1); rc=$?
+  [ -n "$noproc" ] && rmdir "$noproc"
+  printf '%s\n' "$out" | sed 's/^/    /'
+  [ "$rc" = 0 ] || { say "converge: rastaos-update exit $rc"; return 1; }
+  printf '%s' "$out" | grep -q 'nothing to do$' && return 0
+  did "converge: $CHECKOUT at $TAG$([ "$LIVE" = 0 ] && echo " (offline: modules re-apply on the booted card, rastaos-update --force $TAG)")"
+}
+
 step_stamps() {
   local f; f=$(r /etc/rastaos-patches.txt)
   local tmp; tmp=$(mktemp)
@@ -159,13 +203,28 @@ step_wifi() {
   return 0
 }
 
+step_nowde() {
+  local d f; d=$(r /opt/nowde-tools)
+  [ -d "$d" ] || return 0
+  compgen -G "$d/nowde-$NOWDE-*.bin" >/dev/null || { say "nowde: no $NOWDE image in $d — nothing removed (--nowde <version>)"; return 1; }
+  for f in "$d"/nowde-*.bin; do
+    case "${f##*/}" in "nowde-$NOWDE-"*) continue ;; esac
+    rm -f "$f"; did "nowde: ${f##*/} removed (one firmware: $NOWDE)"
+  done
+  return 0
+}
+
 # ---------------------------------------------------------------- run
 say "RastaOS-7.5 bake @ $REV — root $ROOT, boot $BOOT$([ "$LIVE" = 1 ] && echo ' (live)')"
 rc=0
 for s in $STEPS; do
-  if [ -n "$ONLY" ]; then case ",$ONLY," in *",$s,"*) ;; *) continue ;; esac; fi
+  runs "$s" || continue
   before=$CHANGED
-  "step_$s" || { say "step $s FAILED"; rc=1; continue; }
+  if ! "step_$s"; then
+    say "step $s FAILED"; rc=1
+    [ "$s" = converge ] && { say "converge failed — nothing else baked: fix it, then re-run"; break; }
+    continue
+  fi
   [ "$CHANGED" = "$before" ] && say "$s: already done"
 done
 [ "$rc" = 0 ] && say "done — $CHANGED change(s)" || say "finished with a failed step"
