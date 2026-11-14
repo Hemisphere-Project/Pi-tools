@@ -1,0 +1,5 @@
+# The keys a RastaOS-7.5 image keeps in root's authorized_keys — `rastaos-bake --only seal` drops every
+# other key on the captured card (the bench card also holds the loop's passphrase-less rig key).
+# One SHA256 fingerprint per line, then a label. A key rotation edits this file and re-seals.
+SHA256:BvhHfizalpnc5QwwW8E2y4bpR1X66yOweBnY959k5PY mgr-26 — the current personal generation (bench-01 had it added)
+SHA256:d05MHsuN6Dzu/jk4alLC27K9J4mjCfC0ikJZFkC9bCY mgr-2020 — the one key 7.4 carried; to retire

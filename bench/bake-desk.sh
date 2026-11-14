@@ -50,7 +50,8 @@ echo bench-01 > "$R/etc/hostname"; printf '127.0.0.1\tlocalhost\n127.0.1.1\tbenc
 # the release: a fixture origin with the 7.4 commit and a tagged one after it; the card's checkout on the first
 export GIT_AUTHOR_NAME=desk GIT_AUTHOR_EMAIL=desk@localhost GIT_COMMITTER_NAME=desk GIT_COMMITTER_EMAIL=desk@localhost
 TAG=rastaos-7.5-desk UP=$T/origin
-git init -q "$UP" && echo 7.4 > "$UP/f" && git -C "$UP" add f && git -C "$UP" commit -qm 7.4
+git init -q "$UP" && echo 7.4 > "$UP/f" && mkdir "$UP/extendfs" && echo '#!/bin/bash' > "$UP/extendfs/extendfs" \
+  && echo '[Unit]' > "$UP/extendfs/extendfs.service" && git -C "$UP" add f extendfs && git -C "$UP" commit -qm 7.4
 c74=$(git -C "$UP" rev-parse HEAD)
 echo 7.5 > "$UP/f" && git -C "$UP" commit -qam 7.5 && git -C "$UP" tag "$TAG" && c75=$(git -C "$UP" rev-parse HEAD)
 git clone -q "$UP" "$R/opt/Pi-tools" && git -C "$R/opt/Pi-tools" checkout -q --detach "$c74"
@@ -63,6 +64,20 @@ printf 'def pick_profile(arg):\n    pass\n' > "$UPH/core/engine/bootconf.py"
 git -C "$UPH" commit -qam auto && git -C "$UPH" tag "$TAG" && h75=$(git -C "$UPH" rev-parse HEAD)
 echo lock2 > "$UPH/uv.lock"; git -C "$UPH" commit -qam deps && git -C "$UPH" tag rastaos-deps-desk
 git clone -q "$UPH" "$R/opt/HPlayer2" && git -C "$R/opt/HPlayer2" checkout -q --detach "$h74"
+# seal's inputs: extendfs installed (links into the checkout) but not wired, growpart, bench-01's marker,
+# tailnet state, bench history on p3, and root's keys — two kept, the rig key (with options) dropped
+mkdir -p "$R/usr/local/bin" "$R/usr/bin" "$R/var/log/journal/abc" "$R/root/.ssh" "$D/var/tailscale" "$D/var/log/journal-export"
+ln -s /opt/Pi-tools/extendfs/extendfs "$R/usr/local/bin/extendfs"
+ln -s /opt/Pi-tools/extendfs/extendfs.service "$S/extendfs.service"
+printf '#!/bin/sh\n' > "$R/usr/bin/growpart"; chmod 755 "$R/usr/bin/growpart"
+echo SERIAL-BENCH01 > "$D/var/drive-id"; echo keep > "$D/var/fake-clock"; echo node > "$D/var/tailscale/tailscaled.state"
+echo bb > "$D/var/log/blackbox.log"; echo je > "$D/var/log/journal-export/2026-11-13.log"
+echo j > "$R/var/log/journal/abc/system.journal"; echo 'wpa_passphrase x' > "$R/root/.bash_history"
+mkdir -p "$T/k"; for k in keepa keepb rig; do ssh-keygen -q -t ed25519 -N '' -C "$k" -f "$T/k/$k"; done
+{ echo '# root keys'; cat "$T/k/keepa.pub"; printf 'restrict,command="/usr/bin/false" '; cat "$T/k/rig.pub"; cat "$T/k/keepb.pub"; } > "$R/root/.ssh/authorized_keys"
+cp "$R/root/.ssh/authorized_keys" "$T/ak.before"
+for k in keepa keepb; do ssh-keygen -lf "$T/k/$k.pub" | awk -v k=$k '{print $2, k}'; done > "$T/keys.keep"
+echo '# none' > "$T/none.keep"; ssh-keygen -lf "$T/k/rig.pub" | awk '{print "#", $2}' >> "$T/none.keep"
 export RASTAOS_ALLOW_NONROOT=1 RASTAOS_LOCK=$T/update.lock    # rastaos-update's own test overrides
 
 chk "converge without --tag refuses (exit 2)" sh -c "'$BAKE' --root '$R' --boot '$B' >/dev/null 2>&1; [ \$? = 2 ]"
@@ -121,6 +136,9 @@ chk "the role file gone" [ ! -e "$B/hplayer2.conf" ]
 chk "/etc/hostname = player-000" grep -qx player-000 "$R/etc/hostname"
 chk "/etc/hosts 127.0.1.1 = player-000" grep -qxP '127\.0\.1\.1\tplayer-000' "$R/etc/hosts"
 
+chk "the default run leaves extendfs's marker (seal is explicit)" [ -f "$D/var/drive-id" ]
+chk "the default run leaves root's keys" cmp -s "$R/root/.ssh/authorized_keys" "$T/ak.before"
+
 snap() { (cd "$T" && find root boot data -printf '%p %l\n' | sort; cat root/etc/rastaos-patches.txt boot/VERSION boot/config.txt boot/starter.txt root/etc/hosts) | sed -E 's/^rastaos75 [0-9-]+/rastaos75 D/'; }
 snap > "$T/s1"
 # run 2 without --mire: the mire is on the card now, so nothing is asked for and nothing moves
@@ -128,6 +146,32 @@ echo "run 2"; "$BAKE" --tag "$TAG" --root "$R" --boot "$B" --data "$D" > "$T/run
 chk "run 2 exits 0" [ "$rc2" = 0 ]
 chk "run 2 reports 0 changes" grep -q 'done — 0 change(s)' "$T/run2.log"
 snap > "$T/s2"; chk "run 2 leaves the tree identical" cmp -s "$T/s1" "$T/s2"
+
+SEAL=("$BAKE" --only seal --root "$R" --boot "$B" --data "$D")
+chk "seal on the running card refuses (exit 2)" sh -c "'$BAKE' --only seal 2>&1 | grep -q 'never on the running card'; '$BAKE' --only seal >/dev/null 2>&1; [ \$? = 2 ]"
+chk "seal with no kept key present fails (exit 1)" sh -c "$(printf '%q ' "${SEAL[@]}") --keys '$T/none.keep' >/dev/null 2>&1; [ \$? = 1 ]"
+chk "  …and changes nothing" sh -c "cmp -s '$R/root/.ssh/authorized_keys' '$T/ak.before' && [ -f '$D/var/drive-id' -a -f '$D/var/log/blackbox.log' ]"
+mv "$R/usr/bin/growpart" "$T/growpart"
+chk "seal without growpart fails (exit 1)" sh -c "$(printf '%q ' "${SEAL[@]}") --keys '$T/keys.keep' >/dev/null 2>&1; [ \$? = 1 ]"
+chk "  …and changes nothing" sh -c "cmp -s '$R/root/.ssh/authorized_keys' '$T/ak.before' && [ -f '$D/var/drive-id' ]"
+mv "$T/growpart" "$R/usr/bin/growpart"
+echo "seal"; "${SEAL[@]}" --keys "$T/keys.keep" > "$T/seal1.log" 2>&1; rcs=$?; sed 's/^/    /' "$T/seal1.log"
+chk "seal exits 0" [ "$rcs" = 0 ]
+chk "extendfs marker gone" [ ! -e "$D/var/drive-id" ]
+chk "extendfs.service wired" [ "$(readlink "$S/multi-user.target.wants/extendfs.service")" = /etc/systemd/system/extendfs.service ]
+chk "the two kept keys stay" sh -c "grep -qF \"\$(cut -d' ' -f2 '$T/k/keepa.pub')\" '$R/root/.ssh/authorized_keys' && grep -qF \"\$(cut -d' ' -f2 '$T/k/keepb.pub')\" '$R/root/.ssh/authorized_keys'"
+chk "the rig key is gone" sh -c "! grep -qF \"\$(cut -d' ' -f2 '$T/k/rig.pub')\" '$R/root/.ssh/authorized_keys'"
+chk "  …and named in the output" grep -q 'key dropped.*rig' "$T/seal1.log"
+chk "comment lines kept" grep -qx '# root keys' "$R/root/.ssh/authorized_keys"
+chk "tailscale state emptied, dir kept" sh -c "[ -d '$D/var/tailscale' ] && [ -z \"\$(ls -A '$D/var/tailscale')\" ]"
+chk "p3 logs emptied" [ -z "$(ls -A "$D/var/log")" ]
+chk "the rest of p3's var kept" [ -f "$D/var/fake-clock" ]
+chk "root journal emptied" [ -z "$(ls -A "$R/var/log/journal")" ]
+chk "root's bash history gone" [ ! -e "$R/root/.bash_history" ]
+chk "the media untouched by seal" [ "$(ls -A "$D/media")" = 0_mire.mp4 ]
+"${SEAL[@]}" --keys "$T/keys.keep" > "$T/seal2.log" 2>&1
+chk "seal run 2 exits 0, 0 changes" sh -c "[ $? = 0 ] && grep -q 'done — 0 change(s)' '$T/seal2.log'"
+chk "the repo keep-list is fingerprint lines" sh -c "grep -v '^#' '$HERE/image/authorized-keys.keep' | grep -vqE '^SHA256:[A-Za-z0-9+/]{43} ' && exit 1 || exit 0"
 
 chk "--only rejects an unknown step" sh -c "! '$BAKE' --root '$R' --boot '$B' --only nope >/dev/null 2>&1"
 chk "--root without config.txt refuses (exit 2)" sh -c "'$BAKE' --root '$R' --boot '$T/none' >/dev/null 2>&1; [ \$? = 2 ]"

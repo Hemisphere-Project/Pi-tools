@@ -9,11 +9,12 @@
 #   sudo image/rastaos-bake --only dns,wifi       # a subset (comma-separated; no --tag without converge)
 #   --bundle FILE  the tag from a git bundle (no network)   --nowde VER  the one Nowde firmware kept
 #   --data DIR     the card's data partition (default /data; offline <root>/data)   --mire FILE  0_mire.mp4
+#   sudo image/rastaos-bake --only seal --root /mnt/p2 --boot /mnt/p1 --data /mnt/p3   # the CAPTURED image
 #
 # Idempotent: a second run changes nothing and says so. Each step names the defect it removes.
 # Run it from a Pi-tools tree at the release (a /tmp clone or bundle on the card), not from the
 # card's own /opt/Pi-tools: 7.4's checkout has no image/ and no setup/rastaos-update.
-# Steps so far (pi-tools#t-058; later slices add identity / p4):
+# Steps so far (pi-tools#t-058; a later slice adds the p4 layout):
 #   converge /opt/Pi-tools → the release tag, via THIS tree's setup/rastaos-update (receipt
 #            /etc/rastaos-release + rollback point; live: the box's modules re-applied). 7.4's checkout
 #            carried six commits no origin holds. Offline it moves the checkout and writes the receipt
@@ -48,12 +49,24 @@
 #            7.4 shipped hplayer2@26-anna. /boot/hplayer2.conf goes (a role file: the /boot role sets bring
 #            it), /etc/hostname + /etc/hosts say player-000. Refuses when the card's /opt/HPlayer2 has no
 #            `auto` (it predates hplayer2#t-101): a starter naming a profile the player lacks plays nothing.
+#   seal     NOT in the default run: `--only seal`, offline, on the captured image (or the card in a reader)
+#            between the dd and the burn — never on the running card, whose rig access it would strip.
+#            Arms extendfs's first-boot reset: drops the drive-id markers, so every card burned from the
+#            image takes the clone path (new machine-id + SSH host keys, Tailscale wiped) even when its
+#            fingerprint falls back to a UUID a dd copy shares (pi-tools#t-006, AUDIT-2026), and wires
+#            extendfs.service; refuses if extendfs, its unit or growpart is missing (it would stop before
+#            the reset). Host keys stay: extendfs regenerates them, and a card without keys has no ssh.
+#            root's authorized_keys keeps only the fingerprints in image/authorized-keys.keep (--keys FILE):
+#            the bench card also holds the loop's passphrase-less rig key. Refuses if no kept key remains.
+#            Empties /data/var/tailscale, /data/var/log (bench-01's journal-export, blackbox.log) and the
+#            root's /var/log/journal, removes root's .bash_history.
 #
 # Exit 0 done (or nothing to do), 1 a step failed, 2 usage / not a RastaOS root.
 set -uo pipefail
 
-ROOT=/ BOOT="" DATA="" ONLY="" LIVE=0 TAG="" BUNDLE="" HPBUNDLE="" NOWDE=2.0.5 MIRE="" CHECKOUT=/opt/Pi-tools
+ROOT=/ BOOT="" DATA="" ONLY="" LIVE=0 TAG="" BUNDLE="" HPBUNDLE="" NOWDE=2.0.5 MIRE="" KEYS="" CHECKOUT=/opt/Pi-tools
 STEPS="converge hplayer2 stamps version units rtc dns wifi nowde media starter"
+EXPLICIT="seal"   # runs only when --only names it
 HOST=player-000 PLAYER=hplayer2@auto HPLAYER=/opt/HPlayer2
 HERE=${BAKE_HOME:-$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)}
 ARGS=("$@")
@@ -65,7 +78,7 @@ die()  { echo "[bake] FATAL: $*" >&2; exit "${2:-1}"; }
 CHANGED=0
 did()  { CHANGED=$((CHANGED + 1)); say "  $*"; }
 
-usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -78,7 +91,8 @@ while [ $# -gt 0 ]; do
     --hp-bundle) HPBUNDLE=$(readlink -f "${2:?--hp-bundle FILE}"); shift 2 ;;
     --data) DATA=${2:?--data DIR}; shift 2 ;;
     --mire) MIRE=$(readlink -f "${2:?--mire FILE}"); shift 2 ;;
-    --list) for s in $STEPS; do echo "$s"; done; exit 0 ;;
+    --keys) KEYS=$(readlink -f "${2:?--keys FILE}"); shift 2 ;;
+    --list) for s in $STEPS $EXPLICIT; do echo "$s"; done; exit 0 ;;
     -h|--help) usage ;;
     *) echo "unknown argument: $1" >&2; usage ;;
   esac
@@ -88,14 +102,16 @@ ROOT=${ROOT%/}; [ -z "$ROOT" ] && ROOT=/
 [ -n "$BOOT" ] || { [ "$ROOT" = / ] && BOOT=/boot || BOOT=$ROOT/boot; }
 [ -n "$DATA" ] || { [ "$ROOT" = / ] && DATA=/data || DATA=$ROOT/data; }
 r() { [ "$ROOT" = / ] && echo "$1" || echo "$ROOT$1"; }    # path inside the target root
+case ",$ONLY," in *,seal,*) [ "$LIVE" = 1 ] && die "seal runs on the captured image (--root/--boot/--data), never on the running card: it strips the rig's key and resets this card at its next boot" 2 ;; esac
 
 [ -d "$(r /etc)" ] || die "$ROOT has no /etc: not a root filesystem" 2
 [ -f "$BOOT/config.txt" ] || die "$BOOT/config.txt missing: pass --boot <the card's p1>" 2
 [ "$LIVE" = 0 ] || [ "$(id -u)" = 0 ] || die "on a live card this runs as root" 2
 if [ -n "$ONLY" ]; then
-  for s in ${ONLY//,/ }; do case " $STEPS " in *" $s "*) ;; *) die "unknown step: $s (see --list)" 2 ;; esac; done
+  for s in ${ONLY//,/ }; do case " $STEPS $EXPLICIT " in *" $s "*) ;; *) die "unknown step: $s (see --list)" 2 ;; esac; done
 fi
-runs() { [ -z "$ONLY" ] || case ",$ONLY," in *",$1,"*) ;; *) return 1 ;; esac; }
+runs() { if [ -z "$ONLY" ]; then case " $EXPLICIT " in *" $1 "*) return 1 ;; esac; return 0; fi
+         case ",$ONLY," in *",$1,"*) ;; *) return 1 ;; esac; }
 runs converge && [ -z "$TAG" ] && die "converge needs --tag <release> (or --only without converge)" 2
 runs hplayer2 && [ -z "$TAG" ] && die "hplayer2 needs --tag <release> (or --only without it)" 2
 UPDATER=$HERE/../setup/rastaos-update
@@ -310,10 +326,64 @@ step_starter() {
   return 0
 }
 
+step_seal() {
+  local S unit w keep f line fp out tmp files=() n_root=0 drops=() d m
+  S=$(r /etc/systemd/system); keep=${KEYS:-$HERE/authorized-keys.keep}
+  lnk() { [ -e "$1" ] || [ -L "$1" ]; }    # an absolute link dangles outside the target root
+  # --- every refusal before any write
+  [ -d "$DATA/var" ] || { say "seal: no $DATA/var — pass --data <the image's p3, mounted>; nothing changed"; return 1; }
+  lnk "$(r /usr/local/bin/extendfs)" || { say "seal: extendfs is not installed (./setup.sh extendfs) — nothing changed"; return 1; }
+  unit=/etc/systemd/system/extendfs.service; lnk "$(r $unit)" || unit=/lib/systemd/system/extendfs.service
+  lnk "$(r $unit)" || { say "seal: no extendfs.service unit — nothing changed"; return 1; }
+  [ -x "$(r /usr/bin/growpart)" ] || { say "seal: no growpart (cloud-guest-utils): extendfs would stop before the identity reset — nothing changed"; return 1; }
+  [ -s "$keep" ] || { say "seal: no keep-list $keep (--keys FILE) — nothing changed"; return 1; }
+  for f in "$(r /root/.ssh/authorized_keys)" "$(r /root/.ssh/authorized_keys2)" "$(r /home)"/*/.ssh/authorized_keys "$(r /home)"/*/.ssh/authorized_keys2; do
+    [ -f "$f" ] && files+=("$f")
+  done
+  local K; K=$(mktemp -d)
+  for f in "${files[@]}"; do
+    : > "$K/$(echo "$f" | md5sum | cut -c1-8)"
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in ''|'#'*) printf '%s\n' "$line" >> "$K/$(echo "$f" | md5sum | cut -c1-8)"; continue ;; esac
+      printf '%s\n' "$line" > "$K/one"
+      out=$(ssh-keygen -lf "$K/one" 2>/dev/null | head -1); fp=$(echo "$out" | awk '{print $2}')
+      if [ -n "$fp" ] && awk -v fp="$fp" '$1 == fp { f = 1 } END { exit !f }' "$keep"; then
+        printf '%s\n' "$line" >> "$K/$(echo "$f" | md5sum | cut -c1-8)"
+        case "$f" in "$(r /root/.ssh)"/*) n_root=$((n_root + 1)) ;; esac
+      else
+        drops+=("${f#"${ROOT%/}"}: ${out:-unparsable line}")
+      fi
+    done < "$f"
+  done
+  if [ "$n_root" = 0 ]; then
+    rm -rf "$K"; say "seal: no key of $keep in root's authorized_keys — the image would lock root out; nothing changed"; return 1
+  fi
+  # --- writes
+  for f in "${files[@]}"; do
+    tmp=$K/$(echo "$f" | md5sum | cut -c1-8)
+    cmp -s "$f" "$tmp" || cat "$tmp" > "$f"
+  done
+  rm -rf "$K"
+  for d in "${drops[@]}"; do did "seal: key dropped — $d"; done
+  for m in "$DATA/var/drive-id" "$DATA/var/drive-id-stage1"; do
+    [ -e "$m" ] && { rm -f "$m"; did "seal: extendfs marker ${m##*/} removed (first boot of every burned card = clone path)"; }
+  done
+  if [ -z "$(find "$S" -path "$S/*.wants/extendfs.service" 2>/dev/null | head -1)" ]; then
+    mkdir -p "$S/multi-user.target.wants"; ln -sfn "$unit" "$S/multi-user.target.wants/extendfs.service"
+    did "seal: extendfs.service wired to multi-user.target"
+  fi
+  for d in "$DATA/var/tailscale" "$(r /var/lib/tailscale)" "$DATA/var/log" "$(r /var/log/journal)"; do
+    [ -d "$d" ] && [ -n "$(ls -A "$d" 2>/dev/null)" ] || continue
+    find "$d" -mindepth 1 -delete && did "seal: ${d#"${ROOT%/}"} emptied"
+  done
+  f=$(r /root/.bash_history); [ -e "$f" ] && { rm -f "$f"; did "seal: root's .bash_history removed"; }
+  return 0
+}
+
 # ---------------------------------------------------------------- run
 say "RastaOS-7.5 bake @ $REV — root $ROOT, boot $BOOT$([ "$LIVE" = 1 ] && echo ' (live)')"
 rc=0
-for s in $STEPS; do
+for s in $STEPS $EXPLICIT; do
   runs "$s" || continue
   before=$CHANGED
   if ! "step_$s"; then
