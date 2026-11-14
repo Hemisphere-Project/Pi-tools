@@ -7,6 +7,7 @@ autoconnect-retries=0
 
 [ipv4]
 method=auto
+dhcp-timeout=2147483647
 
 [ipv6]
 method=link-local

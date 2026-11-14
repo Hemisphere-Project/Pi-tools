@@ -58,6 +58,14 @@ reachable over `fe80::…%<laptop-iface>` with no DHCP at all. Never write
 `ipv6.method=disabled` in a profile: NM < 1.20 (Buster's 1.14) rejects the value
 and silently voids the whole profile — use `ignore`.
 
+`autoconnect-retries=0` alone is not enough: with no DHCP answer, NM fails IPv4
+after 45 s, keeps eth0 up on link-local alone and never asks again (bench-02,
+2026-11-14). So `eth0-dhcp` also sets `ipv4.dhcp-timeout=2147483647` (NM: never
+time out), and setnet writes `/etc/NetworkManager/dhclient-eth0.conf`
+(`timeout 100000000;`) because NM 1.14 never passes its timeout to dhclient,
+whose own 60 s give-up would fail IPv4 the same way. A DHCP server that comes
+back later is picked up by dhclient's next retry, no reboot.
+
 ## Hotspot — off by default
 
 RastaOS-7.5 (decided 2026-11-13): a fresh card raises **no AP**; its first start

@@ -49,6 +49,17 @@ HOSTAPD_DIR = '/etc/hostapd'
 NM_CONFD = '/etc/NetworkManager/conf.d'
 UNMANAGED_PREFIX = '50-hostapd-'   # /etc/NetworkManager/conf.d/50-hostapd-<iface>.conf
 
+# eth0's DHCP never gives up (pi-tools#t-055). eth0-dhcp sets ipv4.dhcp-timeout to
+# infinity, but NM 1.14 keeps that to its own timer and never hands it to dhclient,
+# whose built-in 60 s `timeout` then fails IPv4 by itself: NM stops the client and
+# eth0 stays up on IPv6 link-local alone, for good (bench-02, 2026-11-14). NM reads
+# /etc/NetworkManager/dhclient-<iface>.conf before /etc/dhcp/dhclient.conf. 1e8 s
+# (~3 years) is never reached, yet dhclient's first_sending + timeout cannot wrap a
+# 32-bit time_t before 2034 (2147483647 would, and turn its backoff into a storm).
+# Harmless for any eth0 profile left on NM's default timer: NM's 45 s fires first.
+DHCLIENT_ETH0 = '/etc/NetworkManager/dhclient-eth0.conf'
+DHCLIENT_TIMEOUT = 100000000
+
 engageRW = False
 
 
@@ -459,6 +470,17 @@ def reconcile_roles():
     run("systemctl restart dnsmasq", check=False)
 
 
+def ensure_dhclient_eth0(path=None):
+    """Lift dhclient's own 60 s give-up on eth0; rw only when the file changes."""
+    path = path or DHCLIENT_ETH0
+    content = ('# setnet (Pi-tools): eth0 DHCP never gives up, see DHCLIENT_ETH0 in setnet\n'
+               f'timeout {DHCLIENT_TIMEOUT};\n')
+    if write_if_changed(path, content):
+        log(f"eth0 dhclient timeout lifted ({path})")
+        return True
+    return False
+
+
 # -- main --------------------------------------------------------------------
 
 def main():
@@ -472,6 +494,7 @@ def main():
     log("Applying profiles to NetworkManager")
     syncFolder(LOCALSOURCE, DEST, EXT, render=True)
     prune_store(LOCALSOURCE, DEST, EXT)
+    ensure_dhclient_eth0()
 
     if engageRW:
         os.system('chmod 600 -R ' + DEST)
