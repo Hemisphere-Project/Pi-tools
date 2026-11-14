@@ -118,14 +118,16 @@ apply() {
     if [ -f /etc/bash.bash_logout ]; then
         sed -i '/^if \[ "\$(id -u)" -eq 0 \]; then$/,/^fi$/d' /etc/bash.bash_logout
         sed -i '/^# >>> pitools rorw >>>$/,/^# <<< pitools rorw <<<$/d' /etc/bash.bash_logout
+        # and the trailing blank lines: the hook used to end in one, and every
+        # re-run stacked another (bench-01, 14/11: 6 -> 7 -> 8 lines)
+        sed -i -e :a -e '/^\n*$/{$d;N;ba' -e '}' /etc/bash.bash_logout
     fi
     echo '# >>> pitools rorw >>>
 if [ "$(id -u)" -eq 0 ]; then
 history -a
 fake-clock save
 fi
-# <<< pitools rorw <<<
-' >> /etc/bash.bash_logout
+# <<< pitools rorw <<<' >> /etc/bash.bash_logout
 
     # self-heal: any stray rw with no registered holder is remounted ro by
     # the ro-assert timer (3min after boot, then every 5min)

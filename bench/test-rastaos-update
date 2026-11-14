@@ -197,5 +197,16 @@ check "  inside one rw ... ro bracket" [ "$(tr '\n' ' ' < "$T/rw-log")" = "rw ro
 check "  leaving .git read-only again" [ ! -w "$T/box/.git" ]
 chmod -R u+w "$T/box/.git"
 
+# 13. rorw's upgrade.sh logout hook is byte-stable on re-run (bench-01, 14/11: the --force run
+#     grew /etc/bash.bash_logout by one blank line per pass, 6 -> 7 -> 8). Replays the hook block
+#     of upgrade.sh on a copy of the 7.4 file, then on the 8-line file the old hook left.
+sed -n '/drop any previously-installed rw\/ro logout bracket/,/>> \/etc\/bash.bash_logout/p' \
+    "$here/rorw/upgrade.sh" | sed "s|/etc/bash.bash_logout|$T/logout|g" > "$T/hook.sh"
+printf '# >>> pitools rorw >>>\nif [ "$(id -u)" -eq 0 ]; then\nhistory -a\nfake-clock save\nfi\n# <<< pitools rorw <<<\n' > "$T/logout74"
+cp "$T/logout74" "$T/logout"; bash "$T/hook.sh"; bash "$T/hook.sh"; bash "$T/hook.sh"
+check "rorw logout hook: three passes leave the 7.4 file as it was" cmp -s "$T/logout74" "$T/logout"
+{ echo; cat "$T/logout74"; echo; } > "$T/logout"; bash "$T/hook.sh"
+check "  and heal the blank lines the old hook stacked" cmp -s "$T/logout74" "$T/logout"
+
 [ $fail = 0 ] && echo "green" || echo "RED"
 exit $fail
