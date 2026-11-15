@@ -14,7 +14,8 @@
 # Idempotent: a second run changes nothing and says so. Each step names the defect it removes.
 # Run it from a Pi-tools tree at the release (a /tmp clone or bundle on the card), not from the
 # card's own /opt/Pi-tools: 7.4's checkout has no image/ and no setup/rastaos-update.
-# Steps so far (pi-tools#t-058; a later slice adds the p4 layout):
+# Steps (pi-tools#t-058). The image keeps three partitions; flightbox's p4 is laid out per card at the
+# burn, at the card's tail: `bench/burn-batch --flightbox` (image/flightbox-p4), see flightbox/README.md.
 #   converge /opt/Pi-tools → the release tag, via THIS tree's setup/rastaos-update (receipt
 #            /etc/rastaos-release + rollback point; live: the box's modules re-applied). 7.4's checkout
 #            carried six commits no origin holds. Offline it moves the checkout and writes the receipt
@@ -60,6 +61,8 @@
 #            the bench card also holds the loop's passphrase-less rig key. Refuses if no kept key remains.
 #            Empties /data/var/tailscale, /data/var/log (bench-01's journal-export, blackbox.log) and the
 #            root's /var/log/journal, removes root's .bash_history.
+#
+# Row 14's order: bake (live) → capture (dd) → --only seal on the image → burn-batch --flightbox IMAGE.
 #
 # Exit 0 done (or nothing to do), 1 a step failed, 2 usage / not a RastaOS root.
 set -uo pipefail
