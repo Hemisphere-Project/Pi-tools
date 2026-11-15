@@ -64,6 +64,12 @@
 #           carries an explicit hdmi_group/hdmi_mode.
 # display = yes
 
+# apfix — stale-hotspot guard: restarts hostapd@wint whenever no
+#         station is associated (90 s after boot, then every 20 min).
+#         Off by default since RastaOS 7.5 (hotspot off, setup over
+#         Ethernet); turn it on for a box that keeps its hotspot.
+# apfix = no
+
 # xrun — X11/Openbox display server
 # xrun = no
 

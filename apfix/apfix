@@ -1,0 +1,14 @@
+#!/bin/sh
+# apfix — heal the stale hotspot state (hostapd on the Broadcom radio: beacons, associates, never
+# completes the handshake; seen on cold boots and after ~2 h in operation, Biennale 2026 W2/W4/W5/068).
+# Only a hostapd restart clears it, and restarting an AP nobody is associated to costs nothing:
+# so, whenever no station is associated, restart hostapd@wint. Run 90 s after boot (the known cure
+# for a stale first start) and every 20 min (apfix.timer). A connected laptop counts as a station,
+# so a maintenance session is never kicked. Pi-tools module since RastaOS 7.5 (was the Runbooks
+# field copy, installed by apfix-deploy): OPT-IN, off by default — `apfix = yes` in pitools.txt.
+IF=wint
+n=$(iw dev "$IF" station dump 2>/dev/null | grep -c '^Station')
+if [ "$n" -eq 0 ]; then
+  systemctl restart "hostapd@$IF" && logger -t apfix "no station on $IF: hostapd@$IF restarted"
+fi
+exit 0

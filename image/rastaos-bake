@@ -35,6 +35,8 @@
 #            failed -5" at every boot. Per card: uncomment the line in config.txt.
 #   turbo    force_turbo=1 goes off by default (rastaos decision 13/11): it pins every core at its max
 #            clock, heat included, on boards that never asked for it. Per card: uncomment it in config.txt.
+#   apfix    the field copy's apfix.timer is unwired (not masked): apfix is an opt-in module since 7.5, off
+#            by default with the hotspot. A card that keeps its hotspot: `apfix/install.sh --now`.
 #   dns      static /etc/resolv.conf on public resolvers + NM dns=none (knowledge: openresolv pointed
 #            it at 127.0.0.1 → no DNS → no datesync/apt/git). Live root also purges openresolv/resolvconf.
 #   wifi     /boot/wifi and the NM store lose wint-hotspot.nmconnection (it carries the fleet hotspot
@@ -70,7 +72,7 @@
 set -uo pipefail
 
 ROOT=/ BOOT="" DATA="" ONLY="" LIVE=0 TAG="" BUNDLE="" HPBUNDLE="" NOWDE=2.0.5 MIRE="" KEYS="" CHECKOUT=/opt/Pi-tools
-STEPS="converge hplayer2 stamps version units rtc turbo dns wifi nowde media starter"
+STEPS="converge hplayer2 stamps version units rtc turbo apfix dns wifi nowde media starter"
 EXPLICIT="seal"   # runs only when --only names it
 HOST=player-000 PLAYER=hplayer2@auto HPLAYER=/opt/HPlayer2
 HERE=${BAKE_HOME:-$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)}
@@ -242,6 +244,16 @@ step_turbo() {
   grep -qE '^[[:space:]]*force_turbo=1' "$f" || return 0
   sed -i -E 's/^[[:space:]]*(force_turbo=1.*)$/#\1    # per card: uncomment to pin the max clock (rastaos 7.5)/' "$f"
   did "turbo: force_turbo=1 commented out in config.txt (per card)"
+}
+
+step_apfix() {
+  local S w; S=$(r /etc/systemd/system)
+  for w in "$S"/*.wants/apfix.timer "$S"/*.wants/apfix.service; do
+    [ -e "$w" ] || [ -L "$w" ] || continue
+    rm -f "$w"; did "apfix: ${w##*/} unwired from $(basename "$(dirname "$w")") (opt-in module, off by default)"
+  done
+  [ "$LIVE" = 1 ] && systemctl stop apfix.timer 2>/dev/null
+  return 0
 }
 
 step_dns() {

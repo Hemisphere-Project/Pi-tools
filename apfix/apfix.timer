@@ -1,0 +1,11 @@
+[Unit]
+Description=apfix: stale hotspot guard, 90 s after boot then every 20 min
+
+[Timer]
+OnBootSec=90
+OnActiveSec=5min
+OnUnitActiveSec=20min
+AccuracySec=30
+
+[Install]
+WantedBy=timers.target

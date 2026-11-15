@@ -28,6 +28,8 @@ ln -s /lib/systemd/system/nfs-client.target "$S/multi-user.target.wants/nfs-clie
 ln -s /lib/systemd/system/nfs-client.target "$S/remote-fs.target.wants/nfs-client.target"
 ln -s /lib/systemd/system/rpi-eeprom-update.service "$S/multi-user.target.wants/rpi-eeprom-update.service"
 ln -s /lib/systemd/system/hplayer2@.service "$S/multi-user.target.wants/hplayer2@26-anna.service"
+mkdir -p "$S/timers.target.wants"; printf '[Timer]\nOnBootSec=90\n' > "$S/apfix.timer"   # 7.4: Runbooks' field copy
+ln -s "$S/apfix.timer" "$S/timers.target.wants/apfix.timer"
 echo '#!/bin/sh' > "$R/etc/cron.hourly/fake-hwclock"
 printf 'P1 2026-09-15: journald volatile\nanna74 2026-11-05: a\nanna74 2026-11-06: b\nanna74 2026-11-07: c\nanna74 2026-11-08: d\nanna74 2026-11-09: e\n' > "$R/etc/rastaos-patches.txt"
 echo '7.0 -- bootstraped from bootstrap-raspbian-legacy.sh' > "$B/VERSION"
@@ -117,6 +119,8 @@ chk "no live rtc overlay" sh -c "! grep -qE '^[[:space:]]*dtoverlay=i2c-rtc' '$B
 chk "other config.txt lines intact" grep -qx 'dtparam=audio=on' "$B/config.txt"
 chk "turbo commented" grep -q '^#force_turbo=1' "$B/config.txt"
 chk "no live force_turbo" sh -c "! grep -qE '^[[:space:]]*force_turbo=1' '$B/config.txt'"
+chk "apfix.timer unwired" sh -c "[ ! -e '$R/etc/systemd/system/timers.target.wants/apfix.timer' ]"
+chk "apfix units left in place (opt-in)" test -f "$R/etc/systemd/system/apfix.timer"
 chk "resolv.conf a real file" [ -f "$R/etc/resolv.conf" -a ! -L "$R/etc/resolv.conf" ]
 chk "resolv.conf on 1.1.1.1" grep -qx 'nameserver 1.1.1.1' "$R/etc/resolv.conf"
 chk "the old target untouched" grep -q 127.0.0.1 "$R/run/resolvconf/resolv.conf"

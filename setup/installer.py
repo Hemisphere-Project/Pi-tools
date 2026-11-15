@@ -34,6 +34,8 @@ MODULE_GROUPS = [
      ['audiohub'], 'ask'),
     ('display',     'Display: HDMI re-handshake at boot (TV mode latch-up)',
      ['hdmi-rehandshake'], 'yes'),
+    ('apfix',       'Hotspot guard: restart a stale hostapd@wint when nobody is associated',
+     ['apfix'], 'no'),
     ('xrun',        'X11/Openbox display server',
      ['xrun'], 'no'),
     ('synczinc',    'Syncthing synchronization',
