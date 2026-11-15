@@ -33,6 +33,8 @@
 #            (a Pi 3 has no EEPROM; no firmware writes at a show), nfs-client.target, rsync.service.
 #   rtc      the DS3231 overlay goes off by default: a board without the RTC logged "rtc-ds1307 probe
 #            failed -5" at every boot. Per card: uncomment the line in config.txt.
+#   turbo    force_turbo=1 goes off by default (rastaos decision 13/11): it pins every core at its max
+#            clock, heat included, on boards that never asked for it. Per card: uncomment it in config.txt.
 #   dns      static /etc/resolv.conf on public resolvers + NM dns=none (knowledge: openresolv pointed
 #            it at 127.0.0.1 → no DNS → no datesync/apt/git). Live root also purges openresolv/resolvconf.
 #   wifi     /boot/wifi and the NM store lose wint-hotspot.nmconnection (it carries the fleet hotspot
@@ -68,7 +70,7 @@
 set -uo pipefail
 
 ROOT=/ BOOT="" DATA="" ONLY="" LIVE=0 TAG="" BUNDLE="" HPBUNDLE="" NOWDE=2.0.5 MIRE="" KEYS="" CHECKOUT=/opt/Pi-tools
-STEPS="converge hplayer2 stamps version units rtc dns wifi nowde media starter"
+STEPS="converge hplayer2 stamps version units rtc turbo dns wifi nowde media starter"
 EXPLICIT="seal"   # runs only when --only names it
 HOST=player-000 PLAYER=hplayer2@auto HPLAYER=/opt/HPlayer2
 HERE=${BAKE_HOME:-$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)}
@@ -233,6 +235,13 @@ step_rtc() {
   grep -qE '^[[:space:]]*dtoverlay=i2c-rtc' "$f" || return 0
   sed -i -E 's/^[[:space:]]*(dtoverlay=i2c-rtc.*)$/#\1    # per card: uncomment on a board WITH the DS3231 (rastaos 7.5)/' "$f"
   did "rtc: i2c-rtc overlay commented out in config.txt (per card)"
+}
+
+step_turbo() {
+  local f=$BOOT/config.txt
+  grep -qE '^[[:space:]]*force_turbo=1' "$f" || return 0
+  sed -i -E 's/^[[:space:]]*(force_turbo=1.*)$/#\1    # per card: uncomment to pin the max clock (rastaos 7.5)/' "$f"
+  did "turbo: force_turbo=1 commented out in config.txt (per card)"
 }
 
 step_dns() {

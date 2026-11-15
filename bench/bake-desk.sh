@@ -31,7 +31,7 @@ ln -s /lib/systemd/system/hplayer2@.service "$S/multi-user.target.wants/hplayer2
 echo '#!/bin/sh' > "$R/etc/cron.hourly/fake-hwclock"
 printf 'P1 2026-09-15: journald volatile\nanna74 2026-11-05: a\nanna74 2026-11-06: b\nanna74 2026-11-07: c\nanna74 2026-11-08: d\nanna74 2026-11-09: e\n' > "$R/etc/rastaos-patches.txt"
 echo '7.0 -- bootstraped from bootstrap-raspbian-legacy.sh' > "$B/VERSION"
-printf '[pi3]\nhdmi_mode=82\n[all]\ndtoverlay=i2c-rtc,ds3231\ndtparam=audio=on\n' > "$B/config.txt"
+printf '[pi3]\nhdmi_mode=82\n[all]\ndtoverlay=i2c-rtc,ds3231\ndtparam=audio=on\nforce_turbo=1\n' > "$B/config.txt"
 echo 'nameserver 127.0.0.1' > "$R/run/resolvconf/resolv.conf"; ln -s ../run/resolvconf/resolv.conf "$R/etc/resolv.conf"
 printf '[main]\nplugins=keyfile\n' > "$R/etc/NetworkManager/NetworkManager.conf"
 for f in eth0-dhcp wint-hotspot; do echo "[connection]" > "$B/wifi/$f.nmconnection"; cp "$B/wifi/$f.nmconnection" "$R/etc/NetworkManager/system-connections/"; done
@@ -115,6 +115,8 @@ chk "fake-hwclock cron gone" [ ! -e "$R/etc/cron.hourly/fake-hwclock" ]
 chk "rtc overlay commented" grep -q '^#dtoverlay=i2c-rtc,ds3231' "$B/config.txt"
 chk "no live rtc overlay" sh -c "! grep -qE '^[[:space:]]*dtoverlay=i2c-rtc' '$B/config.txt'"
 chk "other config.txt lines intact" grep -qx 'dtparam=audio=on' "$B/config.txt"
+chk "turbo commented" grep -q '^#force_turbo=1' "$B/config.txt"
+chk "no live force_turbo" sh -c "! grep -qE '^[[:space:]]*force_turbo=1' '$B/config.txt'"
 chk "resolv.conf a real file" [ -f "$R/etc/resolv.conf" -a ! -L "$R/etc/resolv.conf" ]
 chk "resolv.conf on 1.1.1.1" grep -qx 'nameserver 1.1.1.1' "$R/etc/resolv.conf"
 chk "the old target untouched" grep -q 127.0.0.1 "$R/run/resolvconf/resolv.conf"
