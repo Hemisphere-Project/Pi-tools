@@ -1,3 +1,32 @@
 # extendfs
 
-Extend last partition to FS size after clone
+Grow /data's partition and its filesystem to fill a new drive after a clone
+
+## A clone's first boot reboots on its own
+
+On a new drive (drive-id in `/data/var/drive-id` does not match) extendfs goes
+`rw`, grows /data's partition and its filesystem (the last partition on a
+3-partition card, up to flightbox's p4 on a card that has one), resets the
+clone's identity (machine-id, Tailscale state, SSH host keys), records the
+drive-id, then reseals the root with `ro`. Two cases end in an automatic
+reboot:
+
+- **stage 1** — the kernel cannot reload the table of a mounted partition: the
+  progress goes to `drive-id-stage1` and the box reboots to finish the resize.
+- **the reseal fails** — something started alongside extendfs pins the root
+  (`RO Failed after 5 attempts`, `mount point is busy`). The drive-id is already
+  recorded, so the next boot exits at "drive-id is valid" without going `rw`, and
+  root comes up read-only from fstab.
+
+The reseal reboot only happens when it is sure to be the last one: the run
+succeeded and recorded the drive-id, it was started by `extendfs.service` (never
+from a shell — `extendfs -f` by hand just tells you to reboot), and it never
+fires twice in a row (`drive-id-sealreboot`, cleared by the next valid boot).
+Otherwise root stays `rw`, the unit fails, and `ro-assert` keeps retrying.
+
+The boot after a seal reboot logs it — on a volatile journal the reboot itself
+is gone, so that line is the proof it happened:
+
+```bash
+journalctl -b -t extendfs | grep 'previous boot rebooted to seal root'
+```
