@@ -38,6 +38,13 @@
 #                  raw ring partition (p4, 512 MB) at the card's TAIL with
 #                  image/flightbox-p4 — after the cmp, because it rewrites the
 #                  partition table the cmp just proved. The RastaOS 7.5 burn.
+#     --content IMAGE [DISK ...]   print what the image and each DISK (a /dev
+#                  node or an image file) hold — the plan's CONTENT column —
+#                  and exit. Writes nothing.
+#
+#   The plan prints what each card HOLDS before anything is written, -y or not:
+#   per partition its filesystem, label (else volume id) and space in use. A
+#   card whose layout is not the image's is flagged — read it before you burn.
 #
 #   BURNBATCH_LOG=<path>   CSV outcome log (default ~/burn-batch.csv)
 #
@@ -53,7 +60,7 @@
 # the no-reflash path, the fleet prep scripts are the stamping one.
 set -uo pipefail
 
-usage() { sed -n '2,52p' "$0" | sed 's/^# \?//'; }
+usage() { sed -n '2,59p' "$0" | sed 's/^# \?//'; }
 
 C_OK=$'\033[1;32m'; C_ERR=$'\033[1;31m'; C_WARN=$'\033[1;33m'; C_END=$'\033[0m'
 say()  { echo "  $*"; }
@@ -62,10 +69,11 @@ warn() { echo "${C_WARN}  $*${C_END}"; }
 err()  { echo "${C_ERR}  $*${C_END}"; }
 
 ORIG_ARGS=("$@")
-DRY=0; JOBS=3; YES=0; FSCK=1; LIST=0; FSCK_ONLY=0; P4=0
+DRY=0; JOBS=3; YES=0; FSCK=1; LIST=0; FSCK_ONLY=0; P4=0; CONTENT_ONLY=0
 while [ $# -gt 0 ]; do
     case "$1" in
         -n|--dry-run) DRY=1 ;;
+        --content)    CONTENT_ONLY=1 ;;
         -j|--jobs)    JOBS="${2:?-j needs a count}"; shift ;;
         -y|--yes)     YES=1 ;;
         -l|--list)    LIST=1 ;;
@@ -137,6 +145,145 @@ dev_for_serial() {  # dev_for_serial <serial> -> disk name(s); 1 if none
     echo "$*"
 }
 
+# ── what a card HOLDS — the plan's CONTENT column ────────────────────────────
+# DEVICE / SERIAL / SIZE say WHICH card, never what is on it. A 30 GB card of
+# six music tracks once sat where a RastaOS spare was expected, and a wrapper
+# passing -y never reaches the confirmation (2026-11-16). So the plan reads,
+# per partition, its filesystem, label (else volume id) and space in use:
+#
+#     vfat boot 31M · ext4 rootfs 2.1G · ext4 data 12M     a RastaOS card
+#     vfat 5B78-FD87 114M                                  somebody's music
+#
+# From the bytes, not from udev: the partition table with sfdisk, each
+# filesystem with `blkid -p` at its offset, the space in use from the
+# filesystem's own counters (ext*: the superblock, through debugfs; vfat: the
+# FAT, counted) — or from the mount, when the desktop mounted it. Every read
+# works on an image file too, which is how bench/burn-content-desk.sh proves
+# it. A disk this user cannot read (-n without root) falls back to what udev
+# saw: type and label, space in use only if mounted. Read-only throughout.
+
+clean_name() { sed 's/[[:cntrl:]|]//g'; }  # a foreign label is printed: no escapes, no field separator
+
+read_at() {     # read_at <path> <byte offset> <bytes> — dd seeks, od -j would READ its way there
+    dd if="$1" iflag=skip_bytes,count_bytes skip="$2" count="$3" bs=1M status=none 2>/dev/null
+}
+
+ext_used() {    # ext_used <path> <byte offset> -> bytes in use, df's arithmetic
+    debugfs -c -R 'stats -h' "$1?offset=$2" 2>/dev/null | awk -F: '
+        /^Block count:/ {n=$2} /^Free blocks:/ {f=$2} /^Overhead clusters:/ {o=$2} /^Block size:/ {b=$2}
+        END { if (b > 0 && n > 0) printf "%.0f\n", (n - f - o) * b }'
+}
+
+fat_used() {    # fat_used <path> <byte offset> -> bytes in use, df's arithmetic
+    # Counted from the FAT itself, not from FSInfo's free count — a hint other
+    # systems leave stale. FAT12 is skipped: no card this tool meets has it.
+    local f="$1" o="$2" b bps spc rsv nfat tot fsz clusters w
+    b=($(read_at "$f" "$o" 40 | od -An -v -tu1))
+    [ ${#b[@]} -eq 40 ] || return 0
+    bps=$(( b[11] | b[12] << 8 )); spc=${b[13]}; rsv=$(( b[14] | b[15] << 8 )); nfat=${b[16]}
+    tot=$(( b[19] | b[20] << 8 )); fsz=$(( b[22] | b[23] << 8 ))
+    [ "$tot" -eq 0 ] && tot=$(( b[32] | b[33] << 8 | b[34] << 16 | b[35] << 24 ))
+    [ "$fsz" -eq 0 ] && fsz=$(( b[36] | b[37] << 8 | b[38] << 16 | b[39] << 24 ))
+    [ "$bps" -gt 0 ] && [ "$spc" -gt 0 ] || return 0
+    clusters=$(( (tot - rsv - nfat * fsz - ((b[17] | b[18] << 8) * 32 + bps - 1) / bps) / spc ))
+    if [ "$clusters" -lt 4085 ]; then return 0
+    elif [ "$clusters" -lt 65525 ]; then w=2; else w=4; fi
+    [ $(( clusters * w )) -le 33554432 ] || return 0   # a FAT over 32 MB: too slow for a plan
+    # entries 0 and 1 are reserved; every non-zero entry after them is a cluster in use
+    echo $(( $(read_at "$f" $(( o + rsv * bps + 2 * w )) $(( clusters * w )) \
+                | od -An -v -w$w -tx$w | grep -c '[1-9a-f]') * spc * bps ))
+}
+
+mounted_used() {  # mounted_used <disk> <start, 512-B sectors> -> bytes in use, if that partition is mounted
+    local c
+    for c in /sys/block/"$1"/"$1"*; do
+        [ "$(cat "$c/start" 2>/dev/null)" = "$2" ] || continue
+        lsblk -bndo FSUSED "/dev/${c##*/}" 2>/dev/null | tr -d ' '
+        return 0
+    done
+}
+
+part_of() {     # part_of <path> <byte offset> [<bytes>] -> "fstype|label|uuid|used"
+    local f="$1" o="$2" sz=() probe t l u used=""
+    [ -n "${3:-}" ] && sz=(-S "$3")
+    probe=$(blkid -p -O "$o" ${sz[@]+"${sz[@]}"} -o export "$f" 2>/dev/null)
+    t=$(sed -n 's/^TYPE=//p' <<<"$probe" | clean_name)
+    l=$(sed -n 's/^LABEL=//p' <<<"$probe" | sed 's/\\\(.\)/\1/g' | clean_name)
+    u=$(sed -n 's/^UUID=//p' <<<"$probe" | clean_name)
+    [ -b "$f" ] && used=$(mounted_used "${f##*/}" $(( o / 512 )))
+    if [ -z "$used" ]; then
+        case "$t" in
+            ext2|ext3|ext4) used=$(ext_used "$f" "$o") ;;
+            vfat)           used=$(fat_used "$f" "$o") ;;
+        esac
+    fi
+    echo "${t:-raw}|$l|$u|$used"
+}
+
+parts_udev() {  # parts_udev <disk> -> part_of lines from udev's view: no read access needed
+    local d="$1" c t nodes=()
+    for c in /sys/block/"$d"/"$d"*; do [ -e "$c/partition" ] && nodes+=("${c##*/}"); done
+    [ ${#nodes[@]} -eq 0 ] && nodes=("$d")
+    for c in "${nodes[@]}"; do
+        t=$(lsblk -ndo FSTYPE "/dev/$c" 2>/dev/null | clean_name)
+        [ "$c" = "$d" ] && [ -z "$t" ] && continue      # a bare disk: nothing on it
+        echo "${t:-raw}|$(lsblk -ndo LABEL "/dev/$c" 2>/dev/null | clean_name)|$(lsblk -ndo UUID "/dev/$c" 2>/dev/null | clean_name)|$(lsblk -bndo FSUSED "/dev/$c" 2>/dev/null | tr -d ' ')"
+    done
+}
+
+parts_of() {    # parts_of <disk: /dev node or image file> -> one part_of line per partition
+    local f dump ss start size ptype whole any=0
+    f=$(readlink -f "$1")
+    if [ ! -r "$f" ]; then [ -b "$f" ] && parts_udev "${f##*/}"; return 0; fi
+    if dump=$(sfdisk -d "$f" 2>/dev/null); then
+        ss=$(sed -n 's/^sector-size: *//p' <<<"$dump"); ss=${ss:-512}
+        while read -r start size ptype; do
+            case "$ptype" in 5|f|85) continue ;; esac     # an extended container, not a filesystem
+            part_of "$f" $(( start * ss )) $(( size * ss )); any=1
+        done < <(sed -n 's/.*start= *\([0-9]*\), *size= *\([0-9]*\), *type= *\([^, ]*\).*/\1 \2 \3/p' <<<"$dump")
+    fi
+    if [ "$any" = 0 ]; then         # no partition table: one filesystem on the whole disk, or nothing
+        whole=$(part_of "$f" 0)
+        [ "${whole%%|*}" != raw ] && echo "$whole"
+    fi
+    return 0
+}
+
+content_fmt() { # stdin: parts_of lines -> "vfat boot 31M · ext4 rootfs 2.1G · ext4 data 12M"
+    local t l u used n w out=""
+    while IFS='|' read -r t l u used; do
+        [ -n "$t" ] || continue
+        n="${l:-$u}"; [ ${#n} -gt 12 ] && n="${n:0:8}…"
+        w="$t${n:+ $n}"
+        [ -n "$used" ] && w="$w $(numfmt --to=iec --round=nearest "$used" 2>/dev/null || echo "$used")"
+        out="${out:+$out · }$w"
+    done
+    echo "${out:-no partition, no filesystem}"
+}
+
+shape_fmt() {   # stdin: parts_of lines -> the layout, "vfat:boot ext4:rootfs ext4:data "
+    local t l u used
+    while IFS='|' read -r t l u used; do [ -n "$t" ] && printf '%s:%s ' "$t" "$l"; done
+    return 0
+}
+
+IMG_SHAPE=""    # the image's layout, once read; a card of this image STARTS with it (p4 may follow)
+content_cell() { # content_cell <parts_of lines> -> the CONTENT cell; exit 1 if not the image's layout
+    local cell; cell=$(content_fmt <<<"$1")
+    if [ -n "$IMG_SHAPE" ]; then
+        case "$(shape_fmt <<<"$1")" in
+            "$IMG_SHAPE"*) ;;
+            *) echo "${C_WARN}${cell}${C_END}"; return 1 ;;
+        esac
+    fi
+    echo "$cell"
+}
+
+layout_note() { # layout_note <cards not of the image's layout> <cards>
+    [ "$1" -gt 0 ] || return 0
+    warn "$1 of $2 hold another layout than this image (CONTENT in yellow) — make sure it is yours to erase"
+}
+
 if [ "$LIST" = 1 ]; then
     printf '%-10s %-24s %-8s %-10s %s\n' DEVICE SERIAL PORT SIZE MODEL
     for d in $(all_disks); do
@@ -160,6 +307,19 @@ IMG_BYTES=$(stat -c %s "$IMG")
 # the disk the image itself lives on is never a target, however removable it is
 IMG_SRC=$(df --output=source "$IMG" 2>/dev/null | tail -1)
 IMG_SRC=$(lsblk -no PKNAME "$IMG_SRC" 2>/dev/null | head -1)
+IMG_PARTS=$(parts_of "$IMG"); IMG_SHAPE=$(shape_fmt <<<"$IMG_PARTS")
+
+if [ "$CONTENT_ONLY" = 1 ]; then
+    say "image:  $(content_fmt <<<"$IMG_PARTS")"
+    other=0
+    for t in "$@"; do
+        [ -e "$t" ] || { err "no such disk or image: $t"; exit 1; }
+        cell=$(content_cell "$(parts_of "$t")") || other=$(( other + 1 ))
+        say "$t:  $cell"
+    done
+    layout_note "$other" $#
+    exit 0
+fi
 
 # ── phase 1 — the image, once, before it is cloned N times ───────────────────
 # Repair the boot vfat and the LAST ext4 (RastaOS: p1 boot, p2 rootfs mounted
@@ -251,15 +411,21 @@ fi
 
 echo "burn-batch"
 say "image:  $IMG  ($(human "$IMG_BYTES"))"
+say "holds:  $(content_fmt <<<"$IMG_PARTS")"
 say "cards:  ${#TARGETS[@]}, $JOBS at a time"
 say "log:    $LOG"
 echo
-printf '  %-10s %-24s %-8s %s\n' DEVICE SERIAL PORT SIZE
+# CONTENT is read here, in the plan — before the confirmation AND under -y,
+# which skips only the confirmation: this table is the last screen before dd.
+printf '  %-10s %-24s %-8s %-8s %s\n' DEVICE SERIAL PORT SIZE CONTENT
+OTHER=0
 for spec in "${TARGETS[@]}"; do
     IFS='|' read -r d s p b <<<"$spec"
-    printf '  %-10s %-24s %-8s %s\n' "/dev/$d" "$s" "$p" "$(human "$b")"
+    cell=$(content_cell "$(parts_of "/dev/$d")") || OTHER=$(( OTHER + 1 ))
+    printf '  %-10s %-24s %-8s %-8s %s\n' "/dev/$d" "$s" "$p" "$(human "$b")" "$cell"
 done
 echo
+layout_note "$OTHER" "${#TARGETS[@]}"
 warn "every byte on these ${#TARGETS[@]} cards will be destroyed."
 
 if [ "$DRY" = 1 ]; then
