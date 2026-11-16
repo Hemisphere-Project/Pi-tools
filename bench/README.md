@@ -11,6 +11,9 @@ here.
 | `verify` + `verify-modules.py` | the commit-time floor: every script parses, every file a `module.ini` names exists |
 | `fleet-run` + `fleet-lib.sh` | walk a roster of player **hotspots**, run one command on each, skip the dead ones |
 | `probe-level` | which patches does this player actually carry? one `y`/`n` per patch and a `missing:` line |
+| `module-level` | which version of each module does this player carry? one row per module and a `drift:` line |
+| `precheck` | one screen per player, read-only: card health and **write load**, journal, HPlayer2 defects and sync state, watchdog actions per day, unexplained warnings |
+| `eth-sync` | move one player's sync group from the wlan0 dongle to **eth0** (master `AP`, slaves `STA`), no reflash |
 | `fleet-patch-hostapd.sh` | one-off: convert existing players from the NM/wpa_supplicant AP to hostapd, no reflash |
 | `sd-converge` | bench SD carousel: converge player **cards** to this machine's checkouts, no network |
 | `burn-batch` | clone one golden image onto N cards at once, and prove every card byte-for-byte |
@@ -342,6 +345,167 @@ tool is built so that run costs one command.
 
 ---
 
+## `module-level` — which version of each module does this player carry?
+
+On 22/09 `usbfix` was corrected three times while a six-player round was in
+flight. The deployers install one module each, so every box ended the day on
+whatever `usbfix` was when *its* pass ran — and nothing on the box said which.
+It was caught by hand, a `grep` per guard per player (pi-tools#t-047).
+
+So every install pass now leaves a receipt. `setup/module-manifest record`
+rewrites the module's line in the box's `/etc/pi-tools-modules.txt`; each
+`install.sh` calls it, and `setup/installer.py` calls it for the modules it
+installs itself:
+
+```
+usbfix 12570ed434da 2026-09-22T14:03:11+02:00 eaf9b35+dirty
+<module> <fingerprint> <installed-at> <source>
+```
+
+`module-level` reads that file and compares every module with **this clone** —
+the tree the deployers copy from:
+
+```sh
+./bench/module-level                          # the player on this hotspot
+./bench/module-level usbfix blackbox          # just these
+./bench/module-level -m <card>/etc/pi-tools-modules.txt   # a card in a reader
+./fleet-run --local -- ./bench/module-level -t %t -q      # the whole fleet
+```
+
+```
+MODULE             STATE  INSTALLED        BOX CARRIES                          CLONE
+blackbox           =      2026-09-22 11:00 c9ed73f                              c9ed73f
+usbfix             drift  2026-09-22 14:03 51142e7 2026-09-22                   c9ed73f
+linkwatch          ?      -                not recorded on the box              c9ed73f
+
+recorded: 2 of 3
+unread: linkwatch
+drift: usbfix — and 1 of 3 could not be read, so this is not a full answer
+```
+
+Exit `0` no drift and nothing unread · `1` drift · `2` could not run, or could
+not read. `drift:` is always the last line, for the same reason as
+`probe-level`'s `missing:`.
+
+### The fingerprint is content, not a commit
+
+The deployers copy a laptop's **working tree** onto the box (`scp`, or `cp`
+over `/opt/Pi-tools/<module>`), so the box's own `git HEAD` says nothing about
+what a module directory holds, and the laptop's tree may not even be
+committed. The fingerprint is therefore a hash of the module directory's
+**content**: sha1 over the sorted `<git-blob-id> <path>` lines of its files.
+The same content always gives the same fingerprint, so `module-level` can walk
+this clone's history (`git ls-tree` hands over the blob ids, nothing is
+re-hashed) and **name the commit** a box's version came from — `51142e7`
+above. A box whose version is in no commit here was installed from somebody's
+uncommitted tree, and the row says so, along with the sha the box's checkout
+reported (`source`, `+dirty` when the module directory differed from it).
+
+Files are listed the way git sees the directory — tracked plus untracked
+files that are not ignored, or everything but `__pycache__`, `node_modules`,
+`.venv` and `*.pyc` outside a checkout. A stale file a `cp` left behind in a
+module directory is part of the content, so it reads as drift: that is a real
+difference, just a harmless one.
+
+### `?` is not `=`
+
+A module the box never recorded is `?` — installed before the manifest
+existed, or by a deployer that bypasses `install.sh` (the 22/09
+`usbfix-deploy` copied the bare script and wrote its own units). A box with no
+manifest at all is `drift: UNKNOWN`. Neither is ever read as a match: an
+unread fleet must not look like a converged one. `bench/verify` refuses a
+`script = yes` module whose `install.sh` does not record itself, so the
+manifest cannot decay one new module at a time.
+
+The receipt is written only when the root is writable (install passes run
+under `rw` anyway), and a failure to write it warns and never fails the
+install: a module must not refuse to install over its own receipt.
+
+### Status
+
+Recording, the three states and the commit lookup are exercised on dev37
+against this repo's own history: manifests built from the 22/09 shas
+(`1fb89ce`, `51142e7`, `eaf9b35`) resolve to exactly those commits, a module
+installed from an uncommitted tree reads `=` while the tree is unchanged and
+`not in this clone` once it is reverted, and every `install.sh`'s record line
+was run as written. On a real player (bench-02, a RastaOS-7.4 card, 14/11):
+`usbfix/install.sh` from a clean checkout of this branch printed `usbfix:
+recorded d30b8c7d6f8b (a14d08b)`, the fingerprint the laptop computes for
+`a14d08b`; `module-level` then read `usbfix =` and `linkwatch ?` (exit 2), and
+against a clone at `c9ed73f` read `usbfix drift`, naming `a14d08b` (exit 1).
+
+---
+
+## `precheck` — is what this player logs coherent?
+
+```sh
+./bench/precheck -t root@10.0.0.1           # one player
+./bench/precheck --here --days 1            # on the player itself
+./bench/fleet-run --local -- ./bench/precheck -t %t     # the whole fleet
+```
+
+Read-only, one ssh session, six to ten lines per player: the card (name, date,
+serial, `/data` filesystem state, mmc errors, and the **MB written to `/data`
+this boot, per day**), where the journal lives and how big it is, HPlayer2's
+level, restarts and the known defects counted over the window (`--days`,
+default 3), the sync group right now (slave: multicast membership, last drift
+window, link; master: stations, leases, linked peers), watchdog actions and
+beacon-loss bursts per day, and the top warning kinds that no known pattern
+explains.
+
+It is the field kit's `precheck.sh` (Biennale 2026, run on every player before
+the 21/09 pack). What it measures is unchanged; what tied it to one show is
+gone: the HPlayer2 unit is found (`--unit` overrides), the boot partition is
+`/boot` or `/boot/firmware` as `setnet` resolves it, and `/data`'s partition is
+found from its mountpoint instead of assumed to be `mmcblk0p3`.
+
+What it cannot say is **who** writes: the write load is a total for the boot.
+Naming the process takes per-process counters read over a day (pi-tools#t-037).
+On an x86 box the card line reads blank.
+
+## `eth-sync` — the sync group over eth0 instead of the dongle
+
+```sh
+./bench/eth-sync -n -r AP                                  # show the program, touch nothing
+./bench/eth-sync -r AP  -e player-000 -t root@10.0.0.1     # the master
+./bench/fleet-run -r slaves.roster --local -- ./bench/eth-sync -r STA -e %h -t %t
+```
+
+Same layout as the network-tools sync templates: master `eth0-sync-AP` (static
+`10.1.0.1`, dnsmasq serves the /24), slaves `eth0-sync-STA` (DHCP). On the box
+it archives the wifi sync marker and the golden's `eth0-dhcp` to
+`wifi/_disabled/`, drops the `eth0-sync-<ROLE>` marker in, removes
+NetworkManager's copies of the two archived profiles (`setnet` is additive and
+would keep them), runs `setnet`, and reports eth0's address and carrier.
+
+* **The template**: the card's own `wifi/_disabled/` copy first, else
+  `/opt/Pi-tools/network-tools/profiles/_disabled/` — an installer-made card has
+  no `_disabled/` on its boot partition (`network-tools/README.md`). Neither →
+  abort, nothing touched.
+* **`-e NAME`** refuses unless the box's hostname is `NAME`. Every player answers
+  on `10.0.0.1` and this tool writes; under `fleet-run`, pass `-e %h`.
+* **Reach the player over its hotspot, not over eth0** — the run re-addresses
+  eth0 and a session riding it dies before the report.
+* **HPlayer2 is not restarted**: it reads its role at start. Restart it (or
+  reboot) once every player of the group is switched.
+* **Back to wifi** is the same move mirrored, by hand: archive
+  `eth0-sync-<ROLE>`, restore `wlan0-sync-<ROLE>` and `eth0-dhcp`, `setnet`.
+
+It is the field kit's `on-player-eth-sync.sh` (Biennale 2026), with the same
+steps; the template fallback and `-e` are new.
+
+### Status (both)
+
+The two on-box programs ran on the Biennale fleet as field scripts. The folded
+versions are exercised **without a player only**: argument refusals, `--dry-run`,
+`precheck --here` on a Debian VM (every line prints, blank where there is no
+card), a dead ssh target landing on exit 2, and `eth-sync`'s program run in a
+sandbox tree with stubbed system tools — golden card, installer card (template
+from `/opt/Pi-tools`), no template (abort, untouched), wrong host (refused,
+untouched). **Their first run against a real player is the proof still owed.**
+
+---
+
 ## `burn-batch` — N cards from one golden image, each one proved
 
 ```sh
@@ -422,3 +586,49 @@ across a real hub, the re-resolve after a reset, `dd` to a genuine card, and the
 worn-card failure the `cmp` pass exists for. That is a bench session with the
 reader and a lot of cards; until it has run, the fallback is the by-hand
 procedure this tool was written from.
+
+## `test-rastaos-update` — the updater, exercised without a box
+
+`setup/rastaos-update <tag>` converges a player's `/opt/Pi-tools` checkout to a release tag, from
+origin or (`--bundle FILE`) an offline git bundle. It writes `/etc/rastaos-release` (the receipt:
+tag, full commit, when, from where, what it replaced) and `refs/rastaos/rollback` in the checkout
+(the rollback point, which also keeps image-only commits from `git gc`). `--rollback` swaps back,
+`--status` reads both, `-n` changes nothing. A box already on the tag with a matching receipt gets
+`already at <tag>` and **no write at all** — that is what makes a second run provably a no-op.
+It refuses (exit 3, nothing changed) local edits in the checkout and a tag that moved: a field
+hotfix is a new tag.
+
+`bench/test-rastaos-update` builds a throwaway origin and checkout and drives every one of those
+paths, with `/etc` and `/run` redirected. It does not prove `rw`/`ro` on a real
+read-only root, nor anything on hardware — that is the bench proof on bench-01 (pi-tools#t-057).
+
+After a move the updater runs `setup/converge.py` from the new checkout: the box's OWN modules
+(named in `/etc/pi-tools-modules.txt`, or with a declared bin/unit present), never one it did not
+have, never one its platform cannot run (`platforms = pi` is skipped on an N100). A fully linked
+standard module needs nothing (its symlinks already carry the new code); a partly linked one is
+reinstalled. A script module runs its own `[install] upgrade` script when it declares one (with
+`--converging`: the updater holds `rw`, so the script takes no rw...ro bracket of its own), else
+its `install.sh` again if its module.ini says `[install] rerun = yes`, else it is `held`.
+`python3 setup/converge.py --plan` prints that table and changes nothing. A failed module writes
+`MODULES=failed` in the receipt (exit 6), and the next run converges again instead of saying
+`already at`.
+
+Which script module gets what, and why (each module.ini says it in a comment over the key):
+
+| module | on a tag move | why |
+|---|---|---|
+| rorw | `upgrade.sh --converging` | install.sh runs ONCE: fstab from freshly probed UUIDs, cmdline.txt seds, .bashrc appends. upgrade.sh is its re-runnable tail (fake clock, logout hook, ro-assert, toggles) |
+| linkwatch, usbfix | install.sh again | their scripts are COPIED to /usr/local/sbin — a re-run is the only way the tag reaches them. usbfix remembers `--no-rsyslog` in /etc/default/usbfix |
+| audiohub | install.sh again | rewrites its graph (/etc/asound.conf), keeps /etc/audiohub.conf; restarts the 3 forwarders one at a time — a playing box blips |
+| blackbox, flightbox, hdmi-rehandshake, splash | install.sh again | `ln -sf`, enable, files rewritten whole; splash x86 also re-runs update-grub + update-initramfs |
+| tailscale | held | install.sh pipes the vendor installer from the network: fails offline, and would move tailscale itself to latest. Its wrapper is linked, so the tag still reaches it |
+
+`bench/verify` lints the two keys (`rerun` a boolean, `upgrade` an existing file, both on a
+`script = yes` module only): a `rerun` converge cannot parse would abort the whole convergence.
+
+### Status
+
+pi-tools#t-057, slices 1-3: checkout, receipt, rollback point, module convergence, every script
+module marked (56 checks, the last five against the real module set). What a desk cannot prove is
+the bench proof on bench-01 — `rastaos-update` run twice, the second changing nothing, on a real
+read-only root with the real installers.

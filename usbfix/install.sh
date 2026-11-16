@@ -1,17 +1,25 @@
 #!/bin/bash
 # usbfix — install: the USB-link watchdog (timer, every minute) and keep kernel messages out of
 # rsyslog's tmpfs files. Effective at the next boot; `install.sh --now` starts it at once.
-#   --no-rsyslog   leave rsyslog alone (default: imklog off + kern.* stop — the journal keeps them)
+#   --no-rsyslog   leave rsyslog alone (default: imklog off + kern.* stop — the journal keeps them);
+#                  remembered in /etc/default/usbfix, so a re-run (rastaos-update converges this
+#                  module after every tag move) does not quietly take the opt-out back. Delete that
+#                  file to opt back in.
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 NOW=0; RSYSLOG=1
+grep -qx 'RSYSLOG=0' /etc/default/usbfix 2>/dev/null && RSYSLOG=0
 for a in "$@"; do case "$a" in --now) NOW=1 ;; --no-rsyslog) RSYSLOG=0 ;; esac; done
+if [ "$RSYSLOG" = 0 ]; then
+  printf '%s\n' '# Pi-tools usbfix: installed with --no-rsyslog — a re-run leaves rsyslog alone' 'RSYSLOG=0' > /etc/default/usbfix
+fi
 chmod 755 "$HERE/usbfix"
 install -m 755 "$HERE/usbfix" /usr/local/sbin/usbfix
 ln -sf "$HERE/usbfix.service" /etc/systemd/system/usbfix.service
 ln -sf "$HERE/usbfix.timer" /etc/systemd/system/usbfix.timer
 systemctl daemon-reload 2>/dev/null || true
 systemctl enable usbfix.timer 2>/dev/null || true
+bash "$HERE/../setup/module-manifest" record usbfix "$HERE" || true   # what this pass laid down (#t-047)
 if [ "$RSYSLOG" = 1 ] && [ -f /etc/rsyslog.conf ]; then
   # Under a kernel storm rsyslog read ~7000 lines/s from /proc/kmsg and wrote them twice into the
   # 102 MB tmpfs (kern.log + syslog): full in a minute, CPU burnt for nothing. The persistent journal

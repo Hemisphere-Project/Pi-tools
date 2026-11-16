@@ -10,10 +10,34 @@ path entirely for the export chunk.
 ## The partition
 
 A fourth partition, ~512 MB, **no filesystem** — nothing to mount, nothing to fsck, no fstab line,
-so a broken or absent p4 cannot touch the boot. `flightbox` never creates it: the golden image
-lays it out at the reflash. Cards already in service are **not repartitioned** (Thomas 2026-09-27:
+so a broken or absent p4 cannot touch the boot. `flightbox` never creates it: the burn lays it
+out at the reflash. Cards already in service are **not repartitioned** (Thomas 2026-09-27:
 a live `/data` shrink is the one operation where a power cut costs the films — pi-tools#t-049 is
 dropped for the fleet); they use file mode, below. p4 wins wherever it exists.
+
+### Layout at the burn (pi-tools#t-058)
+
+The golden image keeps **three** partitions (boot, root, `/data`), so one image fits every card;
+only the burn knows the card's size. `bench/burn-batch --flightbox IMAGE` runs
+`image/flightbox-p4` on every card that verified byte for byte (after the cmp: it rewrites the
+partition table the cmp just proved):
+
+```
+card:  [p1 boot][p2 root][p3 /data …… grows at first boot ……][p4 flightbox, last 512 MB]
+```
+
+- p4 takes the card's **last 512 MB**, on the 4 MiB grid, MBR type `0xda` (non-FS data). The
+  region is **zeroed first**, in one pass: a reused card's tail can hold an earlier card's
+  flightbox records with valid CRCs, which the boot scan would take for this card's trail.
+- At the card's first boot **extendfs grows `/data`'s own partition** up to p4's start (growpart
+  grows a partition up to the next one). It used to grow the disk's *last* partition, which is
+  now p4: `resize2fs` on a raw partition would fail before the identity reset.
+- Refused, nothing written: not MBR, not exactly three partitions, a fourth partition that is
+  not this layout, no 512 MB free after `/data`. A refused card is still a good card: it runs
+  file mode. Idempotent: a p4 already laid out is reported, not rewritten.
+- `bash bench/flightbox-p4-desk.sh` proves it on image files (no root, no card): layout, the
+  refusals, the zero pass, growpart stopping at p4. The burn of a real card and its first boot
+  are row 14's (rastaos#t-017) and pi-tools#t-050's bench.
 
 ## File mode — live cards (pi-tools#t-051)
 
@@ -126,7 +150,7 @@ to that (same limit `blackbox` already documents).
 
 This module (pi-tools#t-048) is the writer/reader + boot-time scan + repointing
 `journal-export`/`blackbox`; file mode, `reserve` and the lazytime remount are pi-tools#t-051
-(the live repartition it replaces, pi-tools#t-049, is dropped). Bench validation (power cut
+(the live repartition it replaces, pi-tools#t-049, is dropped); p4 at the burn is pi-tools#t-058. Bench validation (power cut
 mid-record in file mode and p4 mode, `dump` reconstruction past a torn record, boot with the file
 missing / truncated / corrupt) is pi-tools#t-050. Fleet rollout order to `biennale-lyon-2026` is that
 engagement's own task once this ships — pi-tools is a component with no client.

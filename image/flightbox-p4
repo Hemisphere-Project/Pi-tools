@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# flightbox-p4 — lay out flightbox's raw ring partition (p4) at the TAIL of a
+# freshly burned card (pi-tools#t-058 ⑥; design: flightbox/README.md).
+#
+#   sudo image/flightbox-p4 /dev/sdX            # a burned card, unmounted
+#   image/flightbox-p4 card.img                 # a plain file works too (desk)
+#   bench/burn-batch --flightbox IMAGE ...      # runs this on every card that verified
+#
+# Why at burn and why at the tail: the golden image keeps three partitions
+# (boot, root, /data) so it stays one size for every card, and only the burn
+# knows the card's size. p4 goes to the LAST 512 MB of the card; the gap
+# between /data's end and p4 is what extendfs grows /data into at first boot
+# (it grows /data's own partition, up to the next one — never the disk's last
+# partition, which is now p4 and has no filesystem). Cards in service are never
+# repartitioned: they use flightbox's file mode.
+#
+# What it writes, in this order:
+#   1. zeros over the region p4 will cover, in one sequential pass — a reused
+#      card's tail can hold an earlier card's flightbox records with valid CRCs,
+#      which the boot scan would take for this card's trail;
+#   2. one MBR entry, type 0xda (non-FS data), aligned to 4 MiB.
+# A cut during 1 leaves no p4 (re-run redoes it); 2 is one sector.
+#
+# Idempotent: a p4 already laid out by this tool is reported, never rewritten.
+# Refuses (exit 1, nothing written): not an MBR disk, not exactly three
+# partitions, a fourth partition that is not ours, no 512 MB free at the tail.
+#   FLIGHTBOX_P4_MB   size (default 512)
+#   FLIGHTBOX_P4_NOZERO=1   skip step 1 (desk tests only)
+set -euo pipefail
+
+say() { echo "flightbox-p4: $*"; }
+die() { echo "flightbox-p4: $1" >&2; exit "${2:-1}"; }
+
+DEV="${1:-}"
+[ -n "$DEV" ] && [ $# -eq 1 ] || die "usage: flightbox-p4 <card device | image file>" 2
+[ -e "$DEV" ] || die "$DEV: no such device or file" 2
+
+MB="${FLIGHTBOX_P4_MB:-512}"
+case "$MB" in ''|*[!0-9]*|0) die "FLIGHTBOX_P4_MB wants a whole number of MB, got '$MB'" 2 ;; esac
+[ $(( MB % 4 )) -eq 0 ] || die "FLIGHTBOX_P4_MB must be a multiple of 4 (the zeroing pass writes 4 MB blocks), got $MB" 2
+SIZE=$(( MB * 2048 ))          # 512-B sectors
+ALIGN=8192                     # 4 MiB, the grid the RastaOS partitions sit on
+
+if [ -b "$DEV" ]; then
+    SECTORS=$(blockdev --getsz "$DEV")
+    findmnt -nro SOURCE | grep -q "^$(readlink -f "$DEV")" \
+        && die "$DEV has a mounted partition — unmount the card first (burn-batch does)"
+else
+    SECTORS=$(( $(stat -c %s "$DEV") / 512 ))
+fi
+
+DUMP=$(sfdisk -d "$DEV" 2>/dev/null) || die "$DEV: no partition table sfdisk can read"
+grep -q '^label: dos' <<<"$DUMP" || die "$DEV: not an MBR (dos) disk — the RastaOS layout is MBR; nothing written"
+mapfile -t PARTS < <(grep -E '^[^ ]+ *: *start=' <<<"$DUMP")
+field() { sed -n "s/.*$2= *\([0-9a-fx]*\).*/\1/p" <<<"$1"; }
+
+START=$(( (SECTORS - SIZE) / ALIGN * ALIGN ))
+
+if [ "${#PARTS[@]}" -eq 4 ]; then
+    p4="${PARTS[3]}"
+    if [ "$(field "$p4" type)" = "da" ] && [ "$(field "$p4" size)" = "$SIZE" ] \
+       && [ "$(field "$p4" start)" = "$START" ]; then
+        say "p4 already laid out at sector $START ($MB MB) — nothing to do"
+        exit 0
+    fi
+    die "$DEV already has a fourth partition that is not flightbox's tail p4 — nothing written"
+fi
+[ "${#PARTS[@]}" -eq 3 ] || die "$DEV has ${#PARTS[@]} partitions, the RastaOS image has 3 (boot, root, /data) — nothing written"
+
+p3="${PARTS[2]}"
+P3_END=$(( $(field "$p3" start) + $(field "$p3" size) - 1 ))
+[ "$START" -gt "$P3_END" ] || die "no $MB MB free after /data (ends at sector $P3_END of $SECTORS) — this card is too small for p4; flightbox will use file mode. Nothing written"
+
+if [ "${FLIGHTBOX_P4_NOZERO:-0}" != 1 ]; then
+    say "zeroing the $MB MB p4 will cover (one pass)"
+    if [ -b "$DEV" ]; then
+        dd if=/dev/zero of="$DEV" bs=4M count=$(( MB / 4 )) seek=$(( START * 512 )) \
+           oflag=seek_bytes,direct conv=fsync status=none
+    else
+        dd if=/dev/zero of="$DEV" bs=4M count=$(( MB / 4 )) seek=$(( START * 512 )) \
+           oflag=seek_bytes conv=notrunc,fsync status=none
+    fi
+fi
+
+echo "start=$START, size=$SIZE, type=da" | sfdisk --append -q "$DEV" >/dev/null
+say "p4 laid out: sectors $START–$(( START + SIZE - 1 )) ($MB MB, type da); /data grows into the $(( (START - P3_END - 1) / 2048 )) MB before it at first boot"

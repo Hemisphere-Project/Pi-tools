@@ -37,3 +37,4 @@ ln -sf "$BASEPATH/splash" /usr/local/bin/
 
 systemctl daemon-reload
 systemctl enable splash
+bash "$BASEPATH/../setup/module-manifest" record splash "$BASEPATH" || true   # what this pass laid down (#t-047)

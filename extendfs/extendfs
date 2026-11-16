@@ -251,6 +251,20 @@ fi
 
 echo "Last partition: $LAST_PART"
 
+# Grow /data's OWN partition when it sits on this disk, not blindly the last one:
+# a card burned with flightbox's tail p4 (image/flightbox-p4) has a raw partition
+# with no filesystem last, and growing that would end in resize2fs failing on it,
+# before the identity reset. growpart grows a partition up to the next one's
+# start, so /data fills the gap before p4. On a 3-partition card /data IS the
+# last partition: nothing changes there. (LAST_PART keeps its name below: it is
+# "the partition to grow" from here on.)
+DATA_PART=$(readlink -f "$(findmnt -nro SOURCE /data 2>/dev/null || true)" 2>/dev/null || true)
+DISK_PARTS=$(lsblk -nrpo NAME,TYPE "$DISK_DEV" | awk '$2=="part" {print $1}')
+if [[ -b "$DATA_PART" && "$DATA_PART" != "$LAST_PART" ]] && grep -qx "$DATA_PART" <<<"$DISK_PARTS"; then
+        echo "Growing /data's partition $DATA_PART, not the last one ($LAST_PART)"
+        LAST_PART="$DATA_PART"
+fi
+
 PART_BASENAME=$(basename "$LAST_PART")
 if [[ "$PART_BASENAME" =~ ^${DISK_NAME}p?([0-9]+)$ ]]; then
         PART_NUM="${BASH_REMATCH[1]}"

@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# eth-sync — move a player's sync group from the wlan0 dongle to eth0 (a switch
+# between the players), without a reflash.
+#
+# Run from the laptop against ONE player (or on the player itself with --here),
+# once per player: the master with --role AP, every slave with --role STA.
+#
+#   AP   (master) eth0-sync-AP  — static 10.1.0.1, dnsmasq serves the /24
+#   STA  (slave)  eth0-sync-STA — DHCP from the master
+#
+# What it does on the box, in order:
+#   1. finds the eth0-sync-<ROLE> template: the card's own <boot>/wifi/_disabled/
+#      copy first, else network-tools/profiles/_disabled/ in /opt/Pi-tools; none
+#      → abort, nothing touched
+#   2. archives the wifi sync marker (wlan0-sync-<ROLE>) and the golden's
+#      eth0-dhcp to <boot>/wifi/_disabled/, drops the eth0-sync-<ROLE> marker in
+#      (autoconnect-priority=10 added if the template lacks it)
+#   3. removes NetworkManager's copies of the two archived profiles — setnet is
+#      additive and never deletes, so it would otherwise keep them alive
+#   4. runs setnet: on a master it tears the wlan0 AP down, NM brings eth0 up
+#   5. prints the markers, eth0's address and carrier, the active connections
+#
+# HPlayer2 is NOT restarted: it reads its role at start, so restart it (or reboot)
+# once every player of the group has been switched.
+#
+#   Usage: eth-sync --role AP|STA [options]
+#
+#     -r, --role AP|STA   the box's role in the sync group          (required)
+#     -t, --target SSH    ssh target                 (default root@10.0.0.1)
+#         --here          run on THIS machine — you are already on the player
+#     -e, --expect NAME   refuse unless the box's hostname is NAME — every
+#                         player answers on 10.0.0.1, and this one WRITES
+#         --ssh-timeout SEC  connect budget                       (default 10)
+#     -n, --dry-run       print the target and the program; reach nothing
+#     -h, --help
+#
+#   REACH THE PLAYER OVER ITS HOTSPOT, NOT OVER eth0: the run re-addresses eth0,
+#   and a session riding it dies before step 5 can report.
+#
+#   SSH identity: FLEET_SSH_KEY pins one key, as for fleet-run (fleet-lib.sh).
+#
+#   Exit: 0 switched · 1 refused on the box (no template, wrong host) · 2 could
+#         not run (bad argument, no ssh, transport died — rc 255 from ssh).
+#
+#   Examples:
+#     eth-sync -n -r AP
+#     eth-sync -r AP  -e player-000 -t root@10.0.0.1
+#     ./bench/fleet-run -r slaves.roster --local -- ./bench/eth-sync -r STA -e %h -t %t
+#
+# Field origin: `on-player-eth-sync.sh`, run on the Biennale 2026 fleet in
+# September (Runbooks biennale-deploy/scripts/) — the same layout as the wall and
+# LEA groups. Folded here with the same steps; what changed is the boot partition
+# (/boot or /boot/firmware, as setnet resolves it), the template fallback to this
+# repo's own profiles (an installer-made card has no _disabled/ on its boot
+# partition — network-tools/README.md), and the --expect identity check.
+#
+# Going back to wifi is the same move mirrored, by hand: archive eth0-sync-<ROLE>,
+# restore wlan0-sync-<ROLE> and eth0-dhcp from _disabled/, setnet.
+set -uo pipefail
+
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=fleet-lib.sh
+. "$SELF_DIR/fleet-lib.sh"          # FLEET_SSH_OPTS, FLEET_TARGET_DEFAULT — no side effects
+
+usage() { sed -n '2,58p' "$0" | sed 's/^# \?//'; }
+
+ROLE=""; TARGET="$FLEET_TARGET_DEFAULT"; HERE=0; EXPECT=""; SSHB=10; DRY=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -r|--role)     ROLE="${2:?--role needs AP or STA}"; shift ;;
+    -t|--target)   TARGET="${2:?--target needs an ssh target}"; shift ;;
+    --here)        HERE=1 ;;
+    -e|--expect)   EXPECT="${2:?--expect needs a hostname}"; shift ;;
+    --ssh-timeout) SSHB="${2:?--ssh-timeout needs seconds}"; shift ;;
+    -n|--dry-run)  DRY=1 ;;
+    -h|--help)     usage; exit 0 ;;
+    *)             echo "eth-sync: unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+  shift
+done
+
+die() { printf 'eth-sync: %s\n' "$*" >&2; exit 2; }
+case "$ROLE" in AP|STA) ;; '') die "--role is required: AP (master) or STA (slave)" ;; *) die "--role must be AP or STA, not: $ROLE" ;; esac
+case "$SSHB" in *[!0-9]*|'') die "--ssh-timeout must be an integer" ;; esac
+case "$EXPECT" in *[!A-Za-z0-9._-]*) die "--expect: not a hostname: $EXPECT" ;; esac
+
+# ── the program that runs ON the box ────────────────────────────────
+build_program() {
+  printf 'ROLE=%s\nEXPECT=%s\n' "$ROLE" "$EXPECT"
+  cat <<'PROG'
+set -u
+if [ -n "$EXPECT" ] && [ "$(hostname)" != "$EXPECT" ]; then
+  echo "$(hostname): not $EXPECT — refused, nothing touched"; exit 1
+fi
+B=/boot; [ -d /boot/firmware ] && B=/boot/firmware
+W=$B/wifi; D=/etc/NetworkManager/system-connections
+T="$W/_disabled/eth0-sync-$ROLE.nmconnection"
+[ -f "$T" ] || T=/opt/Pi-tools/network-tools/profiles/_disabled/eth0-sync-$ROLE.nmconnection
+[ -f "$T" ] || { echo "$(hostname): no eth0-sync-$ROLE template in $W/_disabled nor in /opt/Pi-tools — abort, nothing touched"; exit 1; }
+mount -o remount,rw $B 2>/dev/null; rw >/dev/null 2>&1
+mkdir -p "$W/_disabled"
+[ -f "$W/wlan0-sync-$ROLE.nmconnection" ] && mv -f "$W/wlan0-sync-$ROLE.nmconnection" "$W/_disabled/"
+[ -f "$W/eth0-dhcp.nmconnection" ] && mv -f "$W/eth0-dhcp.nmconnection" "$W/_disabled/"
+cp "$T" "$W/eth0-sync-$ROLE.nmconnection"
+grep -q '^autoconnect-priority=' "$W/eth0-sync-$ROLE.nmconnection" || sed -i '/^\[connection\]/a autoconnect-priority=10' "$W/eth0-sync-$ROLE.nmconnection"
+rm -f "$D/wlan0-sync-$ROLE.nmconnection" "$D/eth0-dhcp.nmconnection"
+sync; mount -o remount,ro $B 2>/dev/null
+echo "$(hostname): template $T"
+echo "$(hostname): markers now: $(ls $W | grep nmconnection | tr '\n' ' ')"
+setnet 2>&1 | grep -iE "hostapd|eth0|wlan0|error|fail|done" | sed 's/^/   setnet: /' | head -8
+ro >/dev/null 2>&1
+sleep 6
+echo "$(hostname): eth0 $(ip -4 -o addr show eth0 | awk '{print $4}') carrier=$(cat /sys/class/net/eth0/carrier 2>/dev/null) | active: $(nmcli -t -f NAME,DEVICE con show --active | tr '\n' ';') | hostapd@wlan0 $(systemctl is-active hostapd@wlan0) | wlan0 $(ip -4 -o addr show wlan0 2>/dev/null | awk '{print $4}') | root $(findmnt -rn -o OPTIONS / | cut -c1-2) boot $(findmnt -rn -o OPTIONS $B | cut -c1-2)"
+exit 0
+PROG
+}
+
+if [ "$DRY" = 1 ]; then
+  # the header goes to stderr, so `eth-sync -n -r AP > prog.sh` is the program
+  echo "== eth-sync (dry run) — role $ROLE${EXPECT:+, only on $EXPECT} — would run on: $([ "$HERE" = 1 ] && echo 'HERE (this machine)' || echo "$TARGET")" >&2
+  build_program
+  exit 0
+fi
+
+if [ "$HERE" = 1 ]; then
+  [ "$(id -u)" = 0 ] || die "--here needs root (it writes the boot partition and NetworkManager)"
+  build_program | bash -s
+  exit $?
+fi
+
+command -v ssh >/dev/null 2>&1 || die "no ssh on this machine (--here runs locally)"
+# ConnectTimeout goes FIRST: for a repeated -o, ssh keeps the first value given
+build_program | ssh -o ConnectTimeout="$SSHB" "${FLEET_SSH_OPTS[@]}" "$TARGET" 'bash -s'
+rc=$?
+[ "$rc" -eq 255 ] && die "ssh to $TARGET failed (rc 255) — if it was over eth0, the switch may have run: re-check over the hotspot"
+exit "$rc"
