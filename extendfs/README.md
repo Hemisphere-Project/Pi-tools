@@ -1,13 +1,15 @@
 # extendfs
 
-Extend last partition to FS size after clone
+Grow /data's partition and its filesystem to fill a new drive after a clone
 
 ## A clone's first boot reboots on its own
 
 On a new drive (drive-id in `/data/var/drive-id` does not match) extendfs goes
-`rw`, grows the last partition and its filesystem, resets the clone's identity
-(machine-id, Tailscale state, SSH host keys), records the drive-id, then reseals
-the root with `ro`. Two cases end in an automatic reboot:
+`rw`, grows /data's partition and its filesystem (the last partition on a
+3-partition card, up to flightbox's p4 on a card that has one), resets the
+clone's identity (machine-id, Tailscale state, SSH host keys), records the
+drive-id, then reseals the root with `ro`. Two cases end in an automatic
+reboot:
 
 - **stage 1** — the kernel cannot reload the table of a mounted partition: the
   progress goes to `drive-id-stage1` and the box reboots to finish the resize.
