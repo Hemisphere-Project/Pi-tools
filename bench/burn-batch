@@ -37,7 +37,10 @@
 #     --flightbox  phase 5: on every card that verified, lay out flightbox's
 #                  raw ring partition (p4, 512 MB) at the card's TAIL with
 #                  image/flightbox-p4 — after the cmp, because it rewrites the
-#                  partition table the cmp just proved. The RastaOS 7.5 burn.
+#                  partition table the cmp just proved. The RastaOS 7.5 burn:
+#                  an image from before Pi-tools d17d886 (7.3, 7.4) gets no p4
+#                  — its extendfs would grow p4, not /data — and the plan says
+#                  so before the confirmation; its cards burn as file-mode cards.
 #
 #   BURNBATCH_LOG=<path>   CSV outcome log (default ~/burn-batch.csv)
 #
@@ -53,7 +56,7 @@
 # the no-reflash path, the fleet prep scripts are the stamping one.
 set -uo pipefail
 
-usage() { sed -n '2,52p' "$0" | sed 's/^# \?//'; }
+usage() { sed -n '2,56p' "$0" | sed 's/^# \?//'; }
 
 C_OK=$'\033[1;32m'; C_ERR=$'\033[1;31m'; C_WARN=$'\033[1;33m'; C_END=$'\033[0m'
 say()  { echo "  $*"; }
@@ -249,6 +252,18 @@ else
 fi
 [ ${#TARGETS[@]} -gt 0 ] || { err "no eligible card found (try -l to see the readers)"; exit 1; }
 
+# --flightbox: ask flightbox-p4 about the IMAGE now, read-only. Each card gets
+# the image's partition table and root (the cmp proves it), so what it refuses
+# here it refuses on every card — said once, before the confirmation, rather
+# than once per card after the burn (pi-tools#t-060).
+P4_TOOL="$(dirname "$(readlink -f "$0")")/../image/flightbox-p4"
+P4_PLAN=""
+if [ "$P4" = 1 ] && ! P4_PLAN=$("$P4_TOOL" --check "$IMG" 2>&1); then
+    P4_PLAN=${P4_PLAN##*$'\n'}; P4_PLAN=${P4_PLAN%%. Nothing written*}
+else
+    P4_PLAN=""
+fi
+
 echo "burn-batch"
 say "image:  $IMG  ($(human "$IMG_BYTES"))"
 say "cards:  ${#TARGETS[@]}, $JOBS at a time"
@@ -261,6 +276,10 @@ for spec in "${TARGETS[@]}"; do
 done
 echo
 warn "every byte on these ${#TARGETS[@]} cards will be destroyed."
+if [ -n "$P4_PLAN" ]; then
+    warn "--flightbox: ${P4_PLAN#flightbox-p4: }"
+    warn "p4 will be refused on EVERY card: they burn, verify and boot in file mode."
+fi
 
 if [ "$DRY" = 1 ]; then
     warn "DRY RUN — nothing was written."
@@ -404,7 +423,7 @@ if [ "$P4" = 1 ]; then
         if ! d=$(dev_for_serial "$s") || [[ "$d" == *" "* ]]; then
             echo "p4 skipped (card not found)" >"$RUNDIR/$s.p4"; continue
         fi
-        if out=$("$(dirname "$(readlink -f "$0")")/../image/flightbox-p4" "/dev/$d" 2>&1); then
+        if out=$("$P4_TOOL" "/dev/$d" 2>&1); then
             echo "p4 ok" >"$RUNDIR/$s.p4"; say "$s: ${out##*$'\n'}"
         else
             echo "p4 REFUSED" >"$RUNDIR/$s.p4"; warn "$s: ${out##*$'\n'}"
