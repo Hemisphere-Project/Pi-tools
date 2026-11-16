@@ -5,10 +5,10 @@
 # Rolling a card lot is not `dd` in a loop. Each phase below exists because
 # skipping it produces a card that looks burned and does not boot.
 #
-#   1. fsck the IMAGE first, once, before it is cloned N times — an image
-#      captured from a card that was not cleanly unmounted carries an
-#      unreplayed journal that every clone replays on first boot, and the
-#      rw/ro helper leaves the vfat dirty bit set on /boot.
+#   1. fsck the IMAGE first, once, before it is cloned N times — an unreplayed
+#      /data journal is replayed by every clone at first boot, the rw/ro helper's
+#      vfat dirty bit inherited by all. Checked read-only, REPAIRED only on a
+#      finding: a clean golden stays byte-identical (sha256, mtime) every burn.
 #   2. take the cards back off the desktop — udisks automounts every inserted
 #      card read-write, and writing under it dirties what you just wrote.
 #   3. dd in parallel, CAPPED — a bus-powered hub dropped all five of its
@@ -162,12 +162,41 @@ IMG_SRC=$(df --output=source "$IMG" 2>/dev/null | tail -1)
 IMG_SRC=$(lsblk -no PKNAME "$IMG_SRC" 2>/dev/null | head -1)
 
 # ── phase 1 — the image, once, before it is cloned N times ───────────────────
-# Repair the boot vfat and the LAST ext4 (RastaOS: p1 boot, p2 rootfs mounted
-# ro on the player, p3 /data rw — /data is the one carrying an unreplayed
-# journal). Every other ext4 is CHECKED and never written: a golden's rootfs is
-# the thing under test, not something to silently repair.
+# CHECK first, with the read-only tools, and repair only what they found: a
+# repair run on a clean filesystem still writes it (`e2fsck -fy` stamps the
+# superblock's last-checked time, and the image file's mtime with it), so a
+# golden fsck'd that way changed at every burn. Repaired on a finding: the boot
+# vfat and the LAST ext4 (RastaOS: p1 boot, p2 rootfs mounted ro on the player,
+# p3 /data rw — /data is the one carrying an unreplayed journal). Every other
+# ext4 is CHECKED and never written: a golden's rootfs is the thing under test,
+# not something to silently repair.
+
+# ext4_unclean <part> — why it needs a repair, on stdout; exit 0 IF IT DOES.
+# `e2fsck -fn` alone cannot say: it exits 0 on an unreplayed journal (it skips
+# recovery on a read-only check) and on a superblock left "not clean" — the
+# exact states phase 1 exists for. So the superblock is read first.
+ext4_unclean() {
+    local sb feat state
+    sb=$(dumpe2fs -h "$1" 2>/dev/null) || { echo "superblock unreadable"; return 0; }
+    feat=$(sed -n 's/^Filesystem features: *//p' <<<"$sb")
+    state=$(sed -n 's/^Filesystem state: *//p' <<<"$sb")
+    case " $feat " in *" needs_recovery "*) echo "unreplayed journal"; return 0 ;; esac
+    [ "$state" = clean ] || { echo "superblock state: ${state:-unknown}"; return 0; }
+    e2fsck -fn "$1" >/dev/null 2>&1 || { echo "e2fsck -fn reports errors"; return 0; }
+    return 1
+}
+
+# vfat_unclean <part> — same contract. `fsck.fat -n` exits 1 on the dirty bit
+# the rw/ro helper leaves on /boot, and on any other finding.
+vfat_unclean() {
+    fsck.fat -n "$1" >/dev/null 2>&1 && return 1
+    echo "fsck.fat -n reports errors (dirty bit?)"; return 0
+}
+
+FSCK_REPAIRED=0
 fsck_image() {
-    local L rc=0 part fstype p last_ext4="" ext4s=()
+    local L rc=0 part fstype p n why last_ext4="" ext4s=() fix=()
+    FSCK_REPAIRED=0
     L=$(losetup -Pf --show "$IMG") || { err "losetup failed on $IMG"; return 1; }
     say "image on $L"
     for p in "$L"p*; do
@@ -177,21 +206,47 @@ fsck_image() {
     [ ${#ext4s[@]} -gt 0 ] && last_ext4="${ext4s[$(( ${#ext4s[@]} - 1 ))]}"
     for part in "$L"p*; do
         [ -b "$part" ] || continue
+        n=${part#"$L"}
         fstype=$(blkid -o value -s TYPE "$part" 2>/dev/null)
         if [ "$fstype" = "vfat" ]; then
-            say "${part#/dev/}: vfat — repair"
-            fsck.fat -a "$part" >/dev/null 2>&1 || rc=1
+            if why=$(vfat_unclean "$part"); then
+                say "$n: vfat — $why — repair"; fix+=("$n vfat")
+            else
+                say "$n: vfat — clean, left as is"
+            fi
         elif [ "$fstype" = "ext4" ] && [ "$part" = "$last_ext4" ]; then
-            say "${part#/dev/}: ext4 (data) — repair"
-            e2fsck -fy "$part" >/dev/null 2>&1
-            [ $? -gt 2 ] && rc=1        # 1 = fixed, 2 = fixed + reboot advised
+            if why=$(ext4_unclean "$part"); then
+                say "$n: ext4 (data) — $why — repair"; fix+=("$n ext4")
+            else
+                say "$n: ext4 (data) — clean, left as is"
+            fi
         elif [ "$fstype" = "ext4" ]; then
-            say "${part#/dev/}: ext4 — checked, never written"
-            e2fsck -fn "$part" >/dev/null 2>&1 \
-                || warn "${part#/dev/}: e2fsck reports errors on a read-only check"
+            if why=$(ext4_unclean "$part"); then
+                warn "$n: ext4 — $why (checked, never written)"
+            else
+                say "$n: ext4 — clean (checked, never written)"
+            fi
         else
-            say "${part#/dev/}: ${fstype:-unknown} — left alone"
+            say "$n: ${fstype:-unknown} — left alone"
         fi
+    done
+    # the repair, only for what the check found — on the SAME loop: detaching
+    # and re-attaching (a read-only loop for the check) raced on the desk, the
+    # repair then hitting a device still read-only (pi-tools#t-062)
+    for p in "${fix[@]}"; do
+        FSCK_REPAIRED=1
+        read -r n fstype <<<"$p"
+        part="$L$n"
+        if [ "$fstype" = vfat ]; then
+            # exits 1 once it HAS fixed something: the re-check below judges
+            fsck.fat -a "$part" >/dev/null 2>&1
+            why=$(vfat_unclean "$part") && { err "$n: vfat still unclean after repair — $why"; rc=1; continue; }
+        else
+            e2fsck -fy "$part" >/dev/null 2>&1
+            [ $? -gt 2 ] && { err "$n: e2fsck -fy could not repair it"; rc=1; continue; }   # 1 = fixed, 2 = fixed + reboot advised
+            why=$(ext4_unclean "$part") && { err "$n: ext4 still unclean after repair — $why"; rc=1; continue; }
+        fi
+        say "$n: repaired — clean now"
     done
     losetup -d "$L"
     return $rc
@@ -200,7 +255,10 @@ fsck_image() {
 if [ "$FSCK_ONLY" = 1 ]; then
     [ "$(id -u)" = 0 ] || { err "--fsck-only needs root: pkexec bash $(readlink -f "$0") ${ORIG_ARGS[*]}"; exit 1; }
     echo "== clean the image (no cards involved)"
-    if fsck_image; then ok "image clean: $IMG"; exit 0; fi
+    if fsck_image; then
+        if [ "$FSCK_REPAIRED" = 1 ]; then ok "image repaired, clean now: $IMG"; else ok "image clean, not written: $IMG"; fi
+        exit 0
+    fi
     err "image fsck failed: $IMG"; exit 1
 fi
 
@@ -285,7 +343,7 @@ fi
 if [ "$FSCK" = 1 ]; then
     echo "== phase 1 — clean the image"
     if fsck_image; then
-        ok "image clean"
+        if [ "$FSCK_REPAIRED" = 1 ]; then ok "image repaired, clean now"; else ok "image clean, not written"; fi
     else
         err "image fsck failed — fix it before cloning it ${#TARGETS[@]} times"; exit 1
     fi

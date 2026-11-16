@@ -520,11 +520,18 @@ because skipping it produces a card that looks burned and does not boot:
 1. **fsck the image**, once, before it is cloned N times. An image captured
    from a card that was not cleanly unmounted carries an unreplayed `/data`
    journal that *every* clone replays on first boot, and `rorw`'s helper leaves
-   the vfat dirty bit set on `/boot`. The boot vfat and the **last** ext4
-   (`/data`) are repaired; every other ext4 is checked and never written — a
-   golden's rootfs is the thing under test, not something to silently repair.
-   `--fsck-only` runs this phase alone, which is worth doing once to an image
-   you are about to archive.
+   the vfat dirty bit set on `/boot`. Each filesystem is **checked first, with
+   the read-only tools** — `fsck.fat -n`; for ext4 the superblock (an
+   unreplayed journal, a state other than `clean`) and then `e2fsck -fn`, which
+   alone exits 0 on both — and **repaired only on a finding**: the boot vfat and
+   the **last** ext4 (`/data`). A repair run on a clean filesystem still writes
+   it (`e2fsck -fy` stamps the superblock's last-checked time), so until
+   pi-tools#t-062 a golden changed sha256 and mtime at every burn. Now a clean
+   golden comes out byte-identical and the phase says `image clean, not
+   written`. Every other ext4 is checked and never written — a golden's rootfs
+   is the thing under test, not something to silently repair; a finding there
+   is a warning. `--fsck-only` runs this phase alone, which is worth doing once
+   to an image you are about to archive.
 2. **Unmount.** The desktop automounts every inserted card read-write.
 3. **Burn**, in parallel, capped by `-j` (default 3).
 4. **`cmp` every card against the image.** This is the phase the tool exists
@@ -580,6 +587,15 @@ was verified to cap and to complete every item, every refusal above was
 triggered, and the verify *technique* was proved on a loop device: a card larger
 than the image reads identical, and a single byte flipped 100 MB in is caught
 with its offset.
+
+Phase 1 has its own desk test, `sudo bash bench/burn-fsck-desk.sh` (root for
+`losetup`; 49 checks). On a RastaOS-shaped image file, a clean golden keeps its
+sha256, its mtime and `/data`'s last-checked time. A dirty bit, an unreplayed
+journal, a superblock left not clean and freed blocks are each repaired, the
+other partitions' bytes untouched, and the next run writes nothing. A journal
+on the rootfs is a warning and is never written. Then it burns for real —
+phases 1 to 4, `dd` and `cmp` — onto a 300 MB `scsi_debug` RAM card it creates
+and removes, and checks the golden is unchanged after the burn.
 
 What that leaves unproven is everything a card reader owns — serial resolution
 across a real hub, the re-resolve after a reset, `dd` to a genuine card, and the
