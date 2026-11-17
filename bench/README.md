@@ -548,6 +548,38 @@ not a slot reporting 0 B (that is an **unseated card**, not a dead one —
 reseat it). A device with no reader serial is refused too, because it could not
 be re-resolved later. Then it still asks you to type the card count.
 
+### The plan says what each card holds
+
+DEVICE, SERIAL and SIZE say *which* card is in a reader, never what is on it. On
+2026-11-16 the card waiting for a RastaOS burn was somebody's 30 GB card of six
+music tracks, and a wrapper calling `burn-batch -y` never reaches the
+confirmation. So the plan's last column, **CONTENT**, reads each card before
+anything is written — with `-y` too, which skips only the typed count:
+
+```
+  image:  /home/me/RPi-images/RastaOS-7.5.img  (3.6GB)
+  holds:  vfat boot 31M · ext4 rootfs 2.1G · ext4 data 12M
+  DEVICE     SERIAL                   PORT     SIZE     CONTENT
+  /dev/sda   AA00000000015055         1-1.2    30GB     vfat 5B78-FD87 114M
+  /dev/sdb   AA00000000015056         1-1.3    16GB     vfat boot 31M · ext4 rootfs 2.1G · ext4 data 9.8G · raw
+  1 of 2 hold another layout than this image (CONTENT in yellow) — make sure it is yours to erase
+```
+
+Per partition: filesystem, label (else volume id), space in use (`raw` = no
+filesystem, e.g. flightbox's p4). A card whose layout does not *start with* the
+image's — fstype and label, partition by partition; UUIDs and sizes ignored, a
+p4 after them allowed — is printed in yellow and counted. It is a flag, not a
+refusal: a batch of fresh cards is flagged by design, and their few KB in use
+say why.
+
+It is read from the bytes, read-only: the table with `sfdisk`, each filesystem
+with `blkid -p` at its offset, the space in use from the superblock (ext*, via
+`debugfs`) or the FAT itself (vfat), or from the mount when the desktop mounted
+the card. A `-n` run without root cannot read the cards and shows udev's view
+instead (no space in use unless mounted). `--content IMAGE [DISK ...]` prints
+the same reading for any disk or image file and exits — `bench/burn-content-desk.sh`
+proves it on image files, against `fsck.fat`'s own cluster counts.
+
 ### Why serials, and why the tool looks them up three times
 
 Targets are named by **reader serial**, and the serial is resolved to a `/dev`

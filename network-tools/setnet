@@ -3,9 +3,12 @@
 
 Two responsibilities, in order:
 
-  1. Additive profile sync (unchanged): copy new/changed *.nmconnection from a
-     USB stick into the boot source of truth, then from boot into NetworkManager.
-     Never deletes — a stray source can't wipe the running config.
+  1. Profile sync: copy new/changed *.nmconnection from a USB stick into the
+     boot source of truth (additive: a USB stick never deletes), then make the
+     NetworkManager store EXACTLY the boot `wifi/` folder (authoritative,
+     RastaOS-7.5, 2026-11-13): a profile or directory in the store that /boot
+     does not hold is moved out to PRUNED_DIR. An empty or missing boot folder
+     prunes nothing — it can never take eth0 away.
 
   2. AP-role reconcile (new, 2026-09): NetworkManager drives client/STA and
      ethernet as before, but a `type=wifi mode=ap` profile is NOT handed to
@@ -21,7 +24,7 @@ Two responsibilities, in order:
 """
 
 import sys, os, glob, re, filecmp, syslog, subprocess, time
-from shutil import copyfile
+from shutil import copyfile, move, rmtree
 
 
 TAG = 'setnet'
@@ -38,6 +41,9 @@ USBSOURCE = '/data/usb/wifi'
 DEST = '/etc/NetworkManager/system-connections'
 EXT = '.nmconnection'
 LEGACY = '_legacy'
+# Where the authoritative prune moves what /boot/wifi no longer holds: outside
+# the keyfile store (NM reads only system-connections/), same filesystem.
+PRUNED_DIR = '/etc/NetworkManager/setnet-pruned'
 
 HOSTAPD_DIR = '/etc/hostapd'
 NM_CONFD = '/etc/NetworkManager/conf.d'
@@ -184,6 +190,49 @@ def syncFolder(src, dest, ext='', archive=False, render=False):
         somethingChanged = True
 
     return somethingChanged
+
+
+def prune_store(src, dest, ext, pruned_dir=None):
+    """Make `dest` hold exactly the `ext` files of `src` (authoritative store).
+
+    Every other entry of the NetworkManager store — a profile added by `nmcli`
+    in the field, a stale golden profile, a directory such as `_anna74-removed`
+    that makes NM log "keyfile: error loading connection … not a regular file"
+    at each boot — is MOVED to `pruned_dir` (replacing a same-name earlier
+    copy), never deleted: to keep a profile, put it in /boot/wifi.
+
+    Guard: if `src` is missing or holds no profile at all, nothing is pruned. A
+    card whose boot folder is empty or unreadable keeps the store it has, so a
+    damaged /boot can never take eth0 — the 7.5 way in — away with it.
+    Returns True when something moved.
+    """
+    pruned_dir = pruned_dir or PRUNED_DIR
+    if not os.path.isdir(src) or not os.path.isdir(dest):
+        log(f"authoritative prune skipped: {src} or {dest} missing")
+        return False
+    keep = {f for f in os.listdir(src)
+            if f.endswith(ext) and os.path.isfile(os.path.join(src, f))}
+    if not keep:
+        log(f"authoritative prune skipped: {src} holds no {ext} profile")
+        return False
+
+    moved = False
+    for name in sorted(os.listdir(dest)):
+        path = os.path.join(dest, name)
+        if name in keep and os.path.isfile(path) and not os.path.islink(path):
+            continue
+        rw_on()
+        os.makedirs(pruned_dir, exist_ok=True)
+        target = os.path.join(pruned_dir, name)
+        if os.path.isdir(target) and not os.path.islink(target):
+            rmtree(target)
+        elif os.path.lexists(target):
+            os.remove(target)
+        move(path, target)
+        print('  pruned  :', name, '->', pruned_dir)
+        log(f"pruned {name} from the NM store (not in {src})")
+        moved = True
+    return moved
 
 
 # -- 2. AP-role reconcile ----------------------------------------------------
@@ -412,15 +461,17 @@ def reconcile_roles():
 
 # -- main --------------------------------------------------------------------
 
-try:
+def main():
     # 1. Pull profiles from a USB stick into the boot source of truth.
     #    Incoming wins; the superseded local copy is archived to _legacy.
     syncFolder(USBSOURCE, LOCALSOURCE, EXT, archive=True)
     print()
 
-    # 2. Apply the boot profiles to NetworkManager (additive; never deletes).
+    # 2. Apply the boot profiles to NetworkManager, then make the store exactly
+    #    /boot/wifi (authoritative; an empty /boot/wifi prunes nothing).
     log("Applying profiles to NetworkManager")
     syncFolder(LOCALSOURCE, DEST, EXT, render=True)
+    prune_store(LOCALSOURCE, DEST, EXT)
 
     if engageRW:
         os.system('chmod 600 -R ' + DEST)
@@ -433,7 +484,11 @@ try:
         rw_off()
         log('Reloading NetworkManager connections')
         os.system('nmcli connection reload')
-finally:
-    rw_off()
 
-log('done !')
+
+if __name__ == '__main__':
+    try:
+        main()
+    finally:
+        rw_off()
+    log('done !')

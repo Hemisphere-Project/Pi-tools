@@ -12,7 +12,11 @@ DEFAULTS = {
     },
     'network': {
         'wifi_country': 'FR',
-        'hotspot': 'yes',
+        # Off by default since RastaOS-7.5 (2026-11-13): a fresh card's first
+        # start is over Ethernet (eth0-dhcp never gives up, IPv6 link-local),
+        # so no AP comes up with a known PSK. `hotspot = yes` in pitools.txt
+        # generates it (setup_wifi_from_config).
+        'hotspot': 'no',
         'hotspot_password': 'raspberry',
     },
     'modules': {
