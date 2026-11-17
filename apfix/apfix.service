@@ -1,0 +1,6 @@
+[Unit]
+Description=apfix: restart the hotspot when nobody is associated (stale hostapd guard)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/apfix

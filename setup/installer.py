@@ -34,6 +34,8 @@ MODULE_GROUPS = [
      ['audiohub'], 'ask'),
     ('display',     'Display: HDMI re-handshake at boot (TV mode latch-up)',
      ['hdmi-rehandshake'], 'yes'),
+    ('apfix',       'Hotspot guard: restart a stale hostapd@wint when nobody is associated',
+     ['apfix'], 'no'),
     ('xrun',        'X11/Openbox display server',
      ['xrun'], 'no'),
     ('synczinc',    'Syncthing synchronization',
@@ -167,6 +169,11 @@ def install_module(name, platinfo, cfg):
         service = ini.get('starter', 'service')
         entry = f"## [{name}] {comment}\n# {service}\n"
         utils.append_starter(entry)
+
+    # 12. Module manifest (#t-047): what this pass laid down, read by bench/module-level.
+    #     Script modules record from their own install.sh — field deployers run that directly.
+    utils.run(['bash', os.path.join(SETUP_DIR, 'module-manifest'), 'record', name, module_dir],
+              check=False)
 
     utils.daemon_reload()
     ui.success(f"{name} installed")

@@ -34,6 +34,13 @@
 #     --fsck-only  phase 1 ALONE — clean a golden image and stop, no cards
 #                  involved. Worth running once on an image you are about to
 #                  archive, so every future batch starts from a clean one.
+#     --flightbox  phase 5: on every card that verified, lay out flightbox's
+#                  raw ring partition (p4, 512 MB) at the card's TAIL with
+#                  image/flightbox-p4 — after the cmp, because it rewrites the
+#                  partition table the cmp just proved. The RastaOS 7.5 burn:
+#                  an image from before Pi-tools d17d886 (7.3, 7.4) gets no p4
+#                  — its extendfs would grow p4, not /data — and the plan says
+#                  so before the confirmation; its cards burn as file-mode cards.
 #
 #   BURNBATCH_LOG=<path>   CSV outcome log (default ~/burn-batch.csv)
 #
@@ -49,7 +56,7 @@
 # the no-reflash path, the fleet prep scripts are the stamping one.
 set -uo pipefail
 
-usage() { sed -n '2,48p' "$0" | sed 's/^# \?//'; }
+usage() { sed -n '2,56p' "$0" | sed 's/^# \?//'; }
 
 C_OK=$'\033[1;32m'; C_ERR=$'\033[1;31m'; C_WARN=$'\033[1;33m'; C_END=$'\033[0m'
 say()  { echo "  $*"; }
@@ -58,7 +65,7 @@ warn() { echo "${C_WARN}  $*${C_END}"; }
 err()  { echo "${C_ERR}  $*${C_END}"; }
 
 ORIG_ARGS=("$@")
-DRY=0; JOBS=3; YES=0; FSCK=1; LIST=0; FSCK_ONLY=0
+DRY=0; JOBS=3; YES=0; FSCK=1; LIST=0; FSCK_ONLY=0; P4=0
 while [ $# -gt 0 ]; do
     case "$1" in
         -n|--dry-run) DRY=1 ;;
@@ -67,6 +74,7 @@ while [ $# -gt 0 ]; do
         -l|--list)    LIST=1 ;;
         --no-fsck)    FSCK=0 ;;
         --fsck-only)  FSCK_ONLY=1 ;;
+        --flightbox)  P4=1 ;;
         -h|--help)    usage; exit 0 ;;
         --)           shift; break ;;
         -*)           err "unknown option: $1"; usage; exit 2 ;;
@@ -244,6 +252,18 @@ else
 fi
 [ ${#TARGETS[@]} -gt 0 ] || { err "no eligible card found (try -l to see the readers)"; exit 1; }
 
+# --flightbox: ask flightbox-p4 about the IMAGE now, read-only. Each card gets
+# the image's partition table and root (the cmp proves it), so what it refuses
+# here it refuses on every card — said once, before the confirmation, rather
+# than once per card after the burn (pi-tools#t-060).
+P4_TOOL="$(dirname "$(readlink -f "$0")")/../image/flightbox-p4"
+P4_PLAN=""
+if [ "$P4" = 1 ] && ! P4_PLAN=$("$P4_TOOL" --check "$IMG" 2>&1); then
+    P4_PLAN=${P4_PLAN##*$'\n'}; P4_PLAN=${P4_PLAN%%. Nothing written*}
+else
+    P4_PLAN=""
+fi
+
 echo "burn-batch"
 say "image:  $IMG  ($(human "$IMG_BYTES"))"
 say "cards:  ${#TARGETS[@]}, $JOBS at a time"
@@ -256,6 +276,10 @@ for spec in "${TARGETS[@]}"; do
 done
 echo
 warn "every byte on these ${#TARGETS[@]} cards will be destroyed."
+if [ -n "$P4_PLAN" ]; then
+    warn "--flightbox: ${P4_PLAN#flightbox-p4: }"
+    warn "p4 will be refused on EVERY card: they burn, verify and boot in file mode."
+fi
 
 if [ "$DRY" = 1 ]; then
     warn "DRY RUN — nothing was written."
@@ -386,6 +410,27 @@ echo
 echo "== phase 4 — verify, byte for byte ($JOBS at a time)"
 pool verify_one "${TARGETS[@]}"
 
+# ── phase 5 — flightbox p4 (--flightbox only) ────────────────────────────────
+# Only on a card that verified, one at a time (a 512 MB zero pass each). A card
+# p4 cannot fit on stays a good card — flightbox falls back to file mode there —
+# so a refusal is reported in the table, never counted as a failed burn.
+if [ "$P4" = 1 ]; then
+    echo
+    echo "== phase 5 — flightbox p4 at each card's tail"
+    for spec in "${TARGETS[@]}"; do
+        IFS='|' read -r _ s _ _ <<<"$spec"
+        [ "$(cat "$RUNDIR/$s.cmp" 2>/dev/null)" = "identical" ] || continue
+        if ! d=$(dev_for_serial "$s") || [[ "$d" == *" "* ]]; then
+            echo "p4 skipped (card not found)" >"$RUNDIR/$s.p4"; continue
+        fi
+        if out=$("$P4_TOOL" "/dev/$d" 2>&1); then
+            echo "p4 ok" >"$RUNDIR/$s.p4"; say "$s: ${out##*$'\n'}"
+        else
+            echo "p4 REFUSED" >"$RUNDIR/$s.p4"; warn "$s: ${out##*$'\n'}"
+        fi
+    done
+fi
+
 # ── the table ────────────────────────────────────────────────────────────────
 echo
 printf '  %-24s %-6s %-16s %s\n' SERIAL PORT BURN VERIFY
@@ -394,7 +439,8 @@ for spec in "${TARGETS[@]}"; do
     IFS='|' read -r d s p b <<<"$spec"
     burn=$(cat "$RUNDIR/$s.burn" 2>/dev/null || echo "?")
     cmpr=$(cat "$RUNDIR/$s.cmp"  2>/dev/null || echo "?")
-    printf '  %-24s %-6s %-16s %s\n' "$s" "$p" "$burn" "$cmpr"
+    p4=$(cat "$RUNDIR/$s.p4" 2>/dev/null || true)
+    printf '  %-24s %-6s %-16s %s\n' "$s" "$p" "$burn" "$cmpr${p4:+ · $p4}"
     [ "$cmpr" = "identical" ] || FAILED=$(( FAILED + 1 ))
     echo "$(date -Is),$s,$p,$burn,$cmpr,$(basename "$IMG")" >> "$LOG" 2>/dev/null
 done

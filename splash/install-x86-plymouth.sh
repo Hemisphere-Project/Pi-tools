@@ -99,5 +99,8 @@ update-initramfs -u
 ln -sf "$(dirname "$(readlink -f "$0")")/pitools-vt1.service" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable -q pitools-vt1.service
+# install.sh exec'd into this file, so the manifest line is written here (#t-047)
+SPLASH_DIR="$(dirname "$(readlink -f "$0")")"
+bash "$SPLASH_DIR/../setup/module-manifest" record splash "$SPLASH_DIR" || true
 
 echo "splash (x86/plymouth): silent boot + bare spinner + VT1 parking installed"

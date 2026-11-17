@@ -1,0 +1,302 @@
+#!/usr/bin/env bash
+# rastaos-update — converge THIS box's Pi-tools checkout to a release tag, from origin or offline.
+#
+#   rastaos-update <tag>                  fetch <tag> from origin, converge to it
+#   rastaos-update --bundle FILE <tag>    same, offline: <tag> is read from a git bundle
+#   rastaos-update --status               print the release receipt and the rollback point
+#   rastaos-update --rollback             converge back to the rollback point (and swap the two)
+#   -n | --dry-run                        say what would change, change nothing
+#   --force                               re-converge even when the box already reads <tag>
+#
+# Gate (rastaos 7.5, 13/11): fix -> branch -> bench -> TAG -> fleet. A field hotfix is a hotfix tag
+# through this same command, never an scp'd file. Players carry a CHECKOUT (/opt/Pi-tools), and
+# this moves it, so a box says what it runs in one read:
+#
+#   /etc/rastaos-release     the RECEIPT — KEY=value lines (shell-sourceable):
+#                              RASTAOS_TAG  PITOOLS_COMMIT  UPDATED_AT  SOURCE  PREVIOUS  MODULES
+#   refs/rastaos/rollback    the ROLLBACK POINT — a ref in the checkout naming the commit the box
+#                            ran before the last move. It also keeps that commit reachable: the 7.4
+#                            golden's six image-only commits exist on no origin branch, and a bare
+#                            detached checkout would leave them to `git gc`.
+#   /etc/rastaos-release.prev  the receipt that went with the rollback point (absent on a box that
+#                            never had one — 7.4 has none).
+#
+# MODULES: after a move it runs setup/converge.py from the NEW checkout — the box's installed
+# modules re-applied for its platform (x86 skips RPi-only ones), see that file. MODULES=ok|failed|
+# none (the tag predates converge.py, or RASTAOS_NO_CONVERGE). A `failed` receipt is never "already
+# there": the next run converges again.
+#
+# IDEMPOTENT by construction: when HEAD is already the tag's commit and the receipt already says
+# so, the run prints `already at <tag>` and writes nothing — not the receipt, not the rollback
+# point, not a module. A second run on a converged box is a no-op you can see. A box whose HEAD is
+# right but whose receipt is missing or wrong gets the receipt only; the rollback point moves only
+# when HEAD moves.
+#
+# REFUSES (exit 3), never discards: local edits to tracked files in the checkout (a field patch
+# must become a tag first — `git -C <checkout> stash` or commit it yourself), a tag already
+# present locally on a different commit than the source's (tags do not move; a hotfix is a NEW
+# tag), a name that is not a tag.
+#
+# The checkout is replaced under a running script, so the script first re-executes from a copy
+# on /run (knowledge: never edit a running shell script in place). On a read-only root it takes
+# `rw` for the run, the fetch included, and gives it back with `ro` (both reference-counted, rorw).
+#
+# A process still running a file the move replaced keeps the old copy alive, and while it does the
+# kernel will not give the root back to `ro`. Before `ro`, a system service in that state is
+# restarted (one at a time); anything else is named. If the root then stays read-write, exit 7.
+#
+# Exit: 0 converged or already there · 1 usage · 2 not root / no checkout · 3 refused · 4 fetch
+# failed · 5 a git step failed mid-way (the receipt is not written, the rollback point names
+# where the box was) · 6 moved, but a module failed to converge (the receipt says MODULES=failed)
+# · 7 converged, but the root could not go back to read-only (the run names what holds it).
+#
+# Overrides (tests, a card in a reader): PITOOLS_DIR, RASTAOS_RELEASE, RASTAOS_LOCK,
+# RASTAOS_REMOTE (default origin), RASTAOS_NO_RORW=1, RASTAOS_ALLOW_NONROOT=1, RASTAOS_NO_CONVERGE=1,
+# RASTAOS_PROC (default /proc).
+set -uo pipefail
+
+if [ -z "${RASTAOS_UPDATE_COPY:-}" ]; then
+    : "${PITOOLS_DIR:=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)}"
+    copy_dir=${TMPDIR:-/run}; [ -d "$copy_dir" ] && [ -w "$copy_dir" ] || copy_dir=/tmp
+    copy=$(mktemp "$copy_dir/rastaos-update.XXXXXX") && cat "$0" > "$copy" || {
+        echo "rastaos-update: could not copy itself to $copy_dir" >&2; exit 2; }
+    RASTAOS_UPDATE_COPY=$copy PITOOLS_DIR=$PITOOLS_DIR exec bash "$copy" "$@"
+fi
+trap 'rm -f "$RASTAOS_UPDATE_COPY"' EXIT
+
+RELEASE="${RASTAOS_RELEASE:-/etc/rastaos-release}"
+LOCK="${RASTAOS_LOCK:-/run/rastaos-update.lock}"
+REMOTE="${RASTAOS_REMOTE:-origin}"
+ROLLBACK_REF=refs/rastaos/rollback
+
+say()  { printf 'rastaos-update: %s\n' "$*"; }
+die()  { local c=$1; shift; printf 'rastaos-update: %s\n' "$*" >&2; exit "$c"; }
+g()    { git -C "$PITOOLS_DIR" "$@"; }
+short(){ printf '%s' "${1:0:9}"; }
+
+usage() { sed -n '2,9p' "$RASTAOS_UPDATE_COPY" | sed 's/^# \{0,1\}//'; exit 1; }
+
+dry=0 force=0 bundle='' mode=update tag=''
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -n|--dry-run) dry=1 ;;
+        --force)      force=1 ;;
+        --bundle)     [ $# -ge 2 ] || usage; bundle=$2; shift ;;
+        --bundle=*)   bundle=${1#--bundle=} ;;
+        --status)     mode=status ;;
+        --rollback)   mode=rollback ;;
+        -h|--help)    usage ;;
+        -*)           usage ;;
+        *)            [ -z "$tag" ] || usage; tag=$1 ;;
+    esac
+    shift
+done
+
+g rev-parse --is-inside-work-tree >/dev/null 2>&1 || die 2 "not a git checkout: $PITOOLS_DIR"
+
+receipt_get() {   # receipt_get <file> <KEY>
+    [ -f "$1" ] && sed -n "s/^$2=//p" "$1" | head -1
+}
+
+if [ "$mode" = status ]; then
+    head=$(g rev-parse HEAD)
+    if [ -f "$RELEASE" ]; then cat "$RELEASE"; else say "no receipt at $RELEASE"; fi
+    [ "$(receipt_get "$RELEASE" PITOOLS_COMMIT)" = "$head" ] \
+        || say "HEAD $(short "$head") does not match the receipt"
+    rb=$(g rev-parse -q --verify "$ROLLBACK_REF" 2>/dev/null) \
+        && say "rollback point: $(short "$rb") $(receipt_get "$RELEASE.prev" RASTAOS_TAG)" \
+        || say "no rollback point"
+    exit 0
+fi
+
+case "$mode" in
+    update)   [ -n "$tag" ] || usage
+              git check-ref-format "refs/tags/$tag" || die 1 "not a valid tag name: $tag" ;;
+    rollback) [ -z "$tag" ] && [ -z "$bundle" ] || usage ;;
+esac
+
+[ "$(id -u)" = 0 ] || [ -n "${RASTAOS_ALLOW_NONROOT:-}" ] || die 2 "must run as root"
+
+exec 9>"$LOCK" || die 2 "cannot open lock $LOCK"
+flock -n 9 || die 3 "another rastaos-update holds $LOCK"
+
+# Local edits to tracked files: a field patch the move would carry or clobber. Untracked files
+# stay (module state, the 7.4 venvs) — git checkout refuses on its own if one would be overwritten.
+if [ -n "$(g status --porcelain --untracked-files=no)" ]; then
+    g status --short --untracked-files=no | sed 's/^/  /' >&2
+    die 3 "local edits in $PITOOLS_DIR — commit them to a tag or stash them first; nothing changed"
+fi
+
+head=$(g rev-parse HEAD)
+
+# On a read-only root, `rw` for the rest of the run, `ro` on exit (rorw counts them). Taken
+# before the fetch too: a fetch writes the checkout's .git (FETCH_HEAD, objects, the tag ref), so
+# on a 7.4 card at `ro` it failed "Read-only file system" before anything moved (bench-01, 14/11).
+took_rw=0
+take_rw() {
+    [ $took_rw = 1 ] && return 0
+    if [ -z "${RASTAOS_NO_RORW:-}" ] && command -v rw >/dev/null 2>&1 && command -v ro >/dev/null 2>&1 \
+       && findmnt -no OPTIONS / 2>/dev/null | tr ',' '\n' | grep -qx ro; then
+        rw >/dev/null || die 2 "could not remount the root read-write"
+        took_rw=1
+        trap 'rm -f "$RASTAOS_UPDATE_COPY"; [ $took_rw = 1 ] && ro >/dev/null' EXIT
+    fi
+}
+give_ro() {   # 1 = `ro` could not remount (a count still held elsewhere is not a failure: rorw says 0)
+    [ $took_rw = 1 ] || return 0
+    took_rw=0
+    ro >/dev/null 2>&1
+}
+
+# A checkout replaces a file by unlink + create, so a process that has it open keeps the old inode
+# alive — bash holds its script on fd 255 for as long as it runs — and while one lives the kernel
+# refuses the remount to ro ("mount point is busy"). bench-01, 14/11: the rollback to 7.4 exited 0
+# with the root left rw, audiohub@{jack,hdmi,usb} still running the replaced audiohub-fwd (a move
+# forward restarts them through converge.py; 7.4 has none).
+PROC=${RASTAOS_PROC:-/proc}
+replaced_holders() {   # "<pid> <file>" per process holding a replaced file of the checkout
+    local d="$PITOOLS_DIR/"
+    {
+        find "$PROC"/[0-9]*/fd "$PROC"/[0-9]*/cwd -maxdepth 1 -lname "$d* (deleted)" -printf '%p %l\n'
+        # maps: a binary or a library run from the checkout. grep, not awk: mawk gives up at the
+        # first maps it cannot open (a pid that exited mid-scan, another user's) and skips the rest.
+        grep -HF " $d" "$PROC"/[0-9]*/maps | sed -E 's#/maps:[^/]*#/m #'
+    } 2>/dev/null | sed -nE "s#^$PROC/([0-9]+)/[^ ]* (.*) \(deleted\)\$#\1 \2#p" | sort -u
+}
+unit_of() {   # the system service a pid runs in; nothing for a login shell, a user's job
+    sed -nE 's#^[0-9]+:[^:]*:/system\.slice/(.*/)?([^/]+\.service)$#\2#p' "$PROC/$1/cgroup" 2>/dev/null | head -1
+}
+release_replaced() {
+    local held units u pid file
+    held=$(replaced_holders); [ -n "$held" ] || return 0
+    units=$(printf '%s\n' "$held" | while read -r pid file; do unit_of "$pid"; done | sort -u)
+    if [ -n "$units" ]; then
+        # The installers symlink their units into the checkout: re-read them before the restart.
+        systemctl daemon-reload || say "warning: systemctl daemon-reload failed"
+        for u in $units; do
+            # One at a time, a beat apart: concurrent restarts can wedge a sink (audiohub's rule).
+            say "restarting $u — it still ran a file the move replaced"
+            systemctl restart "$u" || say "warning: systemctl restart $u failed"
+            sleep 1
+        done
+        held=$(replaced_holders); [ -n "$held" ] || return 0
+    fi
+    printf '%s\n' "$held" | while read -r pid file; do
+        say "warning: pid $pid ($(cat "$PROC/$pid/comm" 2>/dev/null)) still runs the replaced $file — restart it"
+    done
+}
+
+# ── resolve the target ──────────────────────────────────────────────
+
+if [ "$mode" = rollback ]; then
+    target=$(g rev-parse -q --verify "$ROLLBACK_REF^{commit}") || die 3 "no rollback point on this box"
+    target_tag=$(receipt_get "$RELEASE.prev" RASTAOS_TAG)
+    [ -n "$target_tag" ] || target_tag="rollback-$(short "$target")"
+    source="rollback"
+else
+    local_tag=$(g rev-parse -q --verify "refs/tags/$tag^{commit}" 2>/dev/null) || local_tag=''
+    if [ -n "$bundle" ]; then
+        [ -r "$bundle" ] || die 4 "cannot read bundle $bundle"
+        g bundle verify "$bundle" >/dev/null 2>&1 \
+            || die 4 "bundle $bundle does not verify against this checkout (missing prerequisites?)"
+        g bundle list-heads "$bundle" "refs/tags/$tag" | grep -q . \
+            || die 4 "bundle $bundle carries no tag $tag"
+        from=$bundle source="bundle:$(basename "$bundle")"
+    else
+        from=$REMOTE source=$REMOTE
+    fi
+    take_rw
+    # No `+`: a tag already here on another commit is refused by git itself (tags do not move).
+    # Not `-q`: the refusal is told apart from an unreachable source by git's own `[rejected]` line.
+    if out=$(g fetch --no-tags "$from" "refs/tags/$tag:refs/tags/$tag" 2>&1); then
+        :
+    elif printf '%s' "$out" | grep -qiE 'would clobber|rejected'; then
+        printf '%s\n' "$out" | sed 's/^/  /' >&2
+        die 3 "tag $tag here differs from $source's — a hotfix is a new tag, nothing changed"
+    elif [ -n "$local_tag" ] && [ -z "$bundle" ]; then
+        say "warning: could not reach $REMOTE — using the $tag already in the checkout"
+        source="local"
+    else
+        printf '%s\n' "$out" | sed 's/^/  /' >&2
+        die 4 "could not fetch $tag from $source"
+    fi
+    target=$(g rev-parse -q --verify "refs/tags/$tag^{commit}") || die 4 "$tag resolves to no commit"
+    target_tag=$tag
+fi
+
+# ── idempotence ─────────────────────────────────────────────────────
+
+rec_tag=$(receipt_get "$RELEASE" RASTAOS_TAG)
+rec_commit=$(receipt_get "$RELEASE" PITOOLS_COMMIT)
+rec_modules=$(receipt_get "$RELEASE" MODULES)
+if [ "$head" = "$target" ] && [ "$rec_tag" = "$target_tag" ] && [ "$rec_commit" = "$target" ] \
+   && [ "$rec_modules" != failed ] && [ "$force" = 0 ]; then
+    say "already at $target_tag ($(short "$target")) — nothing to do"
+    exit 0
+fi
+
+move=0; [ "$head" = "$target" ] || move=1
+say "$(short "$head")${rec_tag:+ ($rec_tag)} -> $(short "$target") ($target_tag) from $source$([ $move = 0 ] && echo ', receipt only')"
+if [ "$dry" = 1 ]; then
+    [ $move = 1 ] && say "would set the rollback point to $(short "$head") and check out $(short "$target")"
+    say "would write $RELEASE"
+    exit 0
+fi
+
+# ── apply ───────────────────────────────────────────────────────────
+
+take_rw
+
+write_receipt() {   # write_receipt <tag> <commit> <source> <previous> <modules>
+    local tmp
+    tmp=$(mktemp "$(dirname "$RELEASE")/.rastaos-release.XXXXXX") || return 1
+    {
+        printf 'RASTAOS_TAG=%s\n' "$1"
+        printf 'PITOOLS_COMMIT=%s\n' "$2"
+        printf 'UPDATED_AT=%s\n' "$(date -Iseconds)"
+        printf 'SOURCE=%s\n' "$3"
+        printf 'PREVIOUS=%s\n' "$4"
+        printf 'MODULES=%s\n' "$5"
+    } > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$RELEASE"
+}
+
+if [ $move = 1 ]; then
+    if [ "$mode" = rollback ]; then
+        # Swap: the state we leave becomes the new rollback point, so a second --rollback returns.
+        cur_rec=$(mktemp) || die 5 "mktemp failed"
+        [ -f "$RELEASE" ] && cp -p "$RELEASE" "$cur_rec"
+        g update-ref -m "rastaos-update rollback" "$ROLLBACK_REF" "$head" || die 5 "could not move the rollback point"
+        if [ -s "$cur_rec" ]; then mv -f "$cur_rec" "$RELEASE.prev"; else rm -f "$cur_rec" "$RELEASE.prev"; fi
+    else
+        g update-ref -m "rastaos-update $target_tag" "$ROLLBACK_REF" "$head" || die 5 "could not set the rollback point"
+        if [ -f "$RELEASE" ]; then cp -p "$RELEASE" "$RELEASE.prev"; else rm -f "$RELEASE.prev"; fi
+    fi
+    g -c advice.detachedHead=false checkout -q --detach "$target" \
+        || die 5 "checkout of $(short "$target") failed — the box is still on $(short "$head") (rollback point set)"
+fi
+
+# Modules: on a move, a --force, or a receipt that says the last convergence failed.
+modules=${rec_modules:-none}; rc=0
+if [ $move = 1 ] || [ "$force" = 1 ] || [ "$rec_modules" = failed ]; then
+    if [ -n "${RASTAOS_NO_CONVERGE:-}" ]; then
+        modules=none
+    elif [ -f "$PITOOLS_DIR/setup/converge.py" ]; then
+        say "re-applying this box's modules (setup/converge.py)"
+        if python3 "$PITOOLS_DIR/setup/converge.py"; then modules=ok; else modules=failed; rc=6; fi
+    else
+        say "$target_tag predates setup/converge.py — modules not re-run"
+        modules=none
+    fi
+fi
+
+prev="${rec_tag:-$(short "$head")}"
+[ $move = 0 ] && [ -n "$rec_tag" ] && prev=$(receipt_get "$RELEASE" PREVIOUS)
+write_receipt "$target_tag" "$target" "$source" "$prev" "$modules" || die 5 "could not write $RELEASE"
+say "at $target_tag ($(short "$target")) — receipt $RELEASE$([ $move = 1 ] && echo ", rollback point $(short "$head")"), modules: $modules"
+[ $rc = 0 ] || say "a module failed to converge — fix it, then run again (the receipt says MODULES=failed)"
+release_replaced
+if ! give_ro; then
+    say "the root stayed read-write: \`ro\` could not remount it — end what is named above (or see \`fuser -vm /\`), then run \`ro\`"
+    [ $rc = 0 ] && rc=7
+fi
+exit $rc

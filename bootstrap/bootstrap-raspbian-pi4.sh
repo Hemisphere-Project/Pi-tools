@@ -168,7 +168,7 @@ dtparam=i2c_arm=on
 #
 arm_64bit=1
 arm_boost=1
-force_turbo=1
+#force_turbo=1    # off by default since RastaOS 7.5: per card, uncomment to pin the max clock
 camera_auto_detect=1
 display_auto_detect=1
 auto_initramfs=1

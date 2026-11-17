@@ -148,6 +148,7 @@ xrun = no
 | **network-tools** | Sync WiFi profiles from boot partition / USB to NetworkManager |
 | **hostrename** | Change hostname + update hotspot SSIDs on the fly |
 | **linkwatch** | Sync-link watchdog: reloads the driver / restarts hostapd on a dead link |
+| **apfix** | Stale-hotspot guard: restarts `hostapd@wint` when nobody is associated (opt-in, off by default) |
 
 ### Web (`web = ask`)
 

@@ -5,18 +5,32 @@
 
 # -f fail on HTTP errors, -s silent, -m 5 hard 5s timeout (never hang a boot),
 # -I head only. HTTPS so a plain on-path box can't trivially set our clock.
-header=$(curl -fsm 5 -I https://www.google.com 2>/dev/null | grep -i '^date:' | head -1)
+resp=$(curl -fsm 5 -I https://www.google.com 2>/dev/null); rc=$?
+header=$(printf '%s\n' "$resp" | grep -i '^date:' | head -1)
 
-# Bogus-clock escape: a VIRGIN RTC hands the kernel 2000-01-01 at boot
-# (hctosys runs after fake-clock and clobbers its floor), and from year
-# 2000 TLS validation can never succeed ("certificate not yet valid") —
-# datesync would deadlock forever. When the local clock is plainly
-# implausible, retry without cert validation: TLS trust is void under a
-# wrong clock anyway, and the plausibility floor below still rejects
-# garbage answers.
-if [ -z "$header" ] && [ "$(date +%Y)" -lt 2021 ]; then
+# Bogus-clock escape. TLS validation needs a clock that is already roughly
+# right, so a clock that is BEHIND the server certificate's notBefore can never
+# sync over validated HTTPS: curl fails "certificate is not yet valid" (exit 60)
+# and datesync deadlocks forever. Two ways a card gets there:
+#   - a VIRGIN RTC hands the kernel 2000-01-01 at boot (hctosys runs after
+#     fake-clock and clobbers its floor);
+#   - a fresh card boots on the fake-clock floor saved when its image was
+#     captured (04/09/2026), older than Google's certificate (notBefore 07/10).
+#     Its year is 2026, so the old `year < 2021` gate never fired and the clock
+#     never synced (RastaOS 7.4 bench, 13/11/2026).
+# So retry without cert validation whenever validation is what failed (exit 60),
+# at any year — the year gate stays for curls that report a year-2000 handshake
+# under another code. TLS trust is void under a wrong clock anyway. The answer
+# is then trusted for ONE thing only, the thing "not yet valid" means: moving a
+# clock that is behind FORWARD (checked below), and the plausibility floor still
+# rejects garbage.
+insecure=0
+if [ -z "$header" ] && { [ "$rc" -eq 60 ] || [ "$(date +%Y)" -lt 2021 ]; }; then
     header=$(curl -ksm 5 -I https://www.google.com 2>/dev/null | grep -i '^date:' | head -1)
-    [ -n "$header" ] && echo "[datesync] local clock implausible — accepted Date without cert validation"
+    if [ -n "$header" ]; then
+        insecure=1
+        echo "[datesync] certificate check failed (curl rc=$rc, local clock $(date -u +%F)) — retried without cert validation"
+    fi
 fi
 
 remote=$(printf '%s' "${header#[Dd]ate:}" | tr -d '\r' | sed 's/^ *//')
@@ -44,6 +58,13 @@ fi
 DEADBAND=${DATESYNC_DEADBAND:-3}
 remote_s=$(date -d "$remote" +%s 2>/dev/null)
 local_s=$(date +%s)
+# An unvalidated answer may only move the clock forward (see the escape above):
+# "not yet valid" means we are behind, and nothing unauthenticated gets to wind
+# a clock back.
+if [ "$insecure" -eq 1 ] && { [ -z "$remote_s" ] || [ "$remote_s" -le "$local_s" ]; }; then
+    echo "[datesync] unvalidated Date '$remote' is not ahead of the local clock — leaving clock as-is"
+    exit 0
+fi
 if [ -n "$remote_s" ]; then
     delta=$((remote_s - local_s))
     if [ "${delta#-}" -le "$DEADBAND" ]; then
