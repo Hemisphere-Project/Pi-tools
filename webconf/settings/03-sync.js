@@ -5,6 +5,35 @@ const path = require('path');
 var syncIface;
 
 const wifiDir = bootPath('wifi');
+
+// Profile templates for a role switch: the card's own wifi/_disabled/ copy
+// first, else this checkout's network-tools/profiles (_disabled/ holds the sync
+// roles, the top level eth0-dhcp). An installer-made card has no _disabled/ on
+// its boot partition (network-tools/README.md), and since RastaOS-7.5 setnet
+// makes the NM store exactly /boot/wifi: a copy that silently failed after the
+// rm below used to leave no eth0 profile at all, and the card lost its way in
+// at the next boot.
+const repoProfiles = path.join(__dirname, '..', '..', 'network-tools', 'profiles');
+function template(role) {
+    const name = role + '.nmconnection';
+    for (const p of [path.join(wifiDir, '_disabled', name),
+                     path.join(repoProfiles, '_disabled', name),
+                     path.join(repoProfiles, name)]) {
+        if (fs.existsSync(p)) return p;
+    }
+    return null;
+}
+
+// The /boot/wifi profiles a (sync interface, sync mode) pair needs; null when
+// the interface is unknown (the panel sent no SYNC interface).
+function rolesFor(iface, mode) {
+    if (iface === 0) return [mode === 1 ? 'eth0-sync-STA' : mode === 2 ? 'eth0-sync-AP' : 'eth0-dhcp'];
+    if (iface === 1) {
+        const roles = mode === 1 ? ['wlan0-sync-STA'] : mode === 2 ? ['wlan0-sync-AP'] : [];
+        return roles.concat(['eth0-dhcp']);
+    }
+    return null;
+}
 const wlan0Files = [
     path.join(wifiDir, 'wlan0-sync-AP.nmconnection'),
     path.join(wifiDir, 'wlan0-sync-STA.nmconnection'),
@@ -40,17 +69,21 @@ settings.elements['syncmode'] = {
     },
     apply: (mode) => {
         mode = parseInt(mode);
-        exec(`rm ${wifiDir}/wlan0-*`);
-        exec(`rm ${wifiDir}/eth0-*`);
-        if (syncIface === 0) {
-            if (mode === 1) exec(`cp ${wifiDir}/_disabled/eth0-sync-STA.nmconnection ${wifiDir}/eth0-sync-STA.nmconnection`);
-            else if (mode === 2) exec(`cp ${wifiDir}/_disabled/eth0-sync-AP.nmconnection ${wifiDir}/eth0-sync-AP.nmconnection`);
-            else exec(`cp ${wifiDir}/_disabled/eth0-dhcp.nmconnection ${wifiDir}/eth0-dhcp.nmconnection`);
-        } else if (syncIface === 1) {
-            if (mode === 1) exec(`cp ${wifiDir}/_disabled/wlan0-sync-STA.nmconnection ${wifiDir}/wlan0-sync-STA.nmconnection`);
-            else if (mode === 2) exec(`cp ${wifiDir}/_disabled/wlan0-sync-AP.nmconnection ${wifiDir}/wlan0-sync-AP.nmconnection`);
-            exec(`cp ${wifiDir}/_disabled/eth0-dhcp.nmconnection ${wifiDir}/eth0-dhcp.nmconnection`);
+        const roles = rolesFor(syncIface, mode);
+        if (!roles) {
+            console.error('[sync] no SYNC interface given — /boot/wifi left as it is');
+            return;
         }
+        // Resolve every template BEFORE removing anything: a missing one leaves
+        // the card's profiles untouched instead of leaving it with none.
+        const sources = roles.map(template);
+        const missing = roles.filter((r, i) => !sources[i]);
+        if (missing.length) {
+            console.error(`[sync] no template for ${missing.join(', ')} — /boot/wifi left as it is`);
+            return;
+        }
+        exec(`rm -f ${wifiDir}/wlan0-* ${wifiDir}/eth0-*`);
+        roles.forEach((r, i) => exec(`cp "${sources[i]}" "${path.join(wifiDir, r + '.nmconnection')}"`));
     }
 };
 
