@@ -33,11 +33,17 @@ card:  [p1 boot][p2 root][p3 /data …… grows at first boot ……][p4 flightb
   grows a partition up to the next one). It used to grow the disk's *last* partition, which is
   now p4: `resize2fs` on a raw partition would fail before the identity reset.
 - Refused, nothing written: not MBR, not exactly three partitions, a fourth partition that is
-  not this layout, no 512 MB free after `/data`. A refused card is still a good card: it runs
-  file mode. Idempotent: a p4 already laid out is reported, not rewritten.
+  not this layout, no 512 MB free after `/data` — and an image whose extendfs still grows the
+  last partition (pi-tools#t-060): every image from before that extendfs change, RastaOS 7.3
+  and 7.4 included. On such a card p4 would be the partition extendfs grows, and the clone
+  would keep the donor's machine-id and SSH host keys (pi-tools#t-006). flightbox-p4 reads
+  `/usr/local/bin/extendfs` off p2 with `debugfs`, no mount; `burn-batch --flightbox` asks it
+  about the image (`image/flightbox-p4 --check IMAGE`, read-only) and says so in the plan,
+  before the confirmation. A refused card is still a good card: it runs file mode.
+  Idempotent: a p4 already laid out is reported, not rewritten.
 - `bash bench/flightbox-p4-desk.sh` proves it on image files (no root, no card): layout, the
-  refusals, the zero pass, growpart stopping at p4. The burn of a real card and its first boot
-  are row 14's (rastaos#t-017) and pi-tools#t-050's bench.
+  refusals (the 7.3/7.4 extendfs among them), the zero pass, growpart stopping at p4. The burn
+  of a real card and its first boot are row 14's (rastaos#t-017) and pi-tools#t-050's bench.
 
 ## File mode — live cards (pi-tools#t-051)
 
