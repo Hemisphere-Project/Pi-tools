@@ -59,12 +59,16 @@ reachable over `fe80::…%<laptop-iface>` with no DHCP at all. Never write
 and silently voids the whole profile — use `ignore`.
 
 `autoconnect-retries=0` alone is not enough: with no DHCP answer, NM fails IPv4
-after 45 s, keeps eth0 up on link-local alone and never asks again (bench-02,
-2026-11-14). So `eth0-dhcp` also sets `ipv4.dhcp-timeout=2147483647` (NM: never
-time out), and setnet writes `/etc/NetworkManager/dhclient-eth0.conf`
-(`timeout 100000000;`) because NM 1.14 never passes its timeout to dhclient,
-whose own 60 s give-up would fail IPv4 the same way. A DHCP server that comes
-back later is picked up by dhclient's next retry, no reboot.
+within a minute, keeps eth0 up on link-local alone and never asks again — the
+activation did not fail, so autoconnect never re-fires (bench-02, 2026-11-14).
+So `eth0-dhcp` also sets `ipv4.dhcp-timeout=100000000` (~3 years): NM runs its
+own timer on it and hands the same value to dhclient as its `timeout`, so
+neither gives up and a DHCP server that comes back later is picked up by
+dhclient's next DISCOVER, no reboot. Not `2147483647`, NM's documented
+« infinity »: NM 1.14 passes it to dhclient too, whose `first_sending + timeout`
+wraps a 32-bit `time_t` on armhf — its backoff interval went negative and it
+died of SIGFPE 18 s after start (bench-02, 2026-11-14). `1e8` cannot wrap
+before 2034-11.
 
 ## Hotspot — off by default
 

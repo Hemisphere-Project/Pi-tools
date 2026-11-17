@@ -50,18 +50,15 @@ check('E dir with a profile name pruned', os.listdir(store) == [])
 p = m.parse_profile(os.path.join(os.path.dirname(sys.argv[1]), 'profiles', 'eth0-dhcp'+E))
 check('F eth0-dhcp autoconnect-retries=0', p.get('connection.autoconnect-retries') == '0')
 check('F eth0-dhcp ipv6 link-local', p.get('ipv6.method') == 'link-local')
-# G. DHCP never gives up: NM's timer infinite on the profile, dhclient's own 60 s lifted
-#    by setnet (NM 1.14 never passes its timeout on), without wrapping a 32-bit time_t
-import inspect, time
-check('G eth0-dhcp ipv4.dhcp-timeout infinite', p.get('ipv4.dhcp-timeout') == '2147483647')
-T = m.DHCLIENT_TIMEOUT
-check('G dhclient timeout >= 1 year', T >= 365 * 86400)
-check('G dhclient timeout cannot wrap time_t before 2034', 2019686400 + T < 2**31)  # 2034-01-01
-d = tempfile.mkdtemp(); f = os.path.join(d, 'dhclient-eth0.conf')
-check('G setnet writes dhclient-eth0.conf', m.ensure_dhclient_eth0(f) is True
-      and f'timeout {T};' in open(f).read().splitlines())
-check('G unchanged file: no rewrite (no rw at boot)', m.ensure_dhclient_eth0(f) is False)
-check('G main() lifts it every run', 'ensure_dhclient_eth0()' in inspect.getsource(m.main))
-check('G NM reads it first', m.DHCLIENT_ETH0 == '/etc/NetworkManager/dhclient-eth0.conf')
+# G. DHCP never gives up: one timeout on the profile, NM's timer AND dhclient's (NM 1.14
+#    hands its dhcp-timeout to dhclient), long enough never to fire, and not wrapping
+#    dhclient's 32-bit time_t first_sending + timeout (2147483647 did: SIGFPE, bench-02)
+import inspect
+t = p.get('ipv4.dhcp-timeout') or ''
+check('G eth0-dhcp ipv4.dhcp-timeout set', t.isdigit())
+T = int(t) if t.isdigit() else 0
+check('G timeout >= 1 year', T >= 365 * 86400)
+check('G timeout cannot wrap time_t before 2034', 2019686400 + T < 2**31)  # 2034-01-01
+check('G one source: setnet writes no dhclient config', 'dhclient-eth0' not in inspect.getsource(m))
 print(f'\n{ok} passed, {fail} failed'); sys.exit(1 if fail else 0)
 PY
