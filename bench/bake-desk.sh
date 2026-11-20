@@ -5,8 +5,9 @@
 #
 # Builds the 7.4 shapes the bench readout of 13/11 found (stacked anna74 stamps, VERSION 7.0,
 # fake-hwclock + rsync + nfs-client wired, DS3231 overlay on, resolv.conf a symlink, the hotspot
-# profile in /boot/wifi and the store, _anna74-removed/, nowde-tools 2.0.3 + 2.0.5, the Anna set on
-# p3 with no mire, starter hplayer2@26-anna on bench-01), plus a git checkout at /opt/Pi-tools one
+# profile in /boot/wifi and the store, _anna74-removed/, no NM scan drop-in (scans re-randomise the
+# dongle's MAC), nowde-tools 2.0.3 + 2.0.5, the Anna set on p3 with no mire, starter hplayer2@26-anna
+# on bench-01), plus a git checkout at /opt/Pi-tools one
 # commit behind a fixture release tag, runs the recipe offline twice, and checks each defect is gone,
 # the checkout sits on the tag with its receipt, and the second run changes nothing. Proves the file
 # edits and the converge call, not a boot, a module re-apply or the mire playing.
@@ -140,6 +141,10 @@ chk "hotspot gone from /boot/wifi" [ ! -e "$B/wifi/wint-hotspot.nmconnection" ]
 chk "hotspot gone from the store" [ ! -e "$R/etc/NetworkManager/system-connections/wint-hotspot.nmconnection" ]
 chk "eth0-dhcp kept" [ -f "$B/wifi/eth0-dhcp.nmconnection" -a -f "$R/etc/NetworkManager/system-connections/eth0-dhcp.nmconnection" ]
 chk "_anna74-removed gone" [ ! -e "$R/etc/NetworkManager/system-connections/_anna74-removed" ]
+SCAN=$R/etc/NetworkManager/conf.d/91-rastaos-scan.conf
+chk "NM scan drop-in: scans keep the MAC" sh -c "grep -qx '\[device\]' '$SCAN' && grep -qx 'wifi.scan-rand-mac-address=no' '$SCAN'"
+chk "  …under [device], its only section" [ "$(grep '^\[' "$SCAN" | tr '\n' ' ')" = "[device] " ]
+chk "  …and named in run 1" grep -q 'wifi: NM scans keep the MAC (91-rastaos-scan.conf)' "$T/run1.log"
 chk "HPlayer2 on the tag" [ "$(git -C "$R/opt/HPlayer2" rev-parse HEAD)" = "$h75" ]
 chk "HPlayer2 rollback point = the anna commit" [ "$(git -C "$R/opt/HPlayer2" rev-parse refs/rastaos/rollback)" = "$h74" ]
 chk "media = the mire alone" [ "$(ls -A "$D/media")" = 0_mire.mp4 ]
@@ -158,13 +163,19 @@ chk "/etc/hosts 127.0.1.1 = player-000" grep -qxP '127\.0\.1\.1\tplayer-000' "$R
 chk "the default run leaves extendfs's marker (seal is explicit)" [ -f "$D/var/drive-id" ]
 chk "the default run leaves root's keys" cmp -s "$R/root/.ssh/authorized_keys" "$T/ak.before"
 
-snap() { (cd "$T" && find root boot data -printf '%p %l\n' | sort; cat root/etc/rastaos-patches.txt boot/VERSION boot/config.txt boot/starter.txt root/etc/hosts) | sed -E 's/^rastaos75 [0-9-]+/rastaos75 D/'; }
+snap() { (cd "$T" && find root boot data -printf '%p %l\n' | sort; cat root/etc/rastaos-patches.txt boot/VERSION boot/config.txt boot/starter.txt root/etc/hosts root/etc/NetworkManager/conf.d/91-rastaos-scan.conf) | sed -E 's/^rastaos75 [0-9-]+/rastaos75 D/'; }
 snap > "$T/s1"
 # run 2 without --mire: the mire is on the card now, so nothing is asked for and nothing moves
 echo "run 2"; "$BAKE" --tag "$TAG" --root "$R" --boot "$B" --data "$D" > "$T/run2.log" 2>&1; rc2=$?; sed 's/^/    /' "$T/run2.log"
 chk "run 2 exits 0" [ "$rc2" = 0 ]
 chk "run 2 reports 0 changes" grep -q 'done — 0 change(s)' "$T/run2.log"
 snap > "$T/s2"; chk "run 2 leaves the tree identical" cmp -s "$T/s1" "$T/s2"
+cp "$SCAN" "$T/scan.want"; echo 'wifi.scan-rand-mac-address=yes' >> "$SCAN"     # a drifted hand copy
+"$BAKE" --only wifi --root "$R" --boot "$B" > "$T/wifi.log" 2>&1; rcw=$?
+chk "a drifted scan drop-in is rewritten (exit 0, 1 change)" sh -c "[ $rcw = 0 ] && grep -q 'done — 1 change(s)' '$T/wifi.log' && cmp -s '$T/scan.want' '$SCAN'"
+rm -rf "$R/etc/NetworkManager/conf.d"
+chk "--only wifi writes the drop-in with no conf.d yet" sh -c "'$BAKE' --only wifi --root '$R' --boot '$B' >/dev/null 2>&1 && cmp -s '$T/scan.want' '$SCAN'"
+mkdir -p "$R/etc/NetworkManager/conf.d"; printf '[main]\ndns=none\n' > "$R/etc/NetworkManager/conf.d/90-rastaos-dns.conf"
 cp "$B/starter.txt" "$T/starter.before"
 chk "starter whose awk fails fails (exit 1)" sh -c "PATH='$T/failbin':\$PATH '$BAKE' --only starter --root '$R' --boot '$B' >/dev/null 2>&1; [ \$? = 1 ]"
 chk "  …and leaves starter.txt (never empties it)" cmp -s "$B/starter.txt" "$T/starter.before"

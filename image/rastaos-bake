@@ -42,6 +42,10 @@
 #   wifi     /boot/wifi and the NM store lose wint-hotspot.nmconnection (it carries the fleet hotspot
 #            PSK: hotspot off is only an installer default, a converged 7.4 card still held it) and the
 #            store loses the _anna74-removed dir (NM "keyfile: error loading connection" every boot).
+#            NM conf.d/91-rastaos-scan.conf: Wi-Fi scans keep the MAC (pi-tools#t-064). NM gave the idle
+#            USB dongle a new random MAC every periodic scan (~5 min 15 s); the change takes wlan0 down/up,
+#            the rtl8192cu/rtl8xxxu chip re-inits and the player stalls ~0.5 s (underrun, wallclock
+#            burst, once a leader CRASH RELOAD). Read at NM's next start (live: systemctl reload NetworkManager).
 #   nowde    /opt/nowde-tools keeps ONE firmware: 7.4 held 2.0.3 (patch-golden 15/09) and 2.0.5
 #            (patch-golden-29). Default 2.0.5 = Nowde main's NOWDE_VERSION + bin/ and the garden nodes.
 #   media    /data/media back to the generic set: ONLY 0_mire.mp4. 7.4's bake put the Anna show set there
@@ -281,6 +285,20 @@ step_wifi() {
   done
   local d; d=$(r /etc/NetworkManager/system-connections/_anna74-removed)
   [ -d "$d" ] && { rm -rf "$d"; did "wifi: NM store _anna74-removed/ removed"; }
+  # a scan with a fresh random MAC re-inits the idle dongle's chip and stalls the player (pi-tools#t-064)
+  local f tmp; f=$(r /etc/NetworkManager/conf.d/91-rastaos-scan.conf); tmp=$(mktemp)
+  cat > "$tmp" <<'NM'
+# RastaOS-7.5 (pi-tools#t-064): no MAC re-randomising on Wi-Fi scans.
+# A new random MAC takes the interface down/up; on the idle USB dongles that re-initialises the
+# rtl8192cu/rtl8xxxu chip every ~5 min and stalls the player ~0.5 s (underrun, wallclock burst).
+[device]
+wifi.scan-rand-mac-address=no
+NM
+  if ! cmp -s "$tmp" "$f"; then
+    mkdir -p "${f%/*}" && install -m 644 "$tmp" "$f" || { rm -f "$tmp"; say "wifi: could not write $f"; return 1; }
+    did "wifi: NM scans keep the MAC (91-rastaos-scan.conf)"
+  fi
+  rm -f "$tmp"
   return 0
 }
 
