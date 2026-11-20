@@ -170,6 +170,21 @@ echo "run 2"; "$BAKE" --tag "$TAG" --root "$R" --boot "$B" --data "$D" > "$T/run
 chk "run 2 exits 0" [ "$rc2" = 0 ]
 chk "run 2 reports 0 changes" grep -q 'done — 0 change(s)' "$T/run2.log"
 snap > "$T/s2"; chk "run 2 leaves the tree identical" cmp -s "$T/s1" "$T/s2"
+# a card baked by an EARLIER recipe (bench-01 20/11: re-baked at 1c927c4, VERSION kept @ecbe41a):
+# the re-bake re-stamps the sha in VERSION and in the stamps line; a different date alone never does
+REV=$(git -C "$HERE/image" rev-parse --short HEAD 2>/dev/null || echo unknown)
+sed -i -E 's/^(rastaos75 )[0-9-]+:/\12026-11-17:/' "$R/etc/rastaos-patches.txt"
+"$BAKE" --only stamps,version --root "$R" --boot "$B" > "$T/date.log" 2>&1
+chk "an older date alone re-stamps nothing (exit 0, 0 changes)" sh -c "[ $? = 0 ] && grep -q 'done — 0 change(s)' '$T/date.log'"
+sed -i -E 's/@[^ ]+$/@0000000/' "$B/VERSION"
+sed -i -E 's/(rastaos-bake@)[^ ]+/\10000000/' "$R/etc/rastaos-patches.txt"
+"$BAKE" --only stamps,version --root "$R" --boot "$B" > "$T/rev.log" 2>&1; rcv=$?; sed 's/^/    /' "$T/rev.log"
+chk "an older recipe sha is re-stamped (exit 0, 2 changes)" sh -c "[ $rcv = 0 ] && grep -q 'done — 2 change(s)' '$T/rev.log'"
+chk "  …VERSION names this recipe" [ "$(cat "$B/VERSION")" = "7.5 -- RastaOS-7.5, baked from a 7.4 card by Pi-tools image/rastaos-bake@$REV" ]
+chk "  …the stamps line names it, still one line" sh -c "[ \"\$(grep -c '^rastaos75 ' '$R/etc/rastaos-patches.txt')\" = 1 ] && grep -q '^rastaos75 .*rastaos-bake@$REV ' '$R/etc/rastaos-patches.txt'"
+chk "  …and the rest of the stamps kept" sh -c "grep -q '^P1 2026-09-15' '$R/etc/rastaos-patches.txt' && [ \"\$(grep -c '^anna74 ' '$R/etc/rastaos-patches.txt')\" = 1 ]"
+"$BAKE" --only stamps,version --root "$R" --boot "$B" > "$T/rev2.log" 2>&1
+chk "  …then a second run changes nothing" sh -c "[ $? = 0 ] && grep -q 'done — 0 change(s)' '$T/rev2.log'"
 cp "$SCAN" "$T/scan.want"; echo 'wifi.scan-rand-mac-address=yes' >> "$SCAN"     # a drifted hand copy
 "$BAKE" --only wifi --root "$R" --boot "$B" > "$T/wifi.log" 2>&1; rcw=$?
 chk "a drifted scan drop-in is rewritten (exit 0, 1 change)" sh -c "[ $rcw = 0 ] && grep -q 'done — 1 change(s)' '$T/wifi.log' && cmp -s '$T/scan.want' '$SCAN'"

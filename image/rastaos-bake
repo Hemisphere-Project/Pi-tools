@@ -28,7 +28,8 @@
 #   stamps   /etc/rastaos-patches.txt: the 7.4 bake stacked one anna74 line per run (5 on bench-01);
 #            keep its LAST one and every older line, then ONE rastaos75 line (replaced, never stacked).
 #   version  /boot/VERSION = 7.5. On 7.4 it still read "7.0 -- bootstraped from …", so nothing on a
-#            card said 7.3 or 7.4 — and the burn rules read that file.
+#            card said 7.3 or 7.4 — and the burn rules read that file. The line names the recipe's sha
+#            (this tree's), and a re-bake from another recipe re-stamps it — as it does the stamps line.
 #   units    mask fake-hwclock (rorw's fake-clock keeps the clock; both ran on 7.4), rpi-eeprom-update
 #            (a Pi 3 has no EEPROM; no firmware writes at a show), nfs-client.target, rsync.service.
 #   rtc      the DS3231 overlay goes off by default: a board without the RTC logged "rtc-ds1307 probe
@@ -71,6 +72,7 @@
 #            root's /var/log/journal, removes root's .bash_history.
 #
 # Row 14's order: bake (live) → capture (dd) → --only seal on the image → burn-batch --flightbox IMAGE.
+# The capture and the seal are one verb: image/rastaos-capture pull (the card) · build (the sealed image).
 #
 # Exit 0 done (or nothing to do), 1 a step failed, 2 usage / not a RastaOS root.
 set -uo pipefail
@@ -198,9 +200,10 @@ step_stamps() {
       { print }' "$f" > "$tmp"
   fi
   echo "$STAMP $(date +%F): RastaOS-7.5 from 7.4 — Pi-tools image/rastaos-bake@$REV (steps: $STEPS)" >> "$tmp"
-  # idempotent: compare without the date/rev of our own line
-  if [ -f "$f" ] && diff -q <(grep -v "^$STAMP " "$f") <(grep -v "^$STAMP " "$tmp") >/dev/null \
-     && [ "$(grep -c "^$STAMP " "$f")" = 1 ]; then
+  # idempotent: compare without the DATE of our own line — its recipe sha counts, so a re-bake from
+  # a later recipe re-stamps it (the date alone never does)
+  nodate() { sed -E "s/^$STAMP [0-9]{4}-[0-9]{2}-[0-9]{2}:/$STAMP D:/" "$1"; }
+  if [ -f "$f" ] && diff -q <(nodate "$f") <(nodate "$tmp") >/dev/null; then
     rm -f "$tmp"; return 0
   fi
   local before; before=$(grep -c '^anna74 ' "$f" 2>/dev/null)
@@ -209,11 +212,15 @@ step_stamps() {
 }
 
 step_version() {
-  local f=$BOOT/VERSION
-  if [ -f "$f" ] && head -1 "$f" | grep -q '^7\.5 -- '; then return 0; fi
-  local was; was=$(head -1 "$f" 2>/dev/null | cut -c1-60)
-  printf '7.5 -- RastaOS-7.5, baked from a 7.4 card by Pi-tools image/rastaos-bake@%s\n' "$REV" > "$f"
-  did "version: /boot/VERSION '${was:-absent}' → 7.5"
+  # the WHOLE line is the check, sha included: a "starts with 7.5" test let a re-bake from a later
+  # recipe keep the first bake's sha (bench-01 20/11: re-baked at 1c927c4, VERSION still @ecbe41a).
+  local f=$BOOT/VERSION want was
+  want="7.5 -- RastaOS-7.5, baked from a 7.4 card by Pi-tools image/rastaos-bake@$REV"
+  was=$(head -1 "$f" 2>/dev/null)
+  [ "$was" = "$want" ] && return 0
+  printf '%s\n' "$want" > "$f"
+  case $was in *rastaos-bake@*) was="7.5 @${was##*@}" ;; esac
+  did "version: /boot/VERSION '$(printf '%s' "${was:-absent}" | cut -c1-60)' → 7.5 @$REV"
 }
 
 step_units() {
