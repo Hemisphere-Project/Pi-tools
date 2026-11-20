@@ -46,7 +46,8 @@ D=$T/data; mkdir -p "$D/media/sub" "$D/usb"
 for f in 1_anna.mp4 2_anna.mp4 sub/x.mp4; do echo "$f" > "$D/media/$f"; done
 echo 'volume=80' > "$D/hplayer2-26-anna.cfg"; echo keep > "$D/other.txt"
 echo 'the mire' > "$T/mire.mp4"
-printf '#\n#  Pi-tools starter configuration\n#\nhostrename@bench-01\n## [hplayer2] multimedia player [profile]\n# hplayer2@looper\nhplayer2@26-anna\nsetnet\n' > "$B/starter.txt"
+# …and the pair a pre-t-063 bake appended at its end (bench-01 since 20/11): the next run must remove it
+printf '#\n#  Pi-tools starter configuration\n#\nhostrename@bench-01\n## [hplayer2] multimedia player [profile]\n# hplayer2@looper\nhplayer2@26-anna\nsetnet\n\nhostrename@player-000\nhplayer2@auto\n' > "$B/starter.txt"
 echo '[player]' > "$B/hplayer2.conf"
 echo bench-01 > "$R/etc/hostname"; printf '127.0.0.1\tlocalhost\n127.0.1.1\tbench-01\n' > "$R/etc/hosts"
 # the release: a fixture origin with the 7.4 commit and a tagged one after it; the card's checkout on the first
@@ -81,6 +82,16 @@ cp "$R/root/.ssh/authorized_keys" "$T/ak.before"
 for k in keepa keepb; do ssh-keygen -lf "$T/k/$k.pub" | awk -v k=$k '{print $2, k}'; done > "$T/keys.keep"
 echo '# none' > "$T/none.keep"; ssh-keygen -lf "$T/k/rig.pub" | awk '{print "#", $2}' >> "$T/none.keep"
 export RASTAOS_ALLOW_NONROOT=1 RASTAOS_LOCK=$T/update.lock    # rastaos-update's own test overrides
+# The card's awk is mawk 1.3.3 (1996): no POSIX classes. There `[[:space:]]` silently never matches, and
+# this desk's awk has them (pi-tools#t-063). So every awk the bake calls goes through a shim that refuses
+# a program naming one: the step then fails here instead of passing here and misfiring on the card.
+DESK_AWK=$(command -v awk); export DESK_AWK; mkdir -p "$T/bin" "$T/failbin"
+cat > "$T/bin/awk" <<'SHIM'
+#!/bin/sh
+for a; do case $a in *'[[:'*) echo "awk (bake-desk): a POSIX class — the card's mawk 1.3.3 has none" >&2; exit 2 ;; esac; done
+exec "$DESK_AWK" "$@"
+SHIM
+printf '#!/bin/sh\nexit 2\n' > "$T/failbin/awk"; chmod 755 "$T/bin/awk" "$T/failbin/awk"; export PATH=$T/bin:$PATH
 
 chk "converge without --tag refuses (exit 2)" sh -c "'$BAKE' --root '$R' --boot '$B' >/dev/null 2>&1; [ \$? = 2 ]"
 chk "an unknown tag stops the bake (exit 1)" sh -c "'$BAKE' --tag nope --root '$R' --boot '$B' >/dev/null 2>&1; [ \$? = 1 ]"
@@ -137,6 +148,8 @@ chk "saved player settings gone" [ ! -e "$D/hplayer2-26-anna.cfg" ]
 chk "the rest of p3 kept" [ -f "$D/other.txt" -a -d "$D/usb" ]
 chk "starter: hostrename@player-000, the only one" [ "$(grep '^hostrename@' "$B/starter.txt")" = hostrename@player-000 ]
 chk "starter: hplayer2@auto, the only active player" [ "$(grep -E '^hplayer2@' "$B/starter.txt")" = hplayer2@auto ]
+chk "starter: rewritten in place" [ "$(sed -n '4p;7p' "$B/starter.txt" | tr '\n' ' ')" = "hostrename@player-000 hplayer2@auto " ]
+chk "starter: the pair a pre-t-063 bake appended is gone" [ "$(sed -n '8,$p' "$B/starter.txt" | tr '\n' '|')" = "setnet||" ]
 chk "starter: comments + other services kept" sh -c "grep -qx '# hplayer2@looper' '$B/starter.txt' && grep -qx setnet '$B/starter.txt'"
 chk "the role file gone" [ ! -e "$B/hplayer2.conf" ]
 chk "/etc/hostname = player-000" grep -qx player-000 "$R/etc/hostname"
@@ -152,6 +165,9 @@ echo "run 2"; "$BAKE" --tag "$TAG" --root "$R" --boot "$B" --data "$D" > "$T/run
 chk "run 2 exits 0" [ "$rc2" = 0 ]
 chk "run 2 reports 0 changes" grep -q 'done — 0 change(s)' "$T/run2.log"
 snap > "$T/s2"; chk "run 2 leaves the tree identical" cmp -s "$T/s1" "$T/s2"
+cp "$B/starter.txt" "$T/starter.before"
+chk "starter whose awk fails fails (exit 1)" sh -c "PATH='$T/failbin':\$PATH '$BAKE' --only starter --root '$R' --boot '$B' >/dev/null 2>&1; [ \$? = 1 ]"
+chk "  …and leaves starter.txt (never empties it)" cmp -s "$B/starter.txt" "$T/starter.before"
 
 SEAL=("$BAKE" --only seal --root "$R" --boot "$B" --data "$D")
 chk "seal on the running card refuses (exit 2)" sh -c "'$BAKE' --only seal 2>&1 | grep -q 'never on the running card'; '$BAKE' --only seal >/dev/null 2>&1; [ \$? = 2 ]"

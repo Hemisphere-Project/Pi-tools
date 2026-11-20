@@ -329,12 +329,17 @@ step_starter() {
     return 1
   fi
   tmp=$(mktemp)
-  # the FIRST active hostrename@ / hplayer2@ line becomes the generic one, later active ones go; comments stay
-  awk -v host="hostrename@$HOST" -v player="$PLAYER" '
-    /^[[:space:]]*hostrename@/ { if (!h++) print host; next }
-    /^[[:space:]]*hplayer2@/   { if (!p++) print player; next }
+  # the FIRST active hostrename@ / hplayer2@ line becomes the generic one, later active ones go; comments stay.
+  # `[ \t]`, never `[[:space:]]`: the card's awk is mawk 1.3.3, which has no POSIX classes — there the
+  # pattern silently never matched, and every run appended one more pair (pi-tools#t-063, bench-01 20/11).
+  # A pair a run like that left behind is one of the "later ones": the next run removes it.
+  if ! awk -v host="hostrename@$HOST" -v player="$PLAYER" '
+    /^[ \t]*hostrename@/ { if (!h++) print host; next }
+    /^[ \t]*hplayer2@/   { if (!p++) print player; next }
     { print }
-    END { if (!h) print host; if (!p) print player }' "$f" > "$tmp"
+    END { if (!h) print host; if (!p) print player }' "$f" > "$tmp"; then
+    rm -f "$tmp"; say "starter: awk failed on $f — starter.txt left as is"; return 1
+  fi
   if ! cmp -s "$f" "$tmp"; then
     was=$(grep -E '^[[:space:]]*(hostrename|hplayer2)@' "$f" | tr '\n' ' ')
     cat "$tmp" > "$f"; did "starter: '${was% }' → 'hostrename@$HOST $PLAYER'"
