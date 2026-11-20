@@ -1,0 +1,240 @@
+#!/usr/bin/env bash
+# rastaos-capture — the RastaOS golden, from the baked bench card to a sealed, checked image file
+# (pi-tools#t-065). The verb for what 20/11's hand-run capture-75.sh + build-b02.sh did (rastaos#t-020).
+#
+#   image/rastaos-capture pull HOST STAGE [--dev /dev/mmcblk0]
+#       from a machine that reaches the card over ssh as root (the rig LAN; Linux or macOS): the card's
+#       partition table, p1 raw, p2 + p3 used blocks → STAGE/, each piece gzip-checked, SHA256SUMS.
+#   sudo image/rastaos-capture build STAGE [--out IMG] [--data-mib 256] [--keys FILE]
+#       as root, on dev37 or a spare Pi, from a Pi-tools tree AT THE RELEASE: STAGE's pieces → IMG
+#       (default STAGE/RastaOS-7.5.img) with the card's disk id and PARTUUIDs (cmdline.txt's root=),
+#       /data shrunk to 256 MiB (the 7.3 golden's; extendfs grows it at first boot), sealed
+#       (rastaos-bake --only seal), fsck'd (burn-batch --fsck-only), asked flightbox-p4 --check, summed.
+#   image/rastaos-capture build -n STAGE [...]   the checks and the image's table — no root, no writes
+#
+# Before `pull`, on the card, by hand: the full re-bake from a tree at the release (rastaos-bake --tag),
+# `ro`, the player stopped. `pull` refuses a card whose / or /boot is not read-only, whose rw count is
+# not 0, or whose /data is not <dev>p3. p2 is read live (read-only = consistent); /data is frozen
+# (fsfreeze) for its own read only, and thawed on every exit. Between pull and build, move STAGE to
+# where the build runs (rsync -P --bwlimit over the atelier uplink, or a Pi on the rig LAN); `build`
+# checks SHA256SUMS first. After: bench/burn-batch -n [--flightbox] IMG — the build says which.
+#
+# The build prints what the image carries (HPlayer2 and its rollback point, /boot/VERSION, the pi3
+# dtbs) and WARNS when VERSION's recipe sha is not this tree's: the card was baked by another recipe
+# than the one sealing it (20/11: VERSION said @ecbe41a on a card re-baked at 1c927c4). A failed
+# seal removes the image: an unsealed golden carries the bench's keys and identity.
+#
+# Exit 0 done, 1 a check refused or a step failed, 2 usage (or build without root).
+set -euo pipefail
+PATH=$PATH:/usr/sbin:/sbin
+HERE=$(cd "$(dirname "$0")" && pwd -P)          # bash 3.2 on macOS: no readlink -f
+PIECES="table.txt table.sfdisk p1.raw.gz p2.raw.gz p3.raw.gz"
+
+say()   { echo "[capture] $*"; }
+die()   { echo "[capture] $1" >&2; exit "${2:-1}"; }
+usage() { sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+rev()   { git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo "unknown (not a git tree)"; }
+sums()  { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
+abspath() { case $1 in /*) echo "$1" ;; *) echo "$PWD/$1" ;; esac; }
+
+# ------------------------------------------------------------------ pull
+pull() {
+  local host=$1 stage=$2 dev=$3 qdev rc f
+  qdev=$(printf %q "$dev")
+  rsh() { ssh -o BatchMode=yes "$host" "DEV=$qdev bash -s"; }   # the remote script on stdin
+
+  # every refusal before any read
+  rsh <<'CHECK' || die "$host: not ready to capture (above) — nothing read"
+o() { findmnt -no OPTIONS "$1" 2>/dev/null | cut -d, -f1; }
+[ "$(o /)" = ro ]     || { echo "/ is not read-only — run ro first" >&2; exit 1; }
+[ "$(o /boot)" = ro ] || { echo "/boot is not read-only — run ro first" >&2; exit 1; }
+n=$(cat /run/pitools-rw.count 2>/dev/null || echo 0)
+[ "${n:-0}" = 0 ]     || { echo "rw count is $n, not 0 — an rw is still open" >&2; exit 1; }
+s=$(findmnt -no SOURCE /data 2>/dev/null)
+[ "$s" = "${DEV}p3" ] || { echo "/data is '${s:-not mounted}', not ${DEV}p3 — --dev?" >&2; exit 1; }
+for t in sfdisk blkid e2image fsfreeze dd gzip; do
+  command -v "$t" >/dev/null || { echo "no $t on the card" >&2; exit 1; }
+done
+CHECK
+
+  mkdir -p "$stage"; cd "$stage"
+  rm -f SHA256SUMS
+  say "$host: partition table"
+  rsh > table.sfdisk <<'R'
+sfdisk -d "$DEV"
+R
+  { cat table.sfdisk; echo; rsh <<'R'
+blkid
+R
+  } > table.txt
+  say "$host: p1 (/boot) raw"
+  rsh > p1.raw.gz <<'R'
+set -o pipefail; Z=$(command -v pigz || command -v gzip)
+dd if="${DEV}p1" bs=4M status=none | "$Z" -1
+R
+  say "$host: p2 (/) used blocks"
+  rsh > p2.raw.gz <<'R'
+set -o pipefail; Z=$(command -v pigz || command -v gzip)
+e2image -ra "${DEV}p2" - | "$Z" -1
+R
+  # /data is rw (NM, dnsmasq, the .cache binds): frozen only for its read. -f: e2image refuses a rw
+  # mount without it — frozen, the read is consistent. The trap thaws it on any exit of the script.
+  say "$host: p3 (/data) used blocks, frozen for the read"
+  rc=0
+  rsh > p3.raw.gz <<'R' || rc=$?
+set -o pipefail; Z=$(command -v pigz || command -v gzip)
+sync
+fsfreeze -f /data || exit 1
+trap 'fsfreeze -u /data 2>/dev/null' EXIT
+trap 'exit 1' HUP INT TERM PIPE
+e2image -fra "${DEV}p3" - | "$Z" -1
+R
+  ssh -o BatchMode=yes "$host" 'fsfreeze -u /data 2>/dev/null; true' || true    # belt and braces
+  [ "$rc" = 0 ] || die "$host: the /data read failed (exit $rc) — /data thawed, no SHA256SUMS"
+
+  grep -qE 'p3 :' table.sfdisk || die "table.sfdisk names no p3 — is $dev the card?"
+  for f in p1 p2 p3; do gzip -t "$f.raw.gz" || die "$f.raw.gz is not a whole gzip stream"; done
+  # shellcheck disable=SC2086 # PIECES is a word list on purpose
+  sums $PIECES > SHA256SUMS
+  ls -la $PIECES SHA256SUMS
+  say "done — $host is free. Next, where the build runs (root): $0 build $PWD"
+}
+
+# ------------------------------------------------------------------ build
+build() {
+  local stage=$1 out=$2 mib=$3 dry=$4 keys=$5
+  local p3sect p3start end table f img L="" M="" rc=0 SEALED=0
+  [ -d "$stage" ] || die "no stage directory $stage" 2
+  stage=$(cd "$stage" && pwd -P)
+  out=$(abspath "${out:-$stage/RastaOS-7.5.img}")
+  [ -z "$keys" ] || keys=$(abspath "$keys")
+  cd "$stage"
+
+  [ -f SHA256SUMS ] || die "$stage has no SHA256SUMS — the pull did not finish"
+  for f in $PIECES; do
+    awk -v f="$f" '$2 == f || $2 == "*" f { k = 1 } END { exit !k }' SHA256SUMS \
+      || die "SHA256SUMS does not cover $f — the pull did not finish"
+  done
+  sums -c --quiet SHA256SUMS || die "the pieces do not match SHA256SUMS — a short or corrupted copy: copy again"
+
+  p3sect=$((mib * 2048))
+  p3start=$(sed -nE '/p3 :/ s/.*start= *([0-9]+).*/\1/p' table.sfdisk)
+  [ -n "$p3start" ] || die "table.sfdisk names no p3"
+  grep -qE 'p1 :' table.sfdisk && grep -qE 'p2 :' table.sfdisk || die "table.sfdisk lacks p1 or p2"
+  # p3 at its new size; no last-lba (the file is smaller than the card); no p4 — flightbox's p4 is
+  # laid out per card at the burn (image/flightbox-p4 refuses an image without exactly three)
+  table=$(sed -E "/p3 :/ s/size= *[0-9]+/size= $p3sect/" table.sfdisk | grep -vE '^last-lba:|p[4-9] :')
+  grep -qE 'p[4-9] :' table.sfdisk && say "the card's p4+ left out of the image (flightbox lays p4 out at each burn)"
+  end=$((p3start + p3sect))
+
+  say "image  $out — $((end * 512)) B, /data (p3) $mib MiB at sector $p3start; the card's disk id kept"
+  printf '%s\n' "$table" | sed 's/^/         /'
+  say "seal   Pi-tools $(rev) — $HERE/rastaos-bake --only seal${keys:+ --keys $keys}"
+  if [ "$dry" = 1 ]; then say "dry run (-n): nothing written"; return 0; fi
+  [ "$(id -u)" = 0 ] || die "build mounts a loop device: run it as root (sudo $0 build …), or -n for the plan" 2
+  command -v losetup >/dev/null && command -v resize2fs >/dev/null || die "no losetup/resize2fs here: build on Linux"
+
+  img=$out; mkdir -p "$(dirname "$img")"
+  printf '%s\n' "$table" > table.image.sfdisk
+  rm -f "$img" "$img.sha256" p3.raw
+  cleanup() {
+    [ -n "$M" ] && { umount "$M/p1" "$M/p3" "$M/p2" 2>/dev/null; rmdir "$M/p1" "$M/p2" "$M/p3" "$M" 2>/dev/null; }
+    [ -n "$L" ] && losetup -d "$L" 2>/dev/null
+    rm -f "$stage/p3.raw"
+    [ "$SEALED" = 1 ] || { rm -f "$img"; say "no sealed image — $img removed"; }
+  }
+  trap cleanup EXIT
+  truncate -s $((end * 512)) "$img"
+  sfdisk -q "$img" < table.image.sfdisk                    # label-id kept → PARTUUIDs kept
+
+  say "p3: unpack, fsck, shrink to $mib MiB"
+  gzip -dc p3.raw.gz | dd of=p3.raw bs=4M conv=sparse status=none
+  e2fsck -fy p3.raw || [ $? -le 1 ] || die "p3: e2fsck could not repair /data"
+  resize2fs p3.raw "$((p3sect / 2))K" || die "p3: resize2fs to $mib MiB failed — does /data hold more? (--data-mib)"
+
+  L=$(losetup -P -f --show "$img")
+  udevadm settle 2>/dev/null || true
+  [ -b "${L}p3" ] || die "no ${L}p3 after losetup -P"
+  say "p1, p2, p3 → $L"
+  gzip -dc p1.raw.gz | dd of="${L}p1" bs=4M conv=sparse status=none
+  gzip -dc p2.raw.gz | dd of="${L}p2" bs=4M conv=sparse status=none
+  dd if=p3.raw of="${L}p3" bs=4M conv=sparse status=none
+  rm -f p3.raw
+  e2fsck -fy "${L}p2" || [ $? -le 1 ] || die "p2: e2fsck could not repair /"
+
+  M=$(mktemp -d /run/rastaos-capture.XXXXXX)
+  mkdir "$M/p1" "$M/p2" "$M/p3"
+  mount "${L}p2" "$M/p2"; mount "${L}p1" "$M/p1"; mount "${L}p3" "$M/p3"
+  say "seal from Pi-tools $(rev)"
+  bash "$HERE/rastaos-bake" --only seal --root "$M/p2" --boot "$M/p1" --data "$M/p3" ${keys:+--keys "$keys"} \
+    || die "seal failed (above) — the image is not sealed"
+
+  # what the image carries; git as root on another owner's checkout needs safe.directory
+  local hp=$M/p2/opt/HPlayer2 v vs head
+  hg() { git -c safe.directory='*' -C "$hp" "$@" 2>/dev/null; }
+  say "HPlayer2 $(hg rev-parse --short HEAD || echo '?') (rollback $(hg rev-parse --short refs/rastaos/rollback || echo none))" \
+      "· release receipt $(sed -n 's/^RASTAOS_TAG=//p' "$M/p2/etc/rastaos-release" 2>/dev/null | grep . || echo none)"
+  v=$(head -1 "$M/p1/VERSION" 2>/dev/null || true)
+  say "/boot/VERSION: ${v:-absent}"
+  head=$(git -C "$HERE" rev-parse HEAD 2>/dev/null || true)
+  vs=""; case $v in *rastaos-bake@*) vs=${v##*@} ;; esac
+  if [ -z "$vs" ] || [ -z "$head" ]; then
+    say "WARN: cannot match VERSION's recipe to this tree (VERSION '${vs:-no sha}', tree $(rev))"
+  else
+    case $head in
+      "$vs"*) say "VERSION's recipe = this tree ($(rev))" ;;
+      *) say "WARN: VERSION names rastaos-bake@$vs, this tree is $(rev) — the card was baked by another recipe than the one sealing it: re-bake it from this tree, or build from the tree that baked it" ;;
+    esac
+  fi
+  say "pi3 dtbs on p1: $(cd "$M/p1" && ls bcm2710-rpi-3-*.dtb 2>/dev/null | tr '\n' ' ')"
+  umount "$M/p1" "$M/p2" "$M/p3"; rmdir "$M/p1" "$M/p2" "$M/p3" "$M"; M=""
+  losetup -d "$L"; L=""
+  SEALED=1; trap - EXIT          # sealed: the image stays, whatever the checks below say
+
+  say "fsck (bench/burn-batch --fsck-only)"
+  bash "$HERE/../bench/burn-batch" --fsck-only "$img" \
+    || { rc=1; say "FAIL: the image's fsck failed (above) — read it before any burn"; }
+  if bash "$HERE/flightbox-p4" --check "$img"; then say "flightbox-p4 --check: OK — burn with --flightbox"
+  else say "flightbox-p4 --check refused (above) — burn without --flightbox"; fi
+  (cd "$(dirname "$img")" && sums "${img##*/}" | tee "${img##*/}.sha256")
+  chown --reference="$stage" "$img" "$img.sha256" 2>/dev/null || true
+  say "next: bench/burn-batch -n [--flightbox] $img"
+  return "$rc"
+}
+
+# ------------------------------------------------------------------ args
+cmd=${1:-}; [ $# -gt 0 ] && shift
+case $cmd in
+  pull)
+    dev=/dev/mmcblk0; pos=()
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --dev) dev=${2:?--dev DEVICE}; shift 2 ;;
+        -h|--help) usage ;;
+        -*) echo "unknown option: $1" >&2; usage ;;
+        *) pos+=("$1"); shift ;;
+      esac
+    done
+    [ "${#pos[@]}" = 2 ] || usage
+    pull "${pos[0]}" "${pos[1]}" "$dev" ;;
+  build)
+    out="" mib=256 dry=0 keys="" pos=()
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --out) out=${2:?--out IMG}; shift 2 ;;
+        --data-mib) mib=${2:?--data-mib N}; shift 2 ;;
+        --keys) keys=${2:?--keys FILE}; shift 2 ;;
+        -n) dry=1; shift ;;
+        -h|--help) usage ;;
+        -*) echo "unknown option: $1" >&2; usage ;;
+        *) pos+=("$1"); shift ;;
+      esac
+    done
+    [ "${#pos[@]}" = 1 ] || usage
+    case $mib in ''|*[!0-9]*) die "--data-mib takes a whole number of MiB, not '$mib'" 2 ;; esac
+    [ "$mib" -ge 16 ] || die "--data-mib $mib: too small for /data" 2
+    [ -z "$keys" ] || [ -s "$keys" ] || die "--keys $keys: not a non-empty file" 2
+    build "${pos[0]}" "$out" "$mib" "$dry" "$keys" ;;
+  -h|--help|"") usage ;;
+  *) echo "unknown verb: $cmd (pull | build)" >&2; usage ;;
+esac
