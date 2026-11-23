@@ -7,7 +7,8 @@
 # fake-hwclock + rsync + nfs-client wired, DS3231 overlay on, resolv.conf a symlink, the hotspot
 # profile in /boot/wifi and the store, _anna74-removed/, no NM scan drop-in (scans re-randomise the
 # dongle's MAC), nowde-tools 2.0.3 + 2.0.5, the Anna set on p3 with no mire, starter hplayer2@26-anna
-# on bench-01), plus a git checkout at /opt/Pi-tools one
+# on bench-01, Anna's 7.4 bake: hostapd@wint + dnsmasq masked, the anna-nowait drop-in and the late
+# timer unwired, wint-rejoin, the usbvol patch), plus a git checkout at /opt/Pi-tools one
 # commit behind a fixture release tag, runs the recipe offline twice, and checks each defect is gone,
 # the checkout sits on the tag with its receipt, and the second run changes nothing. Proves the file
 # edits and the converge call, not a boot, a module re-apply or the mire playing.
@@ -31,6 +32,19 @@ ln -s /lib/systemd/system/rpi-eeprom-update.service "$S/multi-user.target.wants/
 ln -s /lib/systemd/system/hplayer2@.service "$S/multi-user.target.wants/hplayer2@26-anna.service"
 mkdir -p "$S/timers.target.wants"; printf '[Timer]\nOnBootSec=90\n' > "$S/apfix.timer"   # 7.4: Runbooks' field copy
 ln -s "$S/apfix.timer" "$S/timers.target.wants/apfix.timer"
+# Anna's 7.4 bake (Runbooks anna74.sh) and the 15/09 usbvol patch, as the 20/11 capture holds them;
+# network-tools' own mask (hostapd.service) and its template link must come through untouched
+mkdir -p "$R/lib/systemd/system" "$R/usr/local/bin" "$S/hdmi-rehandshake.service.d" "$S/audiohub@usb.service.d"
+ln -s /dev/null "$S/hostapd@wint.service"; ln -s /dev/null "$S/dnsmasq.service"; ln -s /dev/null "$S/hostapd.service"
+ln -s /opt/Pi-tools/network-tools/hostapd@.service "$S/hostapd@.service"
+printf '[Install]\nWantedBy=multi-user.target\n' > "$R/lib/systemd/system/dnsmasq.service"
+printf '[Service]\nExecStart=\nExecStart=/usr/local/bin/hdmi-rehandshake 3 --wait 0\n' > "$S/hdmi-rehandshake.service.d/anna-nowait.conf"
+ln -s /opt/Pi-tools/hdmi-rehandshake/hdmi-rehandshake-late.timer "$S/hdmi-rehandshake-late.timer"
+printf '[Service]\nExecStart=/usr/local/bin/wint-rejoin\n' > "$S/wint-rejoin.service"; echo '#!/bin/sh' > "$R/usr/local/bin/wint-rejoin"
+ln -s /etc/systemd/system/wint-rejoin.service "$S/multi-user.target.wants/wint-rejoin.service"
+printf '[Service]\nType=oneshot\n' > "$S/usbvol.service"; printf '[Timer]\nOnBootSec=30\n' > "$S/usbvol.timer"
+ln -s /etc/systemd/system/usbvol.timer "$S/timers.target.wants/usbvol.timer"
+printf '[Service]\nExecStartPost=/bin/true\n' > "$S/audiohub@usb.service.d/usbvol.conf"
 echo '#!/bin/sh' > "$R/etc/cron.hourly/fake-hwclock"
 printf 'P1 2026-09-15: journald volatile\nanna74 2026-11-05: a\nanna74 2026-11-06: b\nanna74 2026-11-07: c\nanna74 2026-11-08: d\nanna74 2026-11-09: e\n' > "$R/etc/rastaos-patches.txt"
 echo '7.0 -- bootstraped from bootstrap-raspbian-legacy.sh' > "$B/VERSION"
@@ -133,6 +147,18 @@ chk "turbo commented" grep -q '^#force_turbo=1' "$B/config.txt"
 chk "no live force_turbo" sh -c "! grep -qE '^[[:space:]]*force_turbo=1' '$B/config.txt'"
 chk "apfix.timer unwired" sh -c "[ ! -e '$R/etc/systemd/system/timers.target.wants/apfix.timer' ]"
 chk "apfix units left in place (opt-in)" test -f "$R/etc/systemd/system/apfix.timer"
+chk "hostapd@wint unmasked" sh -c "[ ! -e '$S/hostapd@wint.service' ] && [ ! -L '$S/hostapd@wint.service' ]"
+chk "  …and left unwired (setnet enables it per AP profile)" [ -z "$(find "$S" -path '*.wants/hostapd@wint.service' | head -1)" ]
+chk "dnsmasq unmasked" [ "$(readlink "$S/dnsmasq.service")" != /dev/null ]
+chk "  …and wired at boot, to the package's unit" [ "$(readlink "$S/multi-user.target.wants/dnsmasq.service")" = /lib/systemd/system/dnsmasq.service ]
+chk "network-tools' own hostapd.service mask kept" [ "$(readlink "$S/hostapd.service")" = /dev/null ]
+chk "the hostapd@ template link kept" [ "$(readlink "$S/hostapd@.service")" = /opt/Pi-tools/network-tools/hostapd@.service ]
+chk "anna-nowait drop-in gone, with its empty .d" [ ! -e "$S/hdmi-rehandshake.service.d" ]
+chk "hdmi-rehandshake-late.timer wired" [ "$(readlink "$S/timers.target.wants/hdmi-rehandshake-late.timer")" = /etc/systemd/system/hdmi-rehandshake-late.timer ]
+chk "wint-rejoin gone: link, unit, script" sh -c "[ ! -L '$S/multi-user.target.wants/wint-rejoin.service' ] && [ ! -e '$S/wint-rejoin.service' ] && [ ! -e '$R/usr/local/bin/wint-rejoin' ]"
+chk "usbvol gone: timer link, timer, service" sh -c "[ ! -L '$S/timers.target.wants/usbvol.timer' ] && [ ! -e '$S/usbvol.timer' ] && [ ! -e '$S/usbvol.service' ]"
+chk "audiohub@usb's usbvol drop-in gone, with its empty .d" [ ! -e "$S/audiohub@usb.service.d" ]
+chk "  …each named in run 1" sh -c "[ \"\$(grep -c '^\[bake\]   anna: ' '$T/run1.log')\" = 12 ]"
 chk "resolv.conf a real file" [ -f "$R/etc/resolv.conf" -a ! -L "$R/etc/resolv.conf" ]
 chk "resolv.conf on 1.1.1.1" grep -qx 'nameserver 1.1.1.1' "$R/etc/resolv.conf"
 chk "the old target untouched" grep -q 127.0.0.1 "$R/run/resolvconf/resolv.conf"
@@ -203,6 +229,20 @@ mv "$R/usr/bin/growpart" "$T/growpart"
 chk "seal without growpart fails (exit 1)" sh -c "$(printf '%q ' "${SEAL[@]}") --keys '$T/keys.keep' >/dev/null 2>&1; [ \$? = 1 ]"
 chk "  …and changes nothing" sh -c "cmp -s '$R/root/.ssh/authorized_keys' '$T/ak.before' && [ -f '$D/var/drive-id' ]"
 mv "$T/growpart" "$R/usr/bin/growpart"
+ln -sfn /dev/null "$S/dnsmasq.service"; ln -s /dev/null "$S/hostapd@wlan0.service"   # a unit setnet starts, masked
+chk "seal on an image masking setnet's units fails (exit 1)" sh -c "$(printf '%q ' "${SEAL[@]}") --keys '$T/keys.keep' > '$T/sealmask.log' 2>&1; [ \$? = 1 ]"
+chk "  …names both units" sh -c "grep -q 'masks dnsmasq.service hostapd@wlan0.service, which setnet starts' '$T/sealmask.log'"
+chk "  …and changes nothing" sh -c "cmp -s '$R/root/.ssh/authorized_keys' '$T/ak.before' && [ -f '$D/var/drive-id' ]"
+"$BAKE" --only anna --root "$R" --boot "$B" > "$T/anna.log" 2>&1; rca=$?
+chk "--only anna unmasks both (exit 0, 2 changes)" sh -c "[ $rca = 0 ] && grep -q 'done — 2 change(s)' '$T/anna.log'"
+# setnet's own systemctl enable/restart/start calls, read from the tree: each must match SETNET_UNITS
+SU=$(sed -n 's/^SETNET_UNITS="\(.*\)"$/\1/p' "$BAKE")
+chk "SETNET_UNITS is set in the bake" [ -n "$SU" ]
+for u in $(grep -oE 'systemctl (enable|restart|start) [A-Za-z0-9@{}._-]+' "$HERE/network-tools/setnet" | cut -d' ' -f3 | sort -u); do
+  u=${u//\{iface\}/wlan0}; case $u in *.*) ;; *) u=$u.service ;; esac
+  hit=0; for g in $SU; do case $u in $g) hit=1 ;; esac; done
+  chk "setnet starts $u — SETNET_UNITS covers it" [ "$hit" = 1 ]
+done
 echo "seal"; "${SEAL[@]}" --keys "$T/keys.keep" > "$T/seal1.log" 2>&1; rcs=$?; sed 's/^/    /' "$T/seal1.log"
 chk "seal exits 0" [ "$rcs" = 0 ]
 chk "extendfs marker gone" [ ! -e "$D/var/drive-id" ]

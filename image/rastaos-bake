@@ -38,6 +38,15 @@
 #            clock, heat included, on boards that never asked for it. Per card: uncomment it in config.txt.
 #   apfix    the field copy's apfix.timer is unwired (not masked): apfix is an opt-in module since 7.5, off
 #            by default with the hotspot. A card that keeps its hotspot: `apfix/install.sh --now`.
+#   anna     what Anna's 7.4 bake (Runbooks anna-players/image/anna74.sh) left in the generic image
+#            (pi-tools#t-066, read on the 20/11 capture). It masked hostapd@wint and dnsmasq, which
+#            setnet starts (errors ignored): no Biennale role got its access point, nor a sync master's
+#            DHCP → unmasked, and dnsmasq wired again at boot as Pi-tools' bootstrap leaves it (hostapd@
+#            stays unwired: setnet enables it per AP profile). Its anna-nowait.conf drop-in took
+#            hdmi-rehandshake's 20 s screen wait away and it unwired the late timer: both back (P7b, the
+#            module's own install). wint-rejoin (unit, link, script; no module declares it) goes. The
+#            usbvol field patch goes too (usbvol.service/.timer and the audiohub@usb drop-in the timer
+#            replaced): Runbooks' rastaos-roles `biennale` overlay brings the timer per role.
 #   dns      static /etc/resolv.conf on public resolvers + NM dns=none (knowledge: openresolv pointed
 #            it at 127.0.0.1 → no DNS → no datesync/apt/git). Live root also purges openresolv/resolvconf.
 #   wifi     /boot/wifi and the NM store lose wint-hotspot.nmconnection (it carries the fleet hotspot
@@ -65,7 +74,8 @@
 #            image takes the clone path (new machine-id + SSH host keys, Tailscale wiped) even when its
 #            fingerprint falls back to a UUID a dd copy shares (pi-tools#t-006, AUDIT-2026), and wires
 #            extendfs.service; refuses if extendfs, its unit or growpart is missing (it would stop before
-#            the reset). Host keys stay: extendfs regenerates them, and a card without keys has no ssh.
+#            the reset), and an image that masks a unit setnet starts (SETNET_UNITS: every role with an
+#            access point would come up without it — `--only anna` undoes Anna's). Host keys stay: extendfs regenerates them, and a card without keys has no ssh.
 #            root's authorized_keys keeps only the fingerprints in image/authorized-keys.keep (--keys FILE):
 #            the bench card also holds the loop's passphrase-less rig key. Refuses if no kept key remains.
 #            Empties /data/var/tailscale, /data/var/log (bench-01's journal-export, blackbox.log) and the
@@ -78,13 +88,17 @@
 set -uo pipefail
 
 ROOT=/ BOOT="" DATA="" ONLY="" LIVE=0 TAG="" BUNDLE="" HPBUNDLE="" NOWDE=2.0.5 MIRE="" KEYS="" CHECKOUT=/opt/Pi-tools
-STEPS="converge hplayer2 stamps version units rtc turbo apfix dns wifi nowde media starter"
+STEPS="converge hplayer2 stamps version units rtc turbo apfix anna dns wifi nowde media starter"
 EXPLICIT="seal"   # runs only when --only names it
 HOST=player-000 PLAYER=hplayer2@auto HPLAYER=/opt/HPlayer2
 HERE=${BAKE_HOME:-$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)}
 ARGS=("$@")
 STAMP=rastaos75
 MASK_UNITS="fake-hwclock.service rpi-eeprom-update.service nfs-client.target rsync.service"
+# What network-tools/setnet enables or restarts: hostapd@<iface> per AP profile, dnsmasq for the AP
+# subnets — both with errors ignored, so a mask on either fails silently at the show. A glob, not a list:
+# setnet names the interface. bench/bake-desk.sh checks this against setnet's own systemctl calls.
+SETNET_UNITS="dnsmasq.service hostapd@*.service"
 
 say()  { echo "[bake] $*"; }
 die()  { echo "[bake] FATAL: $*" >&2; exit "${2:-1}"; }
@@ -267,6 +281,59 @@ step_apfix() {
   return 0
 }
 
+step_anna() {
+  local S u f w lib n=$CHANGED; S=$(r /etc/systemd/system)
+  lnk() { [ -e "$1" ] || [ -L "$1" ]; }    # an absolute link dangles outside the target root
+  # setnet's units: Anna's masks out (a role with an AP got none, a sync master served no DHCP)
+  for u in $SETNET_UNITS; do
+    for f in "$S"/$u; do     # $u unquoted: hostapd@*.service is a glob
+      case "${f##*/}" in hostapd@.service) continue ;; esac   # the template: network-tools links it
+      [ "$(readlink "$f" 2>/dev/null)" = /dev/null ] || continue
+      rm -f "$f"; did "anna: ${f##*/} unmasked (setnet starts it)"
+    done
+  done
+  # dnsmasq at boot, as Pi-tools' bootstrap enables it (Anna's bake unwired it with the mask)
+  if [ -z "$(find "$S" -path "$S/*.wants/dnsmasq.service" 2>/dev/null | head -1)" ]; then
+    lib=""; for f in /lib/systemd/system/dnsmasq.service /usr/lib/systemd/system/dnsmasq.service; do
+      [ -f "$(r $f)" ] && { lib=$f; break; }
+    done
+    if [ -n "$lib" ]; then
+      mkdir -p "$S/multi-user.target.wants"; ln -sfn "$lib" "$S/multi-user.target.wants/dnsmasq.service"
+      did "anna: dnsmasq.service wired to multi-user.target (Pi-tools bootstrap's default)"
+    else
+      say "WARN: anna: no dnsmasq.service unit in the image — setnet's DHCP for the AP subnets has nothing to start"
+    fi
+  fi
+  # hdmi-rehandshake: the 20 s screen wait and the late pass (P7b) back
+  f=$S/hdmi-rehandshake.service.d/anna-nowait.conf
+  if [ -e "$f" ]; then
+    rm -f "$f"; rmdir "${f%/*}" 2>/dev/null
+    did "anna: hdmi-rehandshake's anna-nowait.conf drop-in removed (the 20 s screen wait is back)"
+  fi
+  if lnk "$S/hdmi-rehandshake-late.timer" && [ -z "$(find "$S" -path "$S/*.wants/hdmi-rehandshake-late.timer" 2>/dev/null | head -1)" ]; then
+    mkdir -p "$S/timers.target.wants"
+    ln -sfn /etc/systemd/system/hdmi-rehandshake-late.timer "$S/timers.target.wants/hdmi-rehandshake-late.timer"
+    did "anna: hdmi-rehandshake-late.timer wired to timers.target (the module's default)"
+  fi
+  # wint-rejoin, and the usbvol field patch: in no module; the biennale overlay brings usbvol per role
+  [ "$LIVE" = 1 ] && systemctl stop wint-rejoin.service usbvol.timer usbvol.service 2>/dev/null
+  for u in wint-rejoin.service usbvol.timer usbvol.service; do
+    for w in "$S"/*.wants/"$u"; do
+      lnk "$w" || continue
+      rm -f "$w"; did "anna: $u unwired from $(basename "$(dirname "$w")")"
+    done
+    lnk "$S/$u" && { rm -f "$S/$u"; did "anna: $u removed (no module declares it)"; }
+  done
+  f=$(r /usr/local/bin/wint-rejoin); lnk "$f" && { rm -f "$f"; did "anna: /usr/local/bin/wint-rejoin removed"; }
+  f=$S/audiohub@usb.service.d/usbvol.conf
+  if [ -e "$f" ]; then
+    rm -f "$f"; rmdir "${f%/*}" 2>/dev/null
+    did "anna: audiohub@usb's usbvol.conf drop-in removed (usbvol.timer replaced it; audiohub's usb_volume owns the level)"
+  fi
+  [ "$LIVE" = 1 ] && [ "$CHANGED" -gt "$n" ] && systemctl daemon-reload 2>/dev/null
+  return 0
+}
+
 step_dns() {
   local f want=$'nameserver 1.1.1.1\nnameserver 1.0.0.1'; f=$(r /etc/resolv.conf)
   if [ "$LIVE" = 1 ]; then
@@ -391,6 +458,16 @@ step_seal() {
   lnk "$(r $unit)" || { say "seal: no extendfs.service unit — nothing changed"; return 1; }
   [ -x "$(r /usr/bin/growpart)" ] || { say "seal: no growpart (cloud-guest-utils): extendfs would stop before the identity reset — nothing changed"; return 1; }
   [ -s "$keep" ] || { say "seal: no keep-list $keep (--keys FILE) — nothing changed"; return 1; }
+  local masked=() u
+  for u in $SETNET_UNITS; do
+    for m in "$S"/$u; do     # $u unquoted: hostapd@*.service is a glob
+      [ "$(readlink "$m" 2>/dev/null)" = /dev/null ] && masked+=("${m##*/}")
+    done
+  done
+  if [ ${#masked[@]} -gt 0 ]; then
+    say "seal: the image masks ${masked[*]}, which setnet starts — a role with an access point would get none, a sync master no DHCP (--only anna unmasks Anna's) — nothing changed"
+    return 1
+  fi
   for f in "$(r /root/.ssh/authorized_keys)" "$(r /root/.ssh/authorized_keys2)" "$(r /home)"/*/.ssh/authorized_keys "$(r /home)"/*/.ssh/authorized_keys2; do
     [ -f "$f" ] && files+=("$f")
   done
