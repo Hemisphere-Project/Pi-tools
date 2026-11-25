@@ -8,6 +8,7 @@
 #   image/rastaos-bake --list                     # the steps, in order
 #   sudo image/rastaos-bake --only dns,wifi       # a subset (comma-separated; no --tag without converge)
 #   --bundle FILE  the tag from a git bundle (no network)   --nowde VER  the one Nowde firmware kept
+#   --nowde-from DIR  a Nowde tree AT the release --nowde names: its bin/ images and tools/ CLI go in first
 #   --data DIR     the card's data partition (default /data; offline <root>/data)   --mire FILE  0_mire.mp4
 #   sudo image/rastaos-bake --only seal --root /mnt/p2 --boot /mnt/p1 --data /mnt/p3   # the CAPTURED image
 #
@@ -58,6 +59,12 @@
 #            burst, once a leader CRASH RELOAD). Read at NM's next start (live: systemctl reload NetworkManager).
 #   nowde    /opt/nowde-tools keeps ONE firmware: 7.4 held 2.0.3 (patch-golden 15/09) and 2.0.5
 #            (patch-golden-29). Default 2.0.5 = Nowde main's NOWDE_VERSION + bin/ and the garden nodes.
+#            --nowde-from DIR installs that release first (rastaos 25/11: 7.5 carries Nowde 2.4): DIR's
+#            src/nowde_config.h NOWDE_VERSION must equal --nowde (else nothing is installed), its
+#            bin/firmware-{atoms3,atoms3-lr,esp32-s3-devkitc-1}.bin become nowde-<VER>-<board>.bin, its
+#            tools/ CLI (nowde-cli.py, nowde-bench.py, nowde_sysex.py, nowde_mesh.py) is copied beside them —
+#            the release's own OTA protocol (run with /opt/HPlayer2/.venv/bin/python: mido + rtmidi, offline).
+#            Then the prune keeps that one version. Runbooks' older field scripts (nowde-ota.py …) stay.
 #   media    /data/media back to the generic set: ONLY 0_mire.mp4. 7.4's bake put the Anna show set there
 #            (+0.6 GB) and deleted the mire, which lives in no repo: --mire FILE puts it back (a 7.3 card's
 #            /data/media/0_mire.mp4). The saved player settings /data/hplayer2*.cfg go too: a saved cfg
@@ -87,7 +94,7 @@
 # Exit 0 done (or nothing to do), 1 a step failed, 2 usage / not a RastaOS root.
 set -uo pipefail
 
-ROOT=/ BOOT="" DATA="" ONLY="" LIVE=0 TAG="" BUNDLE="" HPBUNDLE="" NOWDE=2.0.5 MIRE="" KEYS="" CHECKOUT=/opt/Pi-tools
+ROOT=/ BOOT="" DATA="" ONLY="" LIVE=0 TAG="" BUNDLE="" HPBUNDLE="" NOWDE=2.0.5 NOWDE_FROM="" MIRE="" KEYS="" CHECKOUT=/opt/Pi-tools
 STEPS="converge hplayer2 stamps version units rtc turbo apfix anna dns wifi nowde media starter"
 EXPLICIT="seal"   # runs only when --only names it
 HOST=player-000 PLAYER=hplayer2@auto HPLAYER=/opt/HPlayer2
@@ -115,6 +122,7 @@ while [ $# -gt 0 ]; do
     --tag) TAG=${2:?--tag TAG}; shift 2 ;;
     --bundle) BUNDLE=$(readlink -f "${2:?--bundle FILE}"); shift 2 ;;
     --nowde) NOWDE=${2:?--nowde VERSION}; shift 2 ;;
+    --nowde-from) NOWDE_FROM=$(readlink -f "${2:?--nowde-from DIR}"); shift 2 ;;
     --hp-bundle) HPBUNDLE=$(readlink -f "${2:?--hp-bundle FILE}"); shift 2 ;;
     --data) DATA=${2:?--data DIR}; shift 2 ;;
     --mire) MIRE=$(readlink -f "${2:?--mire FILE}"); shift 2 ;;
@@ -377,7 +385,23 @@ NM
 }
 
 step_nowde() {
-  local d f; d=$(r /opt/nowde-tools)
+  local d f b v src; d=$(r /opt/nowde-tools)
+  if [ -n "$NOWDE_FROM" ]; then   # a Nowde release tree: its images and its CLI in first
+    v=$(sed -n 's/^#define NOWDE_VERSION "\(.*\)".*/\1/p' "$NOWDE_FROM/src/nowde_config.h" 2>/dev/null | head -1)
+    [ "$v" = "$NOWDE" ] || { say "nowde: $NOWDE_FROM is Nowde '${v:-?}', not --nowde $NOWDE — nothing installed"; return 1; }
+    compgen -G "$NOWDE_FROM/bin/firmware-*.bin" >/dev/null || { say "nowde: no bin/firmware-*.bin in $NOWDE_FROM — nothing installed"; return 1; }
+    mkdir -p "$d"
+    for b in atoms3 atoms3-lr esp32-s3-devkitc-1; do
+      src=$NOWDE_FROM/bin/firmware-$b.bin; [ -s "$src" ] || continue
+      cmp -s "$src" "$d/nowde-$NOWDE-$b.bin" && continue
+      install -m 644 "$src" "$d/nowde-$NOWDE-$b.bin"; did "nowde: nowde-$NOWDE-$b.bin from the $NOWDE release"
+    done
+    for f in nowde-cli.py nowde-bench.py nowde_sysex.py nowde_mesh.py; do
+      src=$NOWDE_FROM/tools/$f; [ -s "$src" ] || continue
+      cmp -s "$src" "$d/$f" && continue
+      install -m 755 "$src" "$d/$f"; did "nowde: $f from the $NOWDE release"
+    done
+  fi
   [ -d "$d" ] || return 0
   compgen -G "$d/nowde-$NOWDE-*.bin" >/dev/null || { say "nowde: no $NOWDE image in $d — nothing removed (--nowde <version>)"; return 1; }
   for f in "$d"/nowde-*.bin; do

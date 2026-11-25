@@ -266,5 +266,16 @@ chk "--root without config.txt refuses (exit 2)" sh -c "'$BAKE' --root '$R' --bo
 chk "--list names the steps" sh -c "'$BAKE' --list | grep -qx wifi"
 chk "--nowde with no such image fails, removes nothing" sh -c "'$BAKE' --only nowde --nowde 9.9 --root '$R' --boot '$B' >/dev/null 2>&1; [ \$? = 1 ] && ls '$R/opt/nowde-tools' | grep -q 2.0.5"
 
+# --nowde-from: a Nowde release tree goes in first, then the prune keeps that one version (rastaos 25/11)
+NW="$T/nowde-2.4.0"; mkdir -p "$NW/src" "$NW/bin" "$NW/tools"
+echo '#define NOWDE_VERSION "2.4.0"' > "$NW/src/nowde_config.h"
+for b in atoms3 atoms3-lr esp32-s3-devkitc-1 atoms3-master; do echo "img $b" > "$NW/bin/firmware-$b.bin"; done
+for f in nowde-cli.py nowde_sysex.py; do echo "# $f" > "$NW/tools/$f"; done
+chk "--nowde-from at another version installs nothing (exit 1)" sh -c "'$BAKE' --only nowde --nowde 2.4.1 --nowde-from '$NW' --root '$R' --boot '$B' >/dev/null 2>&1; [ \$? = 1 ] && ! ls '$R/opt/nowde-tools' | grep -q 2.4"
+chk "--nowde-from installs the release, prunes the rest" sh -c "'$BAKE' --only nowde --nowde 2.4.0 --nowde-from '$NW' --root '$R' --boot '$B' >/dev/null 2>&1"
+chk "  …the release's three images, named by board" [ "$(ls "$R/opt/nowde-tools" | grep '\.bin$' | tr '\n' ' ')" = "nowde-2.4.0-atoms3-lr.bin nowde-2.4.0-atoms3.bin nowde-2.4.0-esp32-s3-devkitc-1.bin " ]
+chk "  …its CLI beside them, executable; older field scripts kept" sh -c "[ -x '$R/opt/nowde-tools/nowde-cli.py' ] && [ -f '$R/opt/nowde-tools/nowde_sysex.py' ] && [ -f '$R/opt/nowde-tools/nowde-ota.py' ]"
+chk "  …a second run changes nothing" sh -c "'$BAKE' --only nowde --nowde 2.4.0 --nowde-from '$NW' --root '$R' --boot '$B' 2>&1 | grep -q '0 change'"
+
 echo "bake-desk: $pass ok, $fail failed"
 [ "$fail" = 0 ]
