@@ -21,7 +21,9 @@
 #     -h, --help
 #
 #   Ledger search order when -l is absent:
-#     ./patch-ledger · ~/.config/pitools/patch-ledger · $(dirname $0)/patch-ledger
+#     ~/.config/pitools/patch-ledger · $(dirname $0)/patch-ledger
+#   Never the working folder: its detect commands run as root on the box, and a
+#   folder you downloaded or unpacked may carry a patch-ledger (pi-tools#t-070).
 #
 #   FORMAT — five `|` separated fields, one patch per line:
 #
@@ -80,7 +82,7 @@ set -uo pipefail
 
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-usage() { sed -n '2,78p' "$0" | sed 's/^# \?//'; }
+usage() { sed -n '2,80p' "$0" | sed 's/^# \?//'; }
 
 LEDGER=""; TARGET="root@10.0.0.1"; HERE=0; ONLY=""; BUDGET=15; SSHB=10
 DRY=0; QUIET=0
@@ -107,7 +109,7 @@ die()  { printf 'probe-level: %s\n' "$*" >&2; exit 2; }
 case "$BUDGET$SSHB" in *[!0-9]*) die "timeouts must be integers" ;; esac
 
 if [ -z "$LEDGER" ]; then
-  for c in "./patch-ledger" "$HOME/.config/pitools/patch-ledger" "$SELF_DIR/patch-ledger"; do
+  for c in "$HOME/.config/pitools/patch-ledger" "$SELF_DIR/patch-ledger"; do
     [ -r "$c" ] && { LEDGER="$c"; break; }
   done
 fi
@@ -217,8 +219,12 @@ if [ "$HERE" = 1 ]; then
   OUT="$(build_program | sh 2>/dev/null)"; transport_rc=$?
 else
   command -v ssh >/dev/null 2>&1 || die "no ssh on this machine (--here probes locally)"
+  # fleet-lib.sh's host-key options: every player answers on 10.0.0.1 with its
+  # own key, so accept-new pinned the first one met and refused every player
+  # after it (pi-tools#t-070) — a key check on a shared address proves nothing.
   OUT="$(build_program | ssh -o BatchMode=yes -o ConnectTimeout="$SSHB" \
-          -o StrictHostKeyChecking=accept-new ${PROBE_SSH_KEY:+-i "$PROBE_SSH_KEY"} \
+          -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+          ${PROBE_SSH_KEY:+-i "$PROBE_SSH_KEY"} \
           "$TARGET" 'sh -s' 2>/dev/null)"; transport_rc=$?
 fi
 

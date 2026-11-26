@@ -85,8 +85,12 @@ elif [ "$HERE" = 1 ]; then
   OUT="$(sh -c "$PROGRAM" 2>/dev/null)"; rc=$?; BOX="HERE (this machine)"
 else
   command -v ssh >/dev/null 2>&1 || die "no ssh on this machine (--here reads locally)"
+  # fleet-lib.sh's host-key options, as probe-level: every player answers on 10.0.0.1 with its
+  # own key — accept-new pinned the first and refused the rest (pi-tools#t-070). The box names
+  # itself instead: HOST, first line of the program.
   OUT="$(printf '%s\n' "$PROGRAM" | ssh -o BatchMode=yes -o ConnectTimeout="$SSHB" \
-          -o StrictHostKeyChecking=accept-new ${PROBE_SSH_KEY:+-i "$PROBE_SSH_KEY"} \
+          -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+          ${PROBE_SSH_KEY:+-i "$PROBE_SSH_KEY"} \
           "$TARGET" 'sh -s' 2>/dev/null)"; rc=$?
   BOX="$TARGET"
 fi

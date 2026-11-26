@@ -273,8 +273,16 @@ state.** This repo ships the reader and a worked example; the real ledger lives
 with the fleet it describes, and the ids are that ledger's — a fleet's `P7` is
 whatever its own ledger says `P7` is, and the example's numbering is nobody's.
 
-Search order when `-l` is not given: `./patch-ledger`,
-`~/.config/pitools/patch-ledger`, `bench/patch-ledger`.
+Search order when `-l` is not given: `~/.config/pitools/patch-ledger`, then
+`bench/patch-ledger`. Never the working folder — its detect commands run as root
+on the box, and a folder you downloaded may carry a `patch-ledger`
+(pi-tools#t-070; `./patch-ledger` was searched first until then).
+
+`probe-level` and `module-level` reach a player with `fleet-lib.sh`'s host-key
+options (`StrictHostKeyChecking=no`, `UserKnownHostsFile=/dev/null`): every
+player answers on 10.0.0.1 with its own key, and `accept-new` pinned the first
+one met and refused every player after it. Desk test: `bash
+bench/probe-level-desk.sh` (no root, no player — a stub `ssh` on `PATH`).
 
 Five `|` separated fields, the detect command last so it can contain `|`
 (pipelines are the normal case):
