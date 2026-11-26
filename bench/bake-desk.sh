@@ -266,12 +266,53 @@ chk "--root without config.txt refuses (exit 2)" sh -c "'$BAKE' --root '$R' --bo
 chk "--list names the steps" sh -c "'$BAKE' --list | grep -qx wifi"
 chk "--nowde with no such image fails, removes nothing" sh -c "'$BAKE' --only nowde --nowde 9.9 --root '$R' --boot '$B' >/dev/null 2>&1; [ \$? = 1 ] && ls '$R/opt/nowde-tools' | grep -q 2.0.5"
 
-# --nowde-from: a Nowde release tree goes in first, then the prune keeps that one version (rastaos 25/11)
-NW="$T/nowde-2.4.0"; mkdir -p "$NW/src" "$NW/bin" "$NW/tools"
-echo '#define NOWDE_VERSION "2.4.0"' > "$NW/src/nowde_config.h"
-for b in atoms3 atoms3-lr esp32-s3-devkitc-1 atoms3-master; do echo "img $b" > "$NW/bin/firmware-$b.bin"; done
+# --nowde-from: a Nowde release tree goes in first, then the prune keeps that one version (rastaos 25/11).
+# The tree is a git clone and must BE the release (nowde#t-055 → pi-tools#t-068): this history replays
+# Nowde's of 25/11 — « release 2.4.0 » (0611cd8, tag v2.4.0), then #t-053's fix (08d136c) touching only
+# src/, which was main the day 7.5 was to be baked: it read as 2.4.0 and carried 2.4.0's images.
+NW="$T/nowde"; mkdir -p "$NW/src" "$NW/bin" "$NW/tools"
+ng() { git -C "$NW" -c user.name=bake-desk -c user.email=bake-desk@localhost -c commit.gpgsign=false \
+         -c tag.gpgsign=false -c core.hooksPath=/dev/null "$@" >/dev/null 2>&1; }
+nw() { "$BAKE" --only nowde --nowde "$1" --nowde-from "${2:-$NW}" --root "$R" --boot "$B" > "$T/nw.log" 2>&1; }
+refused() { [ "$1" = 1 ] && ! ls "$R/opt/nowde-tools" | grep -q 'nowde-2\.4'; }   # exit 1, no 2.4 image
+git init -q "$NW"
+echo '#define NOWDE_VERSION "2.4.0"' > "$NW/src/nowde_config.h"; echo '// 2.4.0' > "$NW/src/nowde.cpp"
+echo '[env:atoms3]' > "$NW/platformio.ini"
+for b in atoms3 atoms3-lr esp32-s3-devkitc-1 atoms3-master; do echo "img $b 2.4.0" > "$NW/bin/firmware-$b.bin"; done
 for f in nowde-cli.py nowde_sysex.py; do echo "# $f" > "$NW/tools/$f"; done
+ng add -A; ng commit -m 'release 2.4.0'; ng tag -a v2.4.0 -m 'Nowde 2.4.0'
+echo '// a slave still on "-" takes its first layer' >> "$NW/src/nowde.cpp"; ng commit -am '2.4: the never-layered slave fix'
+chk "the fixture: main one source commit past v2.4.0, bin/ untouched" \
+  [ "$(git -C "$NW" rev-list --count v2.4.0..HEAD):$(git -C "$NW" diff --name-only v2.4.0 HEAD -- bin)" = "1:" ]
 chk "--nowde-from at another version installs nothing (exit 1)" sh -c "'$BAKE' --only nowde --nowde 2.4.1 --nowde-from '$NW' --root '$R' --boot '$B' >/dev/null 2>&1; [ \$? = 1 ] && ! ls '$R/opt/nowde-tools' | grep -q 2.4"
+nw 2.4.0; rc=$?
+chk "25/11: main past its release, read as 2.4.0, is refused (exit 1), nothing installed" refused "$rc"
+chk "  …the refusal: not at tag v2.4.0, check it out or cut a release" grep -q 'not at its tag v2.4.0 .*git checkout v2.4.0; .*cut a release' "$T/nw.log"
+# the same code tagged as a release with no rebuild: NOWDE_VERSION bumped and tagged, bin/ still 2.4.0's
+sed -i.bak 's/2\.4\.0/2.4.1/' "$NW/src/nowde_config.h"; rm -f "$NW/src/nowde_config.h.bak"
+ng commit -am '2.4.1'; ng tag -a v2.4.1 -m 'Nowde 2.4.1'
+nw 2.4.1; rc=$?
+chk "a tag on source newer than its bin/ is refused (exit 1), nothing installed" refused "$rc"
+chk "  …the refusal: bin/ older than its source, rebuild" grep -q "v2.4.1's bin/ is older than its source .*rebuild bin/" "$T/nw.log"
+# the cure: NOWDE_VERSION bumped, then bin/ rebuilt from that source in a later commit, tagged there
+sed -i.bak 's/2\.4\.1/2.4.2/' "$NW/src/nowde_config.h"; rm -f "$NW/src/nowde_config.h.bak"
+ng commit -m 'NOWDE_VERSION 2.4.2' -- src/nowde_config.h
+for b in atoms3 atoms3-lr esp32-s3-devkitc-1; do echo "img $b 2.4.2" > "$NW/bin/firmware-$b.bin"; done
+ng commit -am 'release 2.4.2 — bin/ built from this source'
+nw 2.4.2; rc=$?
+chk "untagged: 2.4.2 before its v2.4.2 tag is refused (exit 1), nothing installed" refused "$rc"
+chk "  …the refusal names the missing tag" grep -q 'has no tag v2.4.2 .*git fetch --tags' "$T/nw.log"
+ng tag -a v2.4.2 -m 'Nowde 2.4.2'
+echo 'img atoms3 rebuilt here' > "$NW/bin/firmware-atoms3.bin"; nw 2.4.2; rc=$?; ng checkout -- bin
+chk "at its tag, an image changed in the tree is refused (exit 1), nothing installed" refused "$rc"
+chk "  …the refusal names the file" grep -q "bin/firmware-atoms3.bin is not v2.4.2's" "$T/nw.log"
+cp -R "$NW" "$T/nowde-copy"; rm -rf "$T/nowde-copy/.git"; nw 2.4.2 "$T/nowde-copy"; rc=$?
+chk "a copied tree with no .git is refused (exit 1), nothing installed" refused "$rc"
+chk "  …the refusal says it is not a git clone" grep -q 'is not a git clone' "$T/nw.log"
+GIT_TEST_ASSUME_DIFFERENT_OWNER=1 nw 2.4.2; rc=$?   # git ≥ 2.35.2 then sees another user's repo: the bake as root
+chk "at its tag, bin/ committed after its source: installed — even from another user's clone" [ "$rc" = 0 ]
+chk "  …its images, the tag's bytes" [ "$(cat "$R/opt/nowde-tools/nowde-2.4.2-atoms3.bin")" = 'img atoms3 2.4.2' ]
+ng checkout -q v2.4.0
 chk "--nowde-from installs the release, prunes the rest" sh -c "'$BAKE' --only nowde --nowde 2.4.0 --nowde-from '$NW' --root '$R' --boot '$B' >/dev/null 2>&1"
 chk "  …the release's three images, named by board" [ "$(ls "$R/opt/nowde-tools" | grep '\.bin$' | tr '\n' ' ')" = "nowde-2.4.0-atoms3-lr.bin nowde-2.4.0-atoms3.bin nowde-2.4.0-esp32-s3-devkitc-1.bin " ]
 chk "  …its CLI beside them, executable; older field scripts kept" sh -c "[ -x '$R/opt/nowde-tools/nowde-cli.py' ] && [ -f '$R/opt/nowde-tools/nowde_sysex.py' ] && [ -f '$R/opt/nowde-tools/nowde-ota.py' ]"

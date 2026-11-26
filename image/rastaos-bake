@@ -8,7 +8,7 @@
 #   image/rastaos-bake --list                     # the steps, in order
 #   sudo image/rastaos-bake --only dns,wifi       # a subset (comma-separated; no --tag without converge)
 #   --bundle FILE  the tag from a git bundle (no network)   --nowde VER  the one Nowde firmware kept
-#   --nowde-from DIR  a Nowde tree AT the release --nowde names: its bin/ images and tools/ CLI go in first
+#   --nowde-from DIR  a Nowde clone AT tag v<--nowde>, bin/ built from its source: images + tools/ CLI go in first
 #   --data DIR     the card's data partition (default /data; offline <root>/data)   --mire FILE  0_mire.mp4
 #   sudo image/rastaos-bake --only seal --root /mnt/p2 --boot /mnt/p1 --data /mnt/p3   # the CAPTURED image
 #
@@ -64,6 +64,10 @@
 #            bin/firmware-{atoms3,atoms3-lr,esp32-s3-devkitc-1}.bin become nowde-<VER>-<board>.bin, its
 #            tools/ CLI (nowde-cli.py, nowde-bench.py, nowde_sysex.py, nowde_mesh.py) is copied beside them —
 #            the release's own OTA protocol (run with /opt/HPlayer2/.venv/bin/python: mido + rtmidi, offline).
+#            DIR must BE that release (nowde#t-055): a git clone whose HEAD is tag v<VER>, whose last commit
+#            touching bin/ is, or descends from, the last touching the build's source (NOWDE_SRC), every
+#            copied file byte for byte HEAD's — else nothing is installed and the refusal names the cure.
+#            25/11's Nowde main read as 2.4.0 and carried 2.4.0's images under #t-053's newer code.
 #            Then the prune keeps that one version. Runbooks' older field scripts (nowde-ota.py …) stay.
 #   media    /data/media back to the generic set: ONLY 0_mire.mp4. 7.4's bake put the Anna show set there
 #            (+0.6 GB) and deleted the mire, which lives in no repo: --mire FILE puts it back (a 7.3 card's
@@ -106,6 +110,9 @@ MASK_UNITS="fake-hwclock.service rpi-eeprom-update.service nfs-client.target rsy
 # subnets — both with errors ignored, so a mask on either fails silently at the show. A glob, not a list:
 # setnet names the interface. bench/bake-desk.sh checks this against setnet's own systemctl calls.
 SETNET_UNITS="dnsmasq.service hostapd@*.service"
+# What a Nowde image is built from: a commit touching any of these after the last bin/ commit means the
+# images predate the code (--nowde-from). A new build input (partitions file, a script) goes here.
+NOWDE_SRC="src platformio.ini"
 
 say()  { echo "[bake] $*"; }
 die()  { echo "[bake] FATAL: $*" >&2; exit "${2:-1}"; }
@@ -384,19 +391,54 @@ NM
   return 0
 }
 
+# git on the --nowde-from tree, from inside it (pathspecs are the tree's own), with an explicit --git-dir:
+# the bake is root on another user's clone, and the cards' git (2.20.1+deb10u9) ignores
+# `-c safe.directory` given on the command line — only a named git dir gets past its owner check.
+ngit() { (cd "$NOWDE_FROM" && git -c safe.directory="$NOWDE_FROM" --git-dir="$NOWDE_FROM/.git" --work-tree="$NOWDE_FROM" "$@") 2>/dev/null; }
+
+# --nowde-from's tree must BE the release --nowde claims (nowde#t-055). Git says it with no build — a fresh
+# build never matches a release's bytes (another machine, same toolchain: other build ids, 25/11). Args: the
+# tree-relative files the step will copy. Returns 1, having said why and the cure, on the first refusal.
+nowde_at_release() {
+  local t=$NOWDE_FROM head tag b s p
+  local cure="cut a release — NOWDE_VERSION and bin/ in one commit, tagged v$NOWDE — and bake from that tag"
+  command -v git >/dev/null || { say "nowde: --nowde-from reads the tree's history, and there is no git here — nothing installed"; return 1; }
+  [ -e "$t/.git" ] && head=$(ngit rev-parse -q --verify HEAD) \
+    || { say "nowde: $t is not a git clone — nothing installed (bake from a Nowde clone checked out at tag v$NOWDE)"; return 1; }
+  tag=$(ngit rev-parse -q --verify "refs/tags/v$NOWDE^{commit}") \
+    || { say "nowde: $t has no tag v$NOWDE — nothing installed (git fetch --tags, then git checkout v$NOWDE; no such release yet: $cure)"; return 1; }
+  [ "$head" = "$tag" ] \
+    || { say "nowde: $t is at ${head:0:7}, not at its tag v$NOWDE (${tag:0:7}) — nothing installed (git checkout v$NOWDE; code past the release: $cure)"; return 1; }
+  # shellcheck disable=SC2086   # NOWDE_SRC is a list of pathspecs
+  b=$(ngit log -1 --format=%H HEAD -- bin); s=$(ngit log -1 --format=%H HEAD -- $NOWDE_SRC)
+  [ -n "$b" ] && [ -n "$s" ] \
+    || { say "nowde: v$NOWDE has no committed bin/ or no committed source ($NOWDE_SRC) — nothing installed"; return 1; }
+  [ "$b" = "$s" ] || ngit merge-base --is-ancestor "$s" "$b" \
+    || { say "nowde: v$NOWDE's bin/ is older than its source — last bin/ commit ${b:0:7}, last source change ${s:0:7} after it — nothing installed (rebuild bin/ from this source and $cure)"; return 1; }
+  for p in "$@"; do
+    [ "$(ngit hash-object -- "$p")" = "$(ngit rev-parse -q --verify "HEAD:$p")" ] \
+      || { say "nowde: $t/$p is not v$NOWDE's (changed or untracked since the tag) — nothing installed (git checkout v$NOWDE -- $p, or $cure)"; return 1; }
+  done
+  return 0
+}
+
 step_nowde() {
-  local d f b v src; d=$(r /opt/nowde-tools)
+  local d f b v src files=(); d=$(r /opt/nowde-tools)
+  local boards="atoms3 atoms3-lr esp32-s3-devkitc-1" tools="nowde-cli.py nowde-bench.py nowde_sysex.py nowde_mesh.py"
   if [ -n "$NOWDE_FROM" ]; then   # a Nowde release tree: its images and its CLI in first
     v=$(sed -n 's/^#define NOWDE_VERSION "\(.*\)".*/\1/p' "$NOWDE_FROM/src/nowde_config.h" 2>/dev/null | head -1)
     [ "$v" = "$NOWDE" ] || { say "nowde: $NOWDE_FROM is Nowde '${v:-?}', not --nowde $NOWDE — nothing installed"; return 1; }
     compgen -G "$NOWDE_FROM/bin/firmware-*.bin" >/dev/null || { say "nowde: no bin/firmware-*.bin in $NOWDE_FROM — nothing installed"; return 1; }
+    for b in $boards; do [ -s "$NOWDE_FROM/bin/firmware-$b.bin" ] && files+=("bin/firmware-$b.bin"); done
+    for f in $tools; do [ -s "$NOWDE_FROM/tools/$f" ] && files+=("tools/$f"); done
+    nowde_at_release ${files[@]+"${files[@]}"} || return 1   # (bash 3.2 + set -u: an empty array is unbound)
     mkdir -p "$d"
-    for b in atoms3 atoms3-lr esp32-s3-devkitc-1; do
+    for b in $boards; do
       src=$NOWDE_FROM/bin/firmware-$b.bin; [ -s "$src" ] || continue
       cmp -s "$src" "$d/nowde-$NOWDE-$b.bin" && continue
       install -m 644 "$src" "$d/nowde-$NOWDE-$b.bin"; did "nowde: nowde-$NOWDE-$b.bin from the $NOWDE release"
     done
-    for f in nowde-cli.py nowde-bench.py nowde_sysex.py nowde_mesh.py; do
+    for f in $tools; do
       src=$NOWDE_FROM/tools/$f; [ -s "$src" ] || continue
       cmp -s "$src" "$d/$f" && continue
       install -m 755 "$src" "$d/$f"; did "nowde: $f from the $NOWDE release"
