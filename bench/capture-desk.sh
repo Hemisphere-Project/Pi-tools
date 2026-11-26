@@ -7,6 +7,10 @@
 # `pull`: the stub ssh runs the remote scripts here, with findmnt/sfdisk/blkid/e2image/fsfreeze stubbed
 # around fixture partitions — refusals before any read (/ or /boot rw, rw count, /data not p3), the
 # pieces byte-for-byte, SHA256SUMS, /data frozen for its read only and thawed even when the read dies.
+# Its ssh (pi-tools#t-074): every call records the card's key in the pull's own known_hosts (accept-new,
+# one file for the whole pull, never under ~/.ssh — a bench Pi's root is read-only), gone at exit; the
+# options pass the real ssh's own parse (`ssh -G`, when this machine has one); an ssh that cannot get in
+# (exit 255) is named as such — with `ssh -A` when no agent is here — and reads nothing.
 # `build -n`: the checks (SHA256SUMS present, covering, matching; a p3 in the table) and the image's
 # table (p3 at --data-mib, no p4, no last-lba, the card's disk id). The root half — loop mount, seal,
 # fsck, flightbox-p4 --check — is not run here: seal is bake-desk.sh's, the rest burn-batch's.
@@ -34,13 +38,17 @@ ${DEV}p2 : start=      532480, size=    10485760, type=83
 ${DEV}p3 : start=    11018240, size=    50331648, type=83
 ${DEV}p4 : start=    61349888, size=     1048576, type=da
 EOF
-reset_card() { echo ro,relatime > "$S/root"; echo ro,relatime > "$S/boot"; echo "${DEV}p3" > "$S/data"; echo 0 > "$S/rw.count"; rm -f "$S/e2fail" "$S/freeze.log" "$S/e2image.log"; }
+reset_card() { echo ro,relatime > "$S/root"; echo ro,relatime > "$S/boot"; echo "${DEV}p3" > "$S/data"; echo 0 > "$S/rw.count"; rm -f "$S/e2fail" "$S/freeze.log" "$S/e2image.log" "$S/ssh.log" "$S/ssh255"; }
 
-# the stub ssh: options and host dropped, the remote script run HERE with the card's tools stubbed and
-# its rw counter pointed at the fixture
+# the stub ssh: each call's -o values logged (one line per call), options and host dropped, the remote
+# script run HERE with the card's tools stubbed and its rw counter pointed at the fixture. $S/ssh255
+# present = ssh cannot get in (exit 255) and runs nothing.
+REAL_SSH=$(command -v ssh || true)
 cat > "$X/ssh" <<EOF
 #!/usr/bin/env bash
-while [ \$# -gt 0 ]; do case \$1 in -o) shift 2 ;; -*) shift ;; *) break ;; esac; done
+while [ \$# -gt 0 ]; do case \$1 in -o) printf '%s ' "\$2" >> "$S/ssh.log"; shift 2 ;; -*) shift ;; *) break ;; esac; done
+echo >> "$S/ssh.log"
+[ -e "$S/ssh255" ] && { echo "root@\$1: Permission denied (publickey)." >&2; exit 255; }
 shift    # the host
 sed 's#/run/pitools-rw.count#$S/rw.count#g' | PATH=$X/card:\$PATH bash -c "\$*"
 EOF
@@ -73,6 +81,8 @@ echo "\$*" >> "$S/freeze.log"
 EOF
 chmod 755 "$X/ssh" "$X/card"/*
 export PATH=$X:$PATH
+export TMPDIR=$T/tmp; mkdir -p "$TMPDIR"     # where the pull's known_hosts lives, so its removal shows
+tmp_empty() { [ -z "$(ls -A "$TMPDIR")" ]; }
 
 # ---------------------------------------------------------------- pull: refusals
 refused() { # refused <what> <state file> <value>
@@ -100,6 +110,30 @@ chk "SHA256SUMS covers the five pieces and checks" sh -c "cd '$ST' && [ \$(wc -l
 chk "p2 read with -ra (read-only mount), p3 with -fra" sh -c "grep -qx -- '-ra ${DEV}p2 -' '$S/e2image.log' && grep -qx -- '-fra ${DEV}p3 -' '$S/e2image.log'"
 chk "/data frozen once, before its read" [ "$(grep -c -- '^-f /data$' "$S/freeze.log")" = 1 ]
 chk "  …and thawed after it" [ "$(tail -1 "$S/freeze.log")" = "-u /data" ]
+
+# its ssh (pi-tools#t-074): the card's key in the pull's own known_hosts, never ~/.ssh
+KHS=$(grep -o 'UserKnownHostsFile=[^ ]*' "$S/ssh.log" | sort -u)
+chk "7 ssh calls (check, table, blkid, p1, p2, p3, thaw), each accept-new + BatchMode" \
+  sh -c "[ \$(wc -l < '$S/ssh.log') = 7 ] && [ \$(grep -c 'StrictHostKeyChecking=accept-new' '$S/ssh.log') = 7 ] && [ \$(grep -c 'BatchMode=yes' '$S/ssh.log') = 7 ]"
+chk "  …one known_hosts for the whole pull (one pull, one card)" [ "$(printf '%s\n' "$KHS" | grep -c .)" = 1 ]
+chk "  …in a temp directory, not under ~/.ssh" sh -c "case '${KHS#*=}' in '$TMPDIR'/rastaos-capture.*/known_hosts) exit 0 ;; *) exit 1 ;; esac"
+chk "  …removed when the pull ends" tmp_empty
+if [ -n "$REAL_SSH" ]; then   # a typo'd option passes the stub and fails on the card: the real parser reads them
+  # shellcheck disable=SC2046 # one -o per logged value, on purpose
+  "$REAL_SSH" -G $(head -1 "$S/ssh.log" | sed -E 's/([^ ]+)/-o \1/g') bench-01 > "$T/ssh-G" 2>&1; rc=$?
+  chk "  …the real ssh takes the options (ssh -G)" sh -c "[ $rc = 0 ] && grep -qx 'stricthostkeychecking accept-new' '$T/ssh-G' && grep -qx 'userknownhostsfile ${KHS#*=}' '$T/ssh-G'"
+fi
+
+# ssh cannot get in: named as ssh's failure, not the card's — the agent hint when no agent is here
+reset_card; touch "$S/ssh255"
+SSH_AUTH_SOCK='' "$CAP" pull bench-01 "$T/st3" --dev "$DEV" > "$T/out" 2>&1; rc=$?
+chk "an ssh that cannot get in fails the pull (exit 1)" [ "$rc" = 1 ]
+chk "  …says ssh did not get in, not that the card is not ready" sh -c "grep -q 'ssh did not get in (exit 255' '$T/out' && ! grep -q 'not ready to capture' '$T/out'"
+chk "  …no agent here: says log in with ssh -A" grep -q 'SSH_AUTH_SOCK is empty.*ssh -A' "$T/out"
+chk "  …reads nothing, freezes nothing, leaves no temp directory" sh -c "[ ! -e '$T/st3' ] && [ ! -e '$S/freeze.log' ] && [ -z \"\$(ls -A '$TMPDIR')\" ]"
+reset_card; touch "$S/ssh255"
+SSH_AUTH_SOCK=/run/agent.sock "$CAP" pull bench-01 "$T/st3" --dev "$DEV" > "$T/out" 2>&1
+chk "  …with an agent here: asks for the card and the key instead" sh -c "grep -q 'is the card up' '$T/out' && ! grep -q 'ssh -A' '$T/out'"
 
 # a read that dies mid-way: /data is thawed all the same, and the stage carries no SHA256SUMS
 reset_card; touch "$S/e2fail"

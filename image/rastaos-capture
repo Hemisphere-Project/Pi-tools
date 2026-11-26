@@ -19,6 +19,14 @@
 # where the build runs (rsync -P --bwlimit over the atelier uplink, or a Pi on the rig LAN); `build`
 # checks SHA256SUMS first. After: bench/burn-batch -n [--flightbox] IMG — the build says which.
 #
+# `pull` from a bench Pi (its / read-only, no key of its own on the card): log in to that Pi with
+# `ssh -A` — the pull's ssh logs in to the card with your forwarded agent. The card's host key is
+# recorded in the pull's own known_hosts, in a temp directory removed on exit, never under ~/.ssh (a
+# read-only root cannot take it); every read after the first must meet that same key: one pull, one
+# card. A bench card's key changes with each burn, so no known_hosts outlives the pull. 26/11, the
+# verb's first real run (bench-02 pulling bench-01) needed both by hand. An ssh that cannot get in
+# (exit 255) is named as such, never as a card that is not ready.
+#
 # The build prints what the image carries (HPlayer2 and its rollback point, /boot/VERSION, the pi3
 # dtbs) and WARNS when VERSION's recipe sha is not this tree's: the card was baked by another recipe
 # than the one sealing it (20/11: VERSION said @ecbe41a on a card re-baked at 1c927c4). A failed
@@ -39,12 +47,19 @@ abspath() { case $1 in /*) echo "$1" ;; *) echo "$PWD/$1" ;; esac; }
 
 # ------------------------------------------------------------------ pull
 pull() {
-  local host=$1 stage=$2 dev=$3 qdev rc f
+  local host=$1 stage=$2 dev=$3 qdev rc f hint
   qdev=$(printf %q "$dev")
-  rsh() { ssh -o BatchMode=yes "$host" "DEV=$qdev bash -s"; }   # the remote script on stdin
+  # the card's host key: recorded at the first contact (accept-new) in this pull's own known_hosts and
+  # required at every read after it. Nothing under ~/.ssh: a bench Pi's root is read-only (26/11).
+  KH=$(mktemp -d "${TMPDIR:-/tmp}/rastaos-capture.XXXXXX") || die "no temp directory for the pull's known_hosts"
+  trap 'rm -rf "$KH"' EXIT
+  SSHO=(-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o "UserKnownHostsFile=$KH/known_hosts"
+        -o LogLevel=ERROR)
+  rsh() { ssh "${SSHO[@]}" "$host" "DEV=$qdev bash -s"; }   # the remote script on stdin
 
   # every refusal before any read
-  rsh <<'CHECK' || die "$host: not ready to capture (above) — nothing read"
+  rc=0
+  rsh <<'CHECK' || rc=$?
 o() { findmnt -no OPTIONS "$1" 2>/dev/null | cut -d, -f1; }
 [ "$(o /)" = ro ]     || { echo "/ is not read-only — run ro first" >&2; exit 1; }
 [ "$(o /boot)" = ro ] || { echo "/boot is not read-only — run ro first" >&2; exit 1; }
@@ -56,6 +71,14 @@ for t in sfdisk blkid e2image fsfreeze dd gzip; do
   command -v "$t" >/dev/null || { echo "no $t on the card" >&2; exit 1; }
 done
 CHECK
+  case $rc in
+    0) ;;
+    255) # ssh's own failure, not the card's answer: unreachable, or no key the card takes
+      hint="is the card up at that address, and does this machine hold a key it takes?"
+      [ -n "${SSH_AUTH_SOCK:-}" ] || hint="no agent here (SSH_AUTH_SOCK is empty): from a bench Pi, log in to it with ssh -A, then pull again"
+      die "$host: ssh did not get in (exit 255, above) — $hint — nothing read" ;;
+    *) die "$host: not ready to capture (above) — nothing read" ;;
+  esac
 
   mkdir -p "$stage"; cd "$stage"
   rm -f SHA256SUMS
@@ -89,7 +112,7 @@ trap 'fsfreeze -u /data 2>/dev/null' EXIT
 trap 'exit 1' HUP INT TERM PIPE
 e2image -fra "${DEV}p3" - | "$Z" -1
 R
-  ssh -o BatchMode=yes "$host" 'fsfreeze -u /data 2>/dev/null; true' || true    # belt and braces
+  ssh "${SSHO[@]}" "$host" 'fsfreeze -u /data 2>/dev/null; true' || true    # belt and braces
   [ "$rc" = 0 ] || die "$host: the /data read failed (exit $rc) — /data thawed, no SHA256SUMS"
 
   grep -qE 'p3 :' table.sfdisk || die "table.sfdisk names no p3 — is $dev the card?"
