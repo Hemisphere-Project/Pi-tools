@@ -69,6 +69,9 @@
 #            copied file byte for byte HEAD's — else nothing is installed and the refusal names the cure.
 #            25/11's Nowde main read as 2.4.0 and carried 2.4.0's images under #t-053's newer code.
 #            Then the prune keeps that one version. Runbooks' older field scripts (nowde-ota.py …) stay.
+#            One firmware is all a card can flash: a 7.5 player (--nowde 2.4.1) has no 2.0.5 image, so it
+#            cannot put a node back on the garden's 2.0.5 — flash such a spare from a laptop (Nowde's
+#            garden-2.0.5), not from a 7.5 player.
 #   media    /data/media back to the generic set: ONLY 0_mire.mp4. 7.4's bake put the Anna show set there
 #            (+0.6 GB) and deleted the mire, which lives in no repo: --mire FILE puts it back (a 7.3 card's
 #            /data/media/0_mire.mp4). The saved player settings /data/hplayer2*.cfg go too: a saved cfg
