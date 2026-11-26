@@ -68,7 +68,13 @@ ok()   { echo "${C_OK}  $*${C_END}"; }
 warn() { echo "${C_WARN}  $*${C_END}"; }
 err()  { echo "${C_ERR}  $*${C_END}"; }
 
-GIT() { git -c safe.directory='*' "$@"; }
+# --no-optional-locks: a plain `git status` REFRESHES the index when a file's
+# stat info moved (a touched mtime, a copied card) and writes .git/index back —
+# as root here, so a dry run, or a card already at its target (that path never
+# reaches the chown below), left a changed index owned by root on the card
+# (pi-tools#t-070). Without the optional lock no read writes: fetch and merge
+# still take the locks they need.
+GIT() { git --no-optional-locks -c safe.directory='*' "$@"; }
 
 # the carousel mounts devices: root only. --apply-to works unprivileged on
 # trees you own (chown becomes a no-op); use root for a real card mount.
