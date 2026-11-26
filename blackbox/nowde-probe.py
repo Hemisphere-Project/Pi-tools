@@ -6,14 +6,19 @@ Sends QUERY_RUNNING_STATE (0x03) — the very query HPlayer2 sends every 1 s (ma
 so it changes nothing on the node and HPlayer2 handles the reply as one more of its own polls:
   master node -> RUNNING_STATE chunks: the receiver table (who is heard, each slave's lock, age)
   slave node  -> HELLO: its own lock quality (0 none / 1 coarse / 2 locked), uptime, LR
+                 + from 2.0.5: link lost (0/1), ms since the last MEDIA_SYNC it accepted (does it
+                 hear the master's POSITION, not only its clock), radio-watchdog restarts
   nothing in 3 s -> node=dead   (USB/MIDI link gone or node hung — what a freewheel looks like)
 Runs with HPlayer2's venv (has mido):  /opt/HPlayer2/.venv/bin/python nowde-probe.py
 Output, one line of key=value:
   node=master slaves=5 locked=5 coarse=0 age=1200ms rx=99E008:2,996CD4:2,99B52C:2,98A91C:2,00099C:2
-  node=slave sq=2 up=812m boot=POWERON lr=0 v=2.0.3
+  node=slave sq=2 up=812m boot=POWERON lr=0 lost=0 stream=340ms wdog=0 v=2.0.5
+  node=slave sq=2 up=812m boot=POWERON lr=0 v=2.0.3        (before 2.0.5: no tail, same line as ever)
   node=dead | node=noport | node=nomido
-Wire format copied from HPlayer2 core/interfaces/nowde.py (2.0.x), kept here so the probe does not
-import HPlayer2 and keeps working across its versions."""
+  stream=16s+ = nothing for >= 16.4 s, or never since boot (the node caps it at 0x3FFF).
+Wire format copied from HPlayer2 core/interfaces/nowde.py (2.0.x) and Nowde docs/PROTOCOL.md (HELLO
+row, read by length), kept here so the probe does not import HPlayer2 and keeps working across its
+versions."""
 import sys, time
 try:
     import mido
@@ -51,7 +56,22 @@ def parse_hello(d):
         info['sq'] = d[18]
     if len(d) >= 20:
         info['lr'] = int(bool(d[19]))
+    if len(d) >= 24:                       # 2.0.5 tail: the receive link as the node sees it
+        info['lost'] = int(bool(d[20]))
+        info['stream'] = (d[21] << 7) | d[22]   # ms since the last MEDIA_SYNC; 0x3FFF = >= 16.4 s or never
+        info['wdog'] = d[23]               # radio-watchdog restarts since power-on, capped at 127
     return info
+
+
+def hello_tail(hello):
+    """The 2.0.5 keys, or '' — a node before 2.0.5 sends a shorter HELLO and its line stays as it was.
+    A master never accepts a MEDIA_SYNC (its stream age is always 0x3FFF): only its restarts say anything."""
+    if 'wdog' not in hello:
+        return ''
+    if hello.get('role') == 'master':
+        return ' wdog=%d' % hello['wdog']
+    stream = '16s+' if hello['stream'] >= 0x3FFF else '%dms' % hello['stream']
+    return ' lost=%d stream=%s wdog=%d' % (hello['lost'], stream, hello['wdog'])
 
 
 def parse_running_state(d):
@@ -110,8 +130,9 @@ def main():
         tab = ','.join('%s:%s' % (mac[-6:], r['sq']) for mac, r in sorted(rx.items()))
         print("node=master slaves=%d locked=%d coarse=%d age=%dms rx=%s" % (len(rx), locked, coarse, age, tab or '-'))
     elif hello is not None:
-        print("node=%s sq=%s up=%dm boot=%s lr=%s v=%s" % (hello.get('role', '?'), hello.get('sq', '?'),
-              hello['uptime'] // 60000, hello['boot'], hello.get('lr', '?'), hello['version']))
+        print("node=%s sq=%s up=%dm boot=%s lr=%s%s v=%s" % (hello.get('role', '?'), hello.get('sq', '?'),
+              hello['uptime'] // 60000, hello['boot'], hello.get('lr', '?'), hello_tail(hello),
+              hello['version']))
     else:
         print("node=dead")
 
