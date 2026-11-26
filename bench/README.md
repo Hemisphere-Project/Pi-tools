@@ -539,7 +539,10 @@ because skipping it produces a card that looks burned and does not boot:
    written`. Every other ext4 is checked and never written — a golden's rootfs
    is the thing under test, not something to silently repair; a finding there
    is a warning. `--fsck-only` runs this phase alone, which is worth doing once
-   to an image you are about to archive.
+   to an image you are about to archive. `-n --fsck-only` only asks: the image
+   goes on a **read-only** loop (`losetup -r`, still root), the repairs it needs
+   are named and none is made — until pi-tools#t-070 `-n` was ignored there and
+   a dirty golden was repaired.
 2. **Unmount.** The desktop automounts every inserted card read-write.
 3. **Burn**, in parallel, capped by `-j` (default 3).
 4. **`cmp` every card against the image.** This is the phase the tool exists
@@ -629,11 +632,13 @@ than the image reads identical, and a single byte flipped 100 MB in is caught
 with its offset.
 
 Phase 1 has its own desk test, `sudo bash bench/burn-fsck-desk.sh` (root for
-`losetup`; 49 checks). On a RastaOS-shaped image file, a clean golden keeps its
+`losetup`; 62 checks). On a RastaOS-shaped image file, a clean golden keeps its
 sha256, its mtime and `/data`'s last-checked time. A dirty bit, an unreplayed
 journal, a superblock left not clean and freed blocks are each repaired, the
 other partitions' bytes untouched, and the next run writes nothing. A journal
-on the rootfs is a warning and is never written. Then it burns for real —
+on the rootfs is a warning and is never written. Under `-n --fsck-only` a dirty
+golden has both repairs named and keeps its sha256 and mtime, still dirty, no
+loop device left on it. Then it burns for real —
 phases 1 to 4, `dd` and `cmp` — onto a 300 MB `scsi_debug` RAM card it creates
 and removes, and checks the golden is unchanged after the burn.
 

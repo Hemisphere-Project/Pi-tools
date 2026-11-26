@@ -8,10 +8,11 @@
 # Root, for losetup: phase 1 runs on the real loop devices, not on a stub.
 # Layer 1 builds a RastaOS-shaped image (p1 boot vfat, p2 rootfs ext4, p3 /data
 # ext4) and runs `burn-batch --fsck-only` on it clean, then with each state the
-# phase exists for. Layer 2 runs a REAL burn — phases 1 to 4, dd and cmp — onto
-# a RAM card this script creates with the kernel's scsi_debug (removable, 300 MB)
-# and removes after; it writes no other device. No scsi_debug → layer 2 is
-# skipped, and says so.
+# phase exists for, and under `-n --fsck-only` on a dirty one, which must name
+# the repairs and write nothing (pi-tools#t-070). Layer 2 runs a REAL burn —
+# phases 1 to 4, dd and cmp — onto a RAM card this script creates with the
+# kernel's scsi_debug (removable, 300 MB) and removes after; it writes no other
+# device. No scsi_debug → layer 2 is skipped, and says so.
 #
 # Not proven here: a real reader on a USB hub, a real SD card, a golden whose
 # journal holds real transactions (debugfs only raises the needs_recovery flag).
@@ -47,7 +48,13 @@ build() {
     mkdir -p "$T/root/etc" "$T/data/media"
     echo player-007 > "$T/root/etc/hostname"
     head -c 8M /dev/urandom > "$T/data/media/01_FILM.mp4"
-    mkfs.vfat -F 32 -s 1 -n boot --offset="$P1" "$IMG" $(( P1N / 2 )) >/dev/null 2>&1
+    # p1 formatted in its own file, then laid in: mkfs.vfat --offset is dosfstools
+    # 4.2's, and 4.1 (buster — the rig's players) refused it unheard, leaving p1
+    # unformatted and cases 1-2 red there (pi-tools#t-070)
+    rm -f "$T/p1fs"
+    mkfs.vfat -F 32 -s 1 -n boot -h "$P1" -C "$T/p1fs" $(( P1N / 2 )) >/dev/null 2>&1 \
+        || { echo "could not build the fixture: mkfs.vfat failed"; exit 2; }
+    dd if="$T/p1fs" of="$IMG" bs=512 seek="$P1" conv=notrunc,sparse status=none; rm -f "$T/p1fs"
     mkfs.ext4 -q -F -L rootfs -E offset=$(( P2 * 512 )) -d "$T/root" "$IMG" $(( P2N / 2 ))K
     mkfs.ext4 -q -F -L data -E offset=$(( P3 * 512 )) -d "$T/data" "$IMG" $(( P3N / 2 ))K
     touch -d '2026-11-07 12:00' "$IMG"          # the golden's capture day
@@ -136,7 +143,30 @@ check "exit 0" '[ "$RC" = 0 ]'
 check "warns on p2's journal" '[[ "$OUT" == *"p2: ext4 — unreplayed journal (checked, never written)"* ]]'
 check "image untouched: sha256 and mtime" '[ "$(sha)" = "$S" ] && [ "$(mt)" = "$M" ]'
 
-echo "== 7. a REAL burn onto a scsi_debug RAM card"
+echo "== 7. -n --fsck-only on an unclean image — repairs named, nothing written (pi-tools#t-070)"
+build; printf '\001' | dd of="$IMG" bs=1 seek=$(( P1 * 512 + 65 )) conv=notrunc status=none
+debugfs -w -R "feature needs_recovery" "$(ext "$P3")" >/dev/null 2>&1
+touch -d '2026-11-07 12:00' "$IMG"; S=$(sha); M=$(mt)
+check "precondition: p1 dirty bit set, p3 journal unreplayed" '! p1_clean && ! p3_clean'
+sleep 1                                     # a write would now read a later second
+OUT=$(bash "$TOOL" -n --fsck-only "$IMG" 2>&1); RC=$?
+check "exit 0" '[ "$RC" = 0 ]'
+check "checked on a read-only loop" '[[ "$OUT" == *"(read-only)"* ]]'
+check "names p1's repair" '[[ "$OUT" == *"p1: vfat — "*" — would repair"* ]]'
+check "names p3's repair" '[[ "$OUT" == *"p3: ext4 (data) — unreplayed journal — would repair"* ]]'
+check "says nothing was written, repaired nothing" '[[ "$OUT" == *"nothing was written"* ]] && [[ "$OUT" != *repaired* ]]'
+check "sha256 unchanged" '[ "$(sha)" = "$S" ]'
+check "mtime unchanged" '[ "$(mt)" = "$M" ]'
+check "still unclean after: p1 dirty, p3 journal" '! p1_clean && ! p3_clean'
+check "no loop device left on the image" '[ -z "$(losetup -j "$IMG")" ]'
+fsck_only
+check "then --fsck-only without -n repairs it" '[ "$RC" = 0 ] && [[ "$OUT" == *"image repaired, clean now"* ]] && p1_clean && p3_clean'
+S=$(sha); M=$(mt)
+OUT=$(bash "$TOOL" -n --fsck-only "$IMG" 2>&1); RC=$?
+check "-n on the repaired image: clean, not written" '[ "$RC" = 0 ] && [[ "$OUT" == *"image clean, not written"* ]] && [[ "$OUT" != *"would repair"* ]]'
+check "-n on the repaired image: sha256 and mtime as they were" '[ "$(sha)" = "$S" ] && [ "$(mt)" = "$M" ]'
+
+echo "== 8. a REAL burn onto a scsi_debug RAM card"
 CARD=""
 if lsmod | grep -q '^scsi_debug '; then
     echo "  skip — scsi_debug already loaded: not this script's card to write"

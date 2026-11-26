@@ -26,7 +26,10 @@
 #     TARGET   a reader serial (preferred) or a /dev node, which is pinned to
 #              its serial immediately. Default: every card the readers hold.
 #     -l       list the readers, their serials and their USB port paths, exit
-#     -n       dry run: plan, refuse, report — write nothing, need no root
+#     -n       dry run: plan, refuse, report — write nothing, need no root.
+#              With --fsck-only: the image is checked on a READ-ONLY loop
+#              (losetup -r — root, still) and the repairs it needs are named,
+#              never made.
 #     -j N     parallel writes (default 3 — the hub is the ceiling, not the
 #              reader count)
 #     -y       skip the confirmation (for an unattended re-run)
@@ -34,6 +37,7 @@
 #     --fsck-only  phase 1 ALONE — clean a golden image and stop, no cards
 #                  involved. Worth running once on an image you are about to
 #                  archive, so every future batch starts from a clean one.
+#                  `-n --fsck-only` asks whether it is clean and writes nothing.
 #     --flightbox  phase 5: on every card that verified, lay out flightbox's
 #                  raw ring partition (p4, 512 MB) at the card's TAIL with
 #                  image/flightbox-p4 — after the cmp, because it rewrites the
@@ -63,7 +67,7 @@
 # the no-reflash path, the fleet prep scripts are the stamping one.
 set -uo pipefail
 
-usage() { sed -n '2,63p' "$0" | sed 's/^# \?//'; }
+usage() { sed -n '2,67p' "$0" | sed 's/^# \?//'; }
 
 C_OK=$'\033[1;32m'; C_ERR=$'\033[1;31m'; C_WARN=$'\033[1;33m'; C_END=$'\033[0m'
 say()  { echo "  $*"; }
@@ -356,12 +360,24 @@ vfat_unclean() {
     echo "fsck.fat -n reports errors (dirty bit?)"; return 0
 }
 
-FSCK_REPAIRED=0
+FSCK_REPAIRED=0; FSCK_WOULD=()
+# fsck_image [ro] — ro (the dry run, `-n --fsck-only`): the image goes on a
+# READ-ONLY loop, so not one byte of it can be written whatever a tool below
+# does; what it would repair is named in FSCK_WOULD and nothing is repaired.
+# Before pi-tools#t-070, `-n` was ignored here and a dirty golden was repaired.
 fsck_image() {
-    local L rc=0 part fstype p n why last_ext4="" ext4s=() fix=()
-    FSCK_REPAIRED=0
-    L=$(losetup -Pf --show "$IMG") || { err "losetup failed on $IMG"; return 1; }
-    say "image on $L"
+    local mode=${1:-rw} L rc=0 part fstype p n why act=repair last_ext4="" ext4s=() fix=() lo=(-Pf --show)
+    FSCK_REPAIRED=0; FSCK_WOULD=()
+    [ "$mode" = ro ] && { lo=(-r -Pf --show); act="would repair"; }
+    L=$(losetup "${lo[@]}" "$IMG") || { err "losetup failed on $IMG"; return 1; }
+    if [ "$mode" = ro ]; then
+        if [ "$(blockdev --getro "$L" 2>/dev/null)" != 1 ]; then
+            losetup -d "$L"; err "$L is not read-only — refusing to check $IMG on it"; return 1
+        fi
+        say "image on $L (read-only)"
+    else
+        say "image on $L"
+    fi
     for p in "$L"p*; do
         [ -b "$p" ] || continue
         [ "$(blkid -o value -s TYPE "$p" 2>/dev/null)" = "ext4" ] && ext4s+=("$p")
@@ -373,13 +389,13 @@ fsck_image() {
         fstype=$(blkid -o value -s TYPE "$part" 2>/dev/null)
         if [ "$fstype" = "vfat" ]; then
             if why=$(vfat_unclean "$part"); then
-                say "$n: vfat — $why — repair"; fix+=("$n vfat")
+                say "$n: vfat — $why — $act"; fix+=("$n vfat")
             else
                 say "$n: vfat — clean, left as is"
             fi
         elif [ "$fstype" = "ext4" ] && [ "$part" = "$last_ext4" ]; then
             if why=$(ext4_unclean "$part"); then
-                say "$n: ext4 (data) — $why — repair"; fix+=("$n ext4")
+                say "$n: ext4 (data) — $why — $act"; fix+=("$n ext4")
             else
                 say "$n: ext4 (data) — clean, left as is"
             fi
@@ -393,6 +409,11 @@ fsck_image() {
             say "$n: ${fstype:-unknown} — left alone"
         fi
     done
+    if [ "$mode" = ro ]; then              # the dry run stops at the finding
+        FSCK_WOULD=("${fix[@]}")
+        losetup -d "$L"
+        return 0
+    fi
     # the repair, only for what the check found — on the SAME loop: detaching
     # and re-attaching (a read-only loop for the check) raced on the desk, the
     # repair then hitting a device still read-only (pi-tools#t-062)
@@ -416,7 +437,19 @@ fsck_image() {
 }
 
 if [ "$FSCK_ONLY" = 1 ]; then
-    [ "$(id -u)" = 0 ] || { err "--fsck-only needs root: pkexec bash $(readlink -f "$0") ${ORIG_ARGS[*]}"; exit 1; }
+    [ "$(id -u)" = 0 ] || { err "--fsck-only needs root for losetup, -n too: pkexec bash $(readlink -f "$0") ${ORIG_ARGS[*]}"; exit 1; }
+    if [ "$DRY" = 1 ]; then
+        echo "== check the image, read-only (dry run: no repair, no cards)"
+        fsck_image ro || { err "image check failed: $IMG"; exit 1; }
+        if [ ${#FSCK_WOULD[@]} -gt 0 ]; then
+            w=$(printf '%s, ' "${FSCK_WOULD[@]}")
+            warn "needs a repair: ${w%, } — run --fsck-only without -n to make it"
+        else
+            ok "image clean, not written: $IMG"
+        fi
+        warn "DRY RUN — nothing was written."
+        exit 0
+    fi
     echo "== clean the image (no cards involved)"
     if fsck_image; then
         if [ "$FSCK_REPAIRED" = 1 ]; then ok "image repaired, clean now: $IMG"; else ok "image clean, not written: $IMG"; fi
